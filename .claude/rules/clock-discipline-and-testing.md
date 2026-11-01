@@ -1115,7 +1115,7 @@ next NTP samples. What was learned building the fix:
   and the loopback `Host` above; the heartbeat waits in flight; `remove_if_present` checks for the
   file BEFORE unlinking (a camera box's read-only root answers EROFS even for a missing file — a
   false warning on every start); the directory is synced after the rename. **A master ROLLED BACK
-  to a pre-1.15 build must lose its `date-offset.json`** (the deployment skill): 1.14 starts a new
+  to a pre-1.15 build must lose its `date-offset.json`** (`docs/release-rollout.md`): 1.14 starts a new
   session without touching the file, and a 1.15 installed again within a day would restore the
   pre-rollback session — the age bound cannot tell "down" from "running another build". Kept
   the 1-day bound: a shorter one (the hold + the heartbeat) would also refuse a master that was
