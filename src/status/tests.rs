@@ -820,3 +820,31 @@ fn the_interface_and_config_state_fields_are_additive_131_116() {
     let back: SyncStatus = serde_json::from_value(v).expect("round-trip");
     assert_eq!(back.config_state, st.config_state);
 }
+
+/// dantesync#142: the frequency-seed fields are additive — a 1.21 blob deserializes with them
+/// `null`, and they round-trip.
+#[test]
+fn the_frequency_seed_fields_are_additive_142() {
+    let pre = r#"{"offset_ns":0,"drift_ppm":35.1,"gm_uuid":null,"gm_source_ip":null,
+        "settled":true,"updated_ts":1793577600,"is_locked":true,"smoothed_rate_ppm":0.1,
+        "ntp_offset_us":0,"mode":"LOCK","ntp_failed":false,"accumulated_phase_us":0.0,
+        "ntp_spread_us":0,"ntp_sample_count":0,"pcap_ntp_active":false,
+        "ptp_interface":"enp56s0"}"#;
+    let old: SyncStatus = serde_json::from_str(pre).expect("a 1.21 blob still deserializes");
+    assert_eq!(old.freq_seed_ppm, None);
+    assert_eq!(old.freq_seed_source, None);
+
+    let st = SyncStatus {
+        freq_seed_ppm: Some(35.25),
+        freq_seed_source: Some("file".to_string()),
+        ..SyncStatus::default()
+    };
+    let v = serde_json::to_value(&st).expect("json");
+    assert_eq!(v["freq_seed_ppm"], 35.25);
+    assert_eq!(v["freq_seed_source"], "file");
+    let back: SyncStatus = serde_json::from_value(v).expect("round-trip");
+    assert_eq!(back.freq_seed_ppm, Some(35.25));
+    assert_eq!(back.freq_seed_source.as_deref(), Some("file"));
+    let fresh = serde_json::to_string(&SyncStatus::default()).expect("json");
+    assert!(fresh.contains(r#""freq_seed_source":null"#), "{fresh}");
+}

@@ -527,6 +527,21 @@ pub struct SyncStatus {
     /// also raises the clock alarm. `null` in a pre-1.21 blob.
     #[serde(default)]
     pub config_state: Option<ConfigState>,
+
+    // ========================================================================
+    // The learned-frequency seed (dantesync#142) — additive.
+    // ========================================================================
+    /// dantesync#142: the learned frequency (ppm) read from the drift file at start; kept after
+    /// the seed was rejected (`freq_seed_source` says so). `null` when no usable file was read,
+    /// and in a pre-1.22 blob.
+    #[serde(default)]
+    pub freq_seed_ppm: Option<f64>,
+
+    /// dantesync#142: `"file"` (seeded from the drift file), `"none: <why>"` (the servo learned
+    /// from 0: no file, unreadable, malformed, too old, out of range) or `"rejected: <why>"` (the
+    /// first measured windows disagreed with the seed; learned from 0). `null` in a pre-1.22 blob.
+    #[serde(default)]
+    pub freq_seed_source: Option<String>,
 }
 
 fn default_clock_alarm_interval_s() -> u64 {
@@ -646,6 +661,9 @@ impl Default for SyncStatus {
             ptp_interface: None,
             ptp_interface_ip: None,
             config_state: None,
+            // #142: no drift file read yet
+            freq_seed_ppm: None,
+            freq_seed_source: None,
         }
     }
 }
