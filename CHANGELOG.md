@@ -5,15 +5,30 @@ All notable changes to DanteSync will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.3] - 2026-11-01
+
+### Changed
+
+- Review of 1.20.2: the last references to the removed deploy skill point at
+  `docs/release-rollout.md` (a `src/time_server.rs` comment, the clock rule). No code change.
+
 ## [1.20.2] - 2026-11-01
 
 ### Changed
 
 - The project moved to the dsync account (`docs/HANDOVER.md`): dsync releases, camera-box deploys.
-  `TARGETS.md` left the tree (#108); 1.20.1 carried that change and has the same binaries as 1.20.0.
+  `TARGETS.md` left the tree (#108).
 - The fleet deploy skill is gone. Its release-by-release rollout order is now
   `docs/release-rollout.md`, with no hosts, transports or credentials. The status skill and command
-  name no hosts and query a node only with `--hosts`.
+  name no hosts and require `--hosts`; `scripts/sync-snapshot.py` still has its built-in list when
+  run without it.
+
+## [1.20.1] - 2026-11-01
+
+### Changed
+
+- The handover to the dsync account (`docs/HANDOVER.md`), `TARGETS.md` out of the tree (#108), and
+  `GEMINI.md` aligned with it. No code change.
 
 ## [1.20.0] - 2026-10-26
 
