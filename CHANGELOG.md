@@ -5,6 +5,23 @@ All notable changes to DanteSync will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-11-01
+
+### Added
+
+- The PTP interface is an explicit setting (#131): `system.interface` or `--interface` pins the
+  NIC on every platform. With a pin dantesync waits for that NIC's IPv4 and never joins another
+  one (startup and every re-join); a missing pinned NIC raises the clock alarm with its name.
+  `/status` reports `ptp_interface_configured`, `ptp_interface` and `ptp_interface_ip`. Unpinned
+  nodes keep the previous selection and log a warning that the interface is not pinned.
+
+### Fixed
+
+- A `config.json` that does not parse is never overwritten with defaults any more (#116). Each
+  good load keeps an atomic `config.json.last-good`, which a failed parse falls back to (else the
+  defaults), with the clock alarm active and `/status.config_state` naming the source and the
+  error. A UTF-8 (or UTF-16) BOM is accepted, and so is a single string for `gm_allowlist`.
+
 ## [1.20.3] - 2026-11-01
 
 ### Changed
