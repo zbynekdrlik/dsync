@@ -850,3 +850,20 @@ canary evidence before continuing.
   - doc nits in `e5f3b7d`.
 - **Local nets:** `cargo fmt --check`; a rustc replica of `ptp` + `date_offset` (131 tests) + ptplog (2) + the two-clock bench (30); MSRV-1.70 clippy-driver clean. CI: run 37994181178 on `5edf5e1` and run 37995332280 on `49b12a5`, both all green.
 - **Not done here:** release tag + canary per OS class (the supervisor's step); recording every node's GM identity on both VLANs on issue 129; enforcing the version/subdomain/self filter and putting the real UUID back on the 31900 wire (later slices of issue 129).
+
+## 1.21.0 — #131 pinned PTP interface + #116 config parse fallback (one PR, 1.11.2026)
+
+- **#131** (owner ruling 1.11.2026, stream-snv lost the clock for a production on a USB NIC):
+  `system.interface` / `--interface` pins the PTP NIC on every platform. RED `723a54f` → GREEN
+  `50ac5ff`; review fixes `b438b28`, `b50c961`. Tests: `net::tests::a_pinned_interface_*`,
+  `*link_local_only*`, `windows_names_match_*`, `startup_alarms_*`; `net_linux::tests::a_pinned_*`,
+  `a_missing_pinned_nic_*`; `pinned_wait::tests::*` (8); `controller::ptp_liveness::tests::a_missing_pinned_interface_*`,
+  `*five_seconds*`, `any_rejoin_failure_of_a_pinned_node_*`, `a_pinned_wait_logs_warn_*`;
+  `config::tests::the_pinned_interface_key_*`, `the_cli_interface_overrides_*`; `status::tests::the_interface_and_config_state_fields_are_additive_131_116`.
+  Decision: a link-local-only pinned NIC is taken after the 10 s grace (Dante without DHCP).
+- **#116** (13.9.2026 BOM incident): `config::file::load` never writes `config.json` on a
+  failed parse; `config.json.last-good` (atomic, `crate::atomic_file`), BOM / UTF-16 decode,
+  string-or-list `gm_allowlist`, alarm + `/status.config_state`. Same RED/GREEN commits. Tests:
+  `config::file::tests::*` (16), `atomic_file::tests::*`, `clock_alarm::tests::a_pinned_interface_problem_comes_first_*`.
+  The config is now loaded AFTER the logger (its messages were lost before).
+- Review: fresh-context round 1 (0🔴 5🟡 6🔵) and round 2 (0🔴 1🟡 6🔵), every finding fixed in-branch.

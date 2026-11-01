@@ -786,3 +786,37 @@ fn test_sync_status_restart_hold_and_trigger_fields_are_additive_126() {
         "{fresh}"
     );
 }
+
+/// dantesync#131 / #116: the interface and config-source fields are additive — a 1.20 blob
+/// deserializes with them `null`, and they round-trip.
+#[test]
+fn the_interface_and_config_state_fields_are_additive_131_116() {
+    let pre = r#"{"offset_ns":0,"drift_ppm":0.0,"gm_uuid":null,"gm_source_ip":null,
+        "settled":true,"updated_ts":1786439763,"is_locked":true,"smoothed_rate_ppm":0.1,
+        "ntp_offset_us":0,"mode":"LOCK","ntp_failed":false,"accumulated_phase_us":0.0,
+        "ntp_spread_us":0,"ntp_sample_count":0,"pcap_ntp_active":false}"#;
+    let old: SyncStatus = serde_json::from_str(pre).expect("a 1.20 blob still deserializes");
+    assert_eq!(old.ptp_interface_configured, None);
+    assert_eq!(old.ptp_interface, None);
+    assert_eq!(old.ptp_interface_ip, None);
+    assert_eq!(old.config_state, None);
+
+    let st = SyncStatus {
+        ptp_interface_configured: Some("enp56s0".to_string()),
+        ptp_interface: Some("enp56s0".to_string()),
+        ptp_interface_ip: Some("10.77.9.204".to_string()),
+        config_state: Some(crate::config::file::ConfigState {
+            loaded_from: "last-good".to_string(),
+            error: Some("not JSON".to_string()),
+        }),
+        ..SyncStatus::default()
+    };
+    let v = serde_json::to_value(&st).expect("json");
+    assert_eq!(v["ptp_interface_configured"], "enp56s0");
+    assert_eq!(v["ptp_interface"], "enp56s0");
+    assert_eq!(v["ptp_interface_ip"], "10.77.9.204");
+    assert_eq!(v["config_state"]["loaded_from"], "last-good");
+    assert_eq!(v["config_state"]["error"], "not JSON");
+    let back: SyncStatus = serde_json::from_value(v).expect("round-trip");
+    assert_eq!(back.config_state, st.config_state);
+}

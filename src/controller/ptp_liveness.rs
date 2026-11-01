@@ -20,6 +20,7 @@
 
 use super::*;
 use crate::ptp_rejoin::{rejoin_delay, RejoinSchedule, RejoinStatus, RxWindow};
+use std::net::Ipv4Addr;
 
 /// `/status.mode` while PTP is stale (no allowed packet for `PTP_TIMEOUT_SECS`), whatever the servo
 /// last reached: the name the offline edge always wrote, which the tray shows as its orange
@@ -38,7 +39,35 @@ pub(super) struct PtpLiveness {
     pub(super) rx: RxWindow,
     /// `/status.rejoin`.
     pub(super) rejoin: RejoinStatus,
+    /// dantesync#131: the last re-join found the PINNED interface unusable (missing, or no IPv4):
+    /// the clock alarm's reason naming the NIC, cleared by a successful re-join or an allowed
+    /// packet. While it is set the re-join is retried every [`PINNED_WAIT_RETRY`].
+    pub(super) interface_problem: Option<String>,
+    /// dantesync#131: the pinned interface (`main`'s `set_ptp_interface`); `None` = not pinned.
+    /// Any re-join failure of a pinned node is a fault of THAT interface: named, retried fast.
+    pub(super) pinned: Option<String>,
 }
+
+/// dantesync#131 — while the pinned interface stays unusable, a fast look's two lines are WARN on
+/// a changed reason and every this many looks (5 min at [`PINNED_WAIT_RETRY`]), DEBUG between.
+/// The first failure is a normal scheduled attempt (WARN). The clock alarm keeps its own cadence.
+pub(super) const PINNED_WAIT_LOG_EVERY: u32 = 60;
+
+/// dantesync#131 — the level of a fast look's two lines (the announce and the failure) while a
+/// pinned NIC stays unusable: WARN when the reason changed and on every
+/// [`PINNED_WAIT_LOG_EVERY`]th attempt, DEBUG between.
+pub(super) fn pinned_wait_log_level(attempt: u32, changed: bool) -> log::Level {
+    if changed || attempt % PINNED_WAIT_LOG_EVERY == 0 {
+        log::Level::Warn
+    } else {
+        log::Level::Debug
+    }
+}
+
+/// dantesync#131 — while the pinned interface is unusable, look again this often (a cheap
+/// interface lookup, nothing is opened): a NIC that comes back is joined within seconds, not at
+/// the 30..300 s backoff of a re-join that did open something.
+pub(super) const PINNED_WAIT_RETRY: Duration = Duration::from_secs(5);
 
 impl<C, N, S> PtpController<C, N, S>
 where
@@ -115,6 +144,7 @@ where
     pub(super) fn note_allowed_ptp_packet(&mut self, now: Instant) {
         self.last_ptp_packet = now;
         self.ptp_liveness.rx.record(now);
+        self.ptp_liveness.interface_problem = None;
         let attempts = self.ptp_liveness.schedule.reset();
         if attempts > 0 {
             info!(
@@ -127,16 +157,31 @@ where
     /// Every loop iteration: re-join the PTP multicast group when PTP is stale and the schedule
     /// says so. An error is logged, published and retried on the schedule; it is never fatal.
     pub(super) fn maybe_rejoin_ptp(&mut self, now: Instant) {
-        if !self.ptp_stale_at(now) || !self.ptp_liveness.schedule.due(self.last_ptp_packet, now) {
+        if !self.ptp_stale_at(now) {
+            return;
+        }
+        // #131: a pinned interface that was unusable is looked at again every 5 s.
+        let waiting_for_pin = self.ptp_liveness.interface_problem.is_some()
+            && self
+                .ptp_liveness
+                .schedule
+                .since_last_attempt(now)
+                .is_some_and(|d| d >= PINNED_WAIT_RETRY);
+        if !waiting_for_pin && !self.ptp_liveness.schedule.due(self.last_ptp_packet, now) {
             return;
         }
         let attempt = self.ptp_liveness.schedule.record_attempt(now);
-        warn!(
+        let announce = format!(
             "[NET] no PTP announce for {}s -- re-joining PTP multicast (attempt {})",
             now.saturating_duration_since(self.last_ptp_packet)
                 .as_secs(),
             attempt
         );
+        // #131: a pinned NIC that stays unusable is looked at every 5 s; its lines are logged
+        // after the result, at `pinned_wait_log_level`. Every other attempt: as before 1.21.
+        if !waiting_for_pin {
+            warn!("{}", announce);
+        }
         // Only the receive path is re-opened. The clock, the servos and the date offset are not
         // touched: a re-join must never do what a restart does to the fleet date.
         let result = self.network.rejoin();
@@ -146,6 +191,9 @@ where
             .as_secs();
         match &result {
             Ok(outcome) => {
+                if waiting_for_pin {
+                    warn!("{}", announce);
+                }
                 info!(
                     "[NET] PTP multicast re-joined on {} ({}){}",
                     outcome.iface,
@@ -157,14 +205,49 @@ where
                     }
                 );
                 self.ptp_liveness.rejoin.record(epoch_s, Ok(outcome));
+                if let Some(problem) = self.ptp_liveness.interface_problem.take() {
+                    info!("[NET] {} -- resolved, PTP joined on it again", problem);
+                }
+                if let Ok(mut status) = self.status_shared.write() {
+                    status.ptp_interface = Some(outcome.iface.clone());
+                    status.ptp_interface_ip = Some(outcome.ip.to_string());
+                }
             }
             Err(e) => {
                 let text = format!("{e:#}");
-                warn!(
+                // #131: the pinned NIC is missing / has no IPv4 / does not open: the alarm names
+                // it and it is looked at again in 5 s.
+                let problem = match (
+                    e.downcast_ref::<crate::net::PinnedInterfaceUnavailable>(),
+                    &self.ptp_liveness.pinned,
+                ) {
+                    (Some(unavailable), _) => Some(unavailable.alarm_reason()),
+                    (None, Some(name)) => {
+                        Some(format!("PTP interface {name} could not be joined: {text}"))
+                    }
+                    (None, None) => None,
+                };
+                let changed = problem != self.ptp_liveness.interface_problem;
+                self.ptp_liveness.interface_problem = problem;
+                let next_s = if self.ptp_liveness.interface_problem.is_some() {
+                    PINNED_WAIT_RETRY.as_secs()
+                } else {
+                    rejoin_delay(attempt + 1).as_secs()
+                };
+                let level = if waiting_for_pin {
+                    pinned_wait_log_level(attempt, changed)
+                } else {
+                    log::Level::Warn
+                };
+                if waiting_for_pin {
+                    log::log!(level, "{}", announce);
+                }
+                log::log!(
+                    level,
                     "[NET] PTP re-join attempt {} failed: {} -- next attempt in {}s",
                     attempt,
                     text,
-                    rejoin_delay(attempt + 1).as_secs()
+                    next_s
                 );
                 self.ptp_liveness.rejoin.record(epoch_s, Err(text.as_str()));
             }
@@ -172,6 +255,17 @@ where
         // Publish the attempt at once (a watchdog sees it without waiting for the 10 s tick).
         if let Ok(mut status) = self.status_shared.write() {
             status.rejoin = self.ptp_liveness.rejoin.clone();
+        }
+    }
+
+    /// dantesync#131 — the startup join (`main`): the pin (or `None`) and where PTP joined.
+    /// Published at once in `/status`; each successful re-join updates the joined interface.
+    pub fn set_ptp_interface(&mut self, configured: Option<String>, iface: &str, ip: Ipv4Addr) {
+        self.ptp_liveness.pinned = configured.clone();
+        if let Ok(mut status) = self.status_shared.write() {
+            status.ptp_interface_configured = configured;
+            status.ptp_interface = Some(iface.to_string());
+            status.ptp_interface_ip = Some(ip.to_string());
         }
     }
 

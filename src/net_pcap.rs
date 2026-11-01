@@ -394,6 +394,45 @@ fn select_ptp_device(
     Ok((device, iface_ip))
 }
 
+/// dantesync#131 — the capture device of the PINNED interface `name` and its IPv4: the adapter
+/// `name` (friendly name or GUID) must be usable now (`net::pinned_interface`), and the device is
+/// the one carrying that address. Otherwise a [`crate::net::PinnedInterfaceUnavailable`] (the
+/// controller names the NIC in the alarm) — never another device, never the subnet rule.
+fn select_pinned_device(name: &str) -> Result<(Device, Ipv4Addr)> {
+    use crate::net::{PinnedInterfaceUnavailable, PinnedLookup};
+    let ip = match crate::net::pinned_interface(name) {
+        PinnedLookup::Ready(ip) | PinnedLookup::LinkLocalOnly(ip) => ip,
+        PinnedLookup::NoIpv4 => {
+            return Err(PinnedInterfaceUnavailable {
+                name: name.to_string(),
+                missing: false,
+            }
+            .into())
+        }
+        PinnedLookup::Missing => {
+            return Err(PinnedInterfaceUnavailable {
+                name: name.to_string(),
+                missing: true,
+            }
+            .into())
+        }
+    };
+    select_pinned_device_at(name, ip)
+}
+
+/// dantesync#131 — the Npcap device of the pinned interface `name` at the IPv4 the caller already
+/// approved (the startup's `pinned_wait`, which applies the link-local grace).
+fn select_pinned_device_at(name: &str, ip: Ipv4Addr) -> Result<(Device, Ipv4Addr)> {
+    let device = device_with_ip(ip).ok_or_else(|| {
+        anyhow!("pinned PTP interface {name} ({ip}): no Npcap device carries {ip}")
+    })?;
+    info!(
+        "Pinned PTP interface {} ({}): Npcap device {} ({:?})",
+        name, ip, device.name, device.desc
+    );
+    Ok((device, ip))
+}
+
 /// dantesync#112 — the capture device that carries exactly `ip` now, if any.
 fn device_with_ip(ip: Ipv4Addr) -> Option<Device> {
     list_devices_guarded().ok()?.into_iter().find(|d| {
@@ -447,15 +486,27 @@ pub struct NpcapPtpNetwork {
     /// message, `ptp::is_time_message`, arrives on a later capture): the device that carries it
     /// comes before the name fallback in a re-join.
     home_ip: Ipv4Addr,
+    /// dantesync#131: the pinned interface; when set, the startup and every re-join use only its
+    /// device (`select_pinned_device`).
+    pinned: Option<String>,
 }
 
 impl NpcapPtpNetwork {
-    pub fn new(interface_name: &str, gm_allowlist: &crate::gm_filter::GmAllowlist) -> Result<Self> {
+    /// `pinned` (dantesync#131): the pinned interface and the IPv4 the startup approved for it;
+    /// it alone selects the device, now and at every re-join.
+    pub fn new(
+        interface_name: &str,
+        gm_allowlist: &crate::gm_filter::GmAllowlist,
+        pinned: Option<(String, Ipv4Addr)>,
+    ) -> Result<Self> {
         info!(
-            "Initializing Npcap capture (default-interface hint: {})",
-            interface_name
+            "Initializing Npcap capture (default-interface hint: {}, pinned: {:?})",
+            interface_name, pinned
         );
-        let (device, ip) = select_ptp_device(interface_name, gm_allowlist, None)?;
+        let (device, ip) = match &pinned {
+            Some((name, ip)) => select_pinned_device_at(name, *ip)?,
+            None => select_ptp_device(interface_name, gm_allowlist, None)?,
+        };
         let open = open_ptp_capture(device, ip)?;
 
         // Assume HostHighPrec is available on modern Npcap (1.20+)
@@ -475,7 +526,13 @@ impl NpcapPtpNetwork {
             gm_allowlist: gm_allowlist.clone(),
             last_join,
             home_ip: ip,
+            pinned: pinned.map(|(name, _)| name),
         })
+    }
+
+    /// The device and the IPv4 of the last capture that opened (`/status.ptp_interface`).
+    pub fn joined(&self) -> (&str, Ipv4Addr) {
+        (self.last_join.0.as_str(), self.last_join.1)
     }
 }
 
@@ -561,6 +618,12 @@ impl crate::traits::PtpNetwork for NpcapPtpNetwork {
     /// (the trusted subnet, then the device that carries the home address, then the name
     /// fallback), on the default interface and the allowlist resolved NOW.
     fn rejoin(&mut self) -> Result<crate::traits::RejoinOutcome> {
+        // dantesync#131: a pinned interface alone selects the device; not usable now = a typed
+        // error before the old capture is dropped.
+        if let Some(name) = self.pinned.clone() {
+            let (device, ip) = select_pinned_device(&name)?;
+            return self.reopen(device, ip);
+        }
         // A replaced NIC is another adapter under another name, so the name-based fallback
         // re-reads the default interface; the old hint stays when none resolves.
         match crate::net::get_default_interface() {
@@ -582,8 +645,14 @@ impl crate::traits::PtpNetwork for NpcapPtpNetwork {
         }
         // Select BEFORE dropping anything: a selection failure keeps the old capture.
         let (device, ip) = select_ptp_device(&self.hint, &self.gm_allowlist, Some(self.home_ip))?;
-        // Then drop the old (possibly dead) handle and its IGMP membership, and open on the
-        // selected device. When the new capture cannot open, there is none until the next attempt.
+        self.reopen(device, ip)
+    }
+}
+
+impl NpcapPtpNetwork {
+    /// Drop the old (possibly dead) handle and its IGMP membership, and open on the selected
+    /// device. When the new capture cannot open, there is none until the next attempt.
+    fn reopen(&mut self, device: Device, ip: Ipv4Addr) -> Result<crate::traits::RejoinOutcome> {
         self.open = None;
         let open = open_ptp_capture(device, ip)?;
         let (iface, ip) = (open.device_name.clone(), open.iface_ip);

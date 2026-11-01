@@ -1,12 +1,47 @@
 ---
 paths:
   - "src/net.rs"
+  - "src/net_linux.rs"
   - "src/net_pcap.rs"
   - "src/net_winsock.rs"
   - "src/gm_filter.rs"
 ---
 
 # Multi-homed interface selection for the PTP receive path (camera-box issue 1073)
+
+## FIRST: the pinned interface (#131, owner ruling 1.11.2026) overrides everything below
+
+"by defaul dantesync musi mat jasne nastavenie na ktoru eth sa ma bindnut, neexistuje ze sa toto
+deje nejako nahodne". stream-snv ran a whole production without the Dante clock because a USB
+NIC (VBAN leg) got its /32 before the rig NIC at boot and was first in `getifaddrs` order.
+
+- `system.interface` / `--interface` (CLI wins, blank = unset; `SystemConfig::pinned_interface`)
+  pins the NIC by name. Windows: the adapter's friendly name (`Ethernet`) or its GUID
+  (`GetAdaptersAddresses`, feature `Win32_NetworkManagement_Ndis`), case-insensitive, a GUID with
+  or without braces / `\Device\NPF_` (`net::classify_pinned_with`). The pure classifier returns
+  `Ready(ip) | LinkLocalOnly(ip) | NoIpv4 | Missing`; loopback never counts. A link-local-only
+  NIC (a Dante segment without DHCP — or an APIPA placeholder at boot) is taken by the startup
+  only after `net::PINNED_STARTUP_GRACE` (10 s, `net::usable_pinned_ip`), by a re-join at once.
+- Pinned startup: `pinned_wait::PinnedWait::run` (every OS boundary injected, unit-tested) looks
+  every second until the NIC has an IPv4 AND the receive path OPENS on it — an open failure
+  (Windows: the Npcap device list lags the adapter list at boot) is retried, never fatal. The
+  clock alarm names the NIC at once when missing, after the grace when without an IPv4 or not
+  opening, and once raised follows the NIC's CURRENT state. On open the interface reason ends:
+  the snapshot is cleared without a "re-locked" edge (nothing is locked yet), or keeps a #116
+  config reason. A pinned Npcap open uses the IPv4 the wait approved
+  (`select_pinned_device_at`), skips the allowlist resolution and is not an ERROR per retry.
+  Never another NIC.
+- Pinned re-join (Linux `UdpPtpNetwork`, Npcap `select_pinned_device`): ONLY the pinned NIC — no
+  home address, no resolver, no subnet rule — with a typed `net::PinnedInterfaceUnavailable`
+  BEFORE closing anything. The controller (which knows the pin from `set_ptp_interface`) turns
+  ANY re-join failure of a pinned node into `ClockHealth.interface_problem` (first in the alarm
+  precedence) and looks again every 5 s (`PINNED_WAIT_RETRY`) instead of the 30..300 s backoff,
+  logging the two WARN lines on a changed reason and every 60th look (DEBUG between).
+- Unpinned: everything below, byte-identical, plus a startup WARN that the interface is not
+  pinned. `/status`: `ptp_interface_configured`, `ptp_interface`, `ptp_interface_ip` (the last
+  successful join).
+- The old stance in this file ("do not add a config field pinning the interface — the allowlist
+  IS the signal") is SUPERSEDED by the ruling. The subnet rule remains the unpinned fallback.
 
 On a DUAL-HOMED box (e.g. the stream box: rig `Ethernet` 10.77.9.204/24 + mbc `Ethernet 2`
 10.77.7.204/24) the PTP receive path must attach BOTH the pcap capture AND the IGMP `224.0.1.129`

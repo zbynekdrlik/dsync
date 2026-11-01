@@ -188,7 +188,7 @@ fn test_npcap_ptp_network_new_gracefully_errors_without_npcap_runtime() {
         );
         return;
     }
-    let result = NpcapPtpNetwork::new("eth0", &crate::gm_filter::GmAllowlist::default());
+    let result = NpcapPtpNetwork::new("eth0", &crate::gm_filter::GmAllowlist::default(), None);
     assert!(
         result.is_err(),
         "expected a graceful Err when the Npcap runtime is missing, got Ok -- \

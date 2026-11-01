@@ -30,7 +30,7 @@ CI first: `.github/workflows/ci.yml` runs on GitHub-hosted Linux and Windows. Ru
 
 Private, never in this repository: `~/.config/dsync/TARGETS.md`, mode 600. It holds credentials. Never print it, and never commit it.
 
-The file is removed from the current tree by the handover change (issue #108), but it stays in public history. Purging that history is the owner's decision.
+The file was removed from the tree in v1.20.1 (issue #108). Its old values stay in git history by the owner's decision of 2026-11-01: they have no security role on the closed network. Do not raise this again.
 
 ## Runners
 

@@ -12,7 +12,7 @@
 //! new name); the kernel dropped the old socket's multicast membership with the old netdev, and
 //! before this nothing ever joined again (only a service restart recovered).
 
-use crate::net;
+use crate::net::{self, PinnedInterfaceUnavailable, PinnedLookup};
 use crate::ptp::{PTP_EVENT_PORT, PTP_GENERAL_PORT};
 use crate::traits::{PtpNetwork, RejoinOutcome};
 use anyhow::Result;
@@ -29,6 +29,8 @@ pub trait PtpSocketFactory {
     fn interface_carrying(&mut self, ip: Ipv4Addr) -> Option<String>;
     /// One non-blocking PTP socket bound to `port` and joined to the PTP multicast group on `ip`.
     fn open(&mut self, port: u16, ip: Ipv4Addr) -> Result<UdpSocket>;
+    /// dantesync#131: what the pinned interface `name` is now.
+    fn lookup_pinned(&mut self, name: &str) -> PinnedLookup;
 }
 
 /// The production factory: the default-interface resolver and the kernel-timestamped multicast
@@ -46,6 +48,10 @@ impl PtpSocketFactory for KernelSockets {
 
     fn open(&mut self, port: u16, ip: Ipv4Addr) -> Result<UdpSocket> {
         net::create_multicast_socket(port, ip)
+    }
+
+    fn lookup_pinned(&mut self, name: &str) -> PinnedLookup {
+        net::pinned_interface(name)
     }
 }
 
@@ -94,6 +100,9 @@ pub struct UdpPtpNetwork<F: PtpSocketFactory = KernelSockets> {
     /// message, `ptp::is_time_message`, arrives on a later join): the interface that carries it is
     /// where a re-join goes first.
     home_ip: Ipv4Addr,
+    /// dantesync#131: the pinned interface (`system.interface` / `--interface`). When set, a
+    /// re-join joins only this NIC (no home address, no resolver) and waits for it otherwise.
+    pinned: Option<String>,
 }
 
 impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
@@ -110,7 +119,15 @@ impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
             joined: Some(joined),
             last_join: (iface, ip),
             home_ip: ip,
+            pinned: None,
         })
+    }
+
+    /// dantesync#131: pin every later re-join to the interface `name` (`None` = not pinned). The
+    /// startup join is the caller's (it waits for the pinned NIC's IPv4 itself).
+    pub fn pinned_to(mut self, name: Option<String>) -> Self {
+        self.pinned = name;
+        self
     }
 
     /// The interface the sockets are joined on.
@@ -159,9 +176,32 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         // and the listing-ordered startup resolver may answer another interface first (tailscale,
         // docker, a bridge). Only when no interface carries it, the startup resolver (a DHCP move
         // to a new address); when that finds none either, the old pair stays.
-        let (iface, ip) = match self.factory.interface_carrying(self.home_ip) {
-            Some(name) => (name, self.home_ip),
-            None => self.factory.resolve_interface()?,
+        //
+        // dantesync#131: a PINNED interface is the only candidate. Not usable now (missing, no
+        // IPv4) = a typed error BEFORE anything is closed: the controller names the NIC in the
+        // clock alarm and looks again in seconds; another NIC is never joined.
+        let (iface, ip) = match &self.pinned {
+            Some(name) => match self.factory.lookup_pinned(name) {
+                PinnedLookup::Ready(ip) | PinnedLookup::LinkLocalOnly(ip) => (name.clone(), ip),
+                PinnedLookup::NoIpv4 => {
+                    return Err(PinnedInterfaceUnavailable {
+                        name: name.clone(),
+                        missing: false,
+                    }
+                    .into())
+                }
+                PinnedLookup::Missing => {
+                    return Err(PinnedInterfaceUnavailable {
+                        name: name.clone(),
+                        missing: true,
+                    }
+                    .into())
+                }
+            },
+            None => match self.factory.interface_carrying(self.home_ip) {
+                Some(name) => (name, self.home_ip),
+                None => self.factory.resolve_interface()?,
+            },
         };
         // Close both old sockets FIRST: their membership may belong to a netdev that is gone,
         // and two pairs are never open at once. (The old pair was deaf anyway: a re-join only
@@ -216,6 +256,8 @@ mod tests {
         released_before_open: Vec<SocketAddr>,
         /// For every socket opened: were all of `released_before_open` free at that moment?
         free_at_open: Vec<bool>,
+        /// dantesync#131: what each pinned interface name is now (absent = missing).
+        pinned: HashMap<String, PinnedLookup>,
     }
 
     impl PtpSocketFactory for ScriptedSockets {
@@ -240,6 +282,13 @@ mod tests {
             sock.set_nonblocking(true)?;
             self.opened.push((port, ip, sock.local_addr()?));
             Ok(sock)
+        }
+
+        fn lookup_pinned(&mut self, name: &str) -> PinnedLookup {
+            self.pinned
+                .get(name)
+                .copied()
+                .unwrap_or(PinnedLookup::Missing)
         }
     }
 
@@ -567,6 +616,94 @@ mod tests {
             Some(("enx002427159965", ETH0)),
             "the home is still where PTP was last received"
         );
+    }
+
+    const RIG: Ipv4Addr = Ipv4Addr::new(10, 77, 9, 204);
+    const USB: Ipv4Addr = Ipv4Addr::new(10, 77, 7, 204);
+
+    /// stream-snv on 1.11.2026: pinned to the rig NIC `enp56s0`, the USB NIC listed first.
+    fn pinned_rig(script: ScriptedSockets) -> UdpPtpNetwork<ScriptedSockets> {
+        UdpPtpNetwork::join(script, "enp56s0".to_string(), RIG)
+            .expect("the startup join")
+            .pinned_to(Some("enp56s0".to_string()))
+    }
+
+    #[test]
+    fn a_pinned_rejoin_joins_only_the_pinned_nic_never_the_home_or_the_resolver_131() {
+        let mut script = ScriptedSockets::default();
+        script
+            .interfaces
+            .push_back(Ok(("enx00e04c680185".to_string(), USB)));
+        script.carrying.insert(USB, "enx00e04c680185".to_string());
+        // DHCP gave the rig NIC a new address: the pin follows the NIC, not the address.
+        let new_rig = Ipv4Addr::new(10, 77, 9, 214);
+        script
+            .pinned
+            .insert("enp56s0".to_string(), PinnedLookup::Ready(new_rig));
+        let mut net = pinned_rig(script);
+        let out = net.rejoin().expect("the re-join");
+        assert_eq!(
+            out,
+            RejoinOutcome {
+                iface: "enp56s0".to_string(),
+                ip: new_rig,
+                changed: true
+            }
+        );
+        assert_eq!(
+            net.factory.resolves, 0,
+            "the listing-order resolver is never asked"
+        );
+    }
+
+    #[test]
+    fn a_missing_pinned_nic_keeps_the_old_sockets_and_names_it_131() {
+        let mut script = ScriptedSockets::default();
+        // A resolver that WOULD answer another NIC: it must not be used.
+        script
+            .interfaces
+            .push_back(Ok(("enx00e04c680185".to_string(), USB)));
+        let mut net = pinned_rig(script);
+        let old = addrs(&net);
+        let err = net.rejoin().expect_err("the pinned NIC is gone");
+        assert_eq!(
+            err.downcast_ref::<PinnedInterfaceUnavailable>(),
+            Some(&PinnedInterfaceUnavailable {
+                name: "enp56s0".to_string(),
+                missing: true
+            })
+        );
+        assert_eq!(net.interface(), Some(("enp56s0", RIG)), "nothing closed");
+        assert_eq!(net.factory.opened.len(), 2, "nothing opened elsewhere");
+        assert!(!is_free(old[0]) && !is_free(old[1]));
+        assert_eq!(net.factory.resolves, 0);
+    }
+
+    #[test]
+    fn a_pinned_nic_without_ipv4_is_waited_for_then_joined_131() {
+        let mut script = ScriptedSockets::default();
+        script
+            .pinned
+            .insert("enp56s0".to_string(), PinnedLookup::NoIpv4);
+        let mut net = pinned_rig(script);
+        let err = net.rejoin().expect_err("no IPv4 yet");
+        assert_eq!(
+            err.downcast_ref::<PinnedInterfaceUnavailable>()
+                .map(|p| p.missing),
+            Some(false)
+        );
+        assert_eq!(net.factory.opened.len(), 2);
+
+        net.factory
+            .pinned
+            .insert("enp56s0".to_string(), PinnedLookup::Ready(RIG));
+        net.factory.released_before_open = addrs(&net);
+        let out = net.rejoin().expect("the NIC has its address");
+        assert_eq!(
+            (out.iface.as_str(), out.ip, out.changed),
+            ("enp56s0", RIG, false)
+        );
+        assert_eq!(net.factory.free_at_open[2..].to_vec(), vec![true, true]);
     }
 
     /// The startup join works; only later opens fail on the scripted port.

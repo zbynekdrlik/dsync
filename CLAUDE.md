@@ -104,9 +104,11 @@ on either platform skips `publish` — no release with a missing asset).
 - Phase-slew PI servo (#97, LEGACY discipline only since #117 — the feed-forward decoupling sign invariant, the deadbeat gain cap for
   the client's slow cadence, the I-deadband, verify-by-simulation, the canary re-tighten proof) →
   `.claude/rules/phase-slew-servo.md` (auto-loads on `src/phase_slew.rs`)
-- Adding a config key (the `serde_json` `IndexMut` startup-panic trap, serde defaults, flooring
-  nonsense values) → `.claude/rules/config-migration.md`
-- Multi-homed PTP receive interface selection (net.rs/net_pcap.rs/gm_filter.rs — pick the NIC on the
+- Adding a config key / loading `config.json` (the `serde_json` `IndexMut` startup-panic trap,
+  serde defaults, flooring nonsense values, #116: a failed parse never writes the file, the
+  last-good copy + alarm, BOM decoding) → `.claude/rules/config-migration.md`
+- PTP receive interface selection (#131: `system.interface` / `--interface` PINS the NIC on every
+  platform — wait for it, never another NIC, alarm naming it; unpinned: net.rs/net_pcap.rs/gm_filter.rs — pick the NIC on the
   trusted GM subnet, reuse the #53 selector, pure-logic-in-gm_filter vs Windows-glue split, overlap
   semantics + ambiguity guard) → `.claude/rules/multi-homed-interface-selection.md`
 - PTP liveness (#112 — one definition of "PTP is stale", the honest `/status` while stale

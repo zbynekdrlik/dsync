@@ -848,3 +848,28 @@ fn a_saved_date_offset_is_restored_within_the_daily_emergency_cap_126() {
         );
     }
 }
+
+/// dantesync#131 — `system.interface`: a name pins, blank / null / absent does not, a non-string
+/// fails the parse (the loader then runs the last-good config, loudly).
+#[test]
+fn the_pinned_interface_key_parses_and_blank_is_unset_131() {
+    let pinned: SystemConfig =
+        serde_json::from_str(r#"{"interface": " enp56s0 "}"#).expect("parses");
+    assert_eq!(pinned.interface.as_deref(), Some("enp56s0"));
+    for unset in [r#"{"interface": ""}"#, r#"{"interface": null}"#, "{}"] {
+        let c: SystemConfig = serde_json::from_str(unset).expect("parses");
+        assert_eq!(c.interface, None, "{unset}");
+    }
+    assert!(serde_json::from_str::<SystemConfig>(r#"{"interface": 3}"#).is_err());
+    assert_eq!(SystemConfig::default().interface, None);
+}
+
+/// dantesync#131 — `--interface` wins over `system.interface`; a blank CLI value is unset.
+#[test]
+fn the_cli_interface_overrides_the_config_131() {
+    let cfg: SystemConfig = serde_json::from_str(r#"{"interface": "enp56s0"}"#).expect("parses");
+    assert_eq!(cfg.pinned_interface(None).as_deref(), Some("enp56s0"));
+    assert_eq!(cfg.pinned_interface(Some("eth1")).as_deref(), Some("eth1"));
+    assert_eq!(cfg.pinned_interface(Some("  ")).as_deref(), Some("enp56s0"));
+    assert_eq!(SystemConfig::default().pinned_interface(None), None);
+}

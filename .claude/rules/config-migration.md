@@ -2,14 +2,36 @@
 paths:
   - "src/main.rs"
   - "src/config.rs"
+  - "src/config/file.rs"
+  - "src/config/file/tests.rs"
 ---
 
 # Adding a config key — migration safety
 
-`load_config()` reads a hardcoded system path, so the migration it performs is **not directly
-testable**. Put the logic in `migrate_config_json(&mut serde_json::Value) -> bool` (already
-extracted, in `src/main.rs`) and test THAT — the untestable wrapper is why a panicking migration
-reached the fleet's clock master once already (#68).
+Since 1.21 (#116) the whole loader is `config::file::load(path, last_good)` in
+`src/config/file.rs`, with injected paths, and `main`'s `load_config()` only passes the system
+path. The migration is `migrate_config_json(&mut serde_json::Value) -> bool` there. Test the
+migration AND the loading through them, with temp files (`src/config/file/tests.rs`) — the old
+untestable hardcoded-path wrapper is how #68's panicking migration and #116's overwrite reached
+the fleet.
+
+## A file that does not parse is NEVER written (#116)
+
+- 13.9.2026: a BOM write on strih failed the parse and the old `load_config` wrote the default
+  template OVER the file — the NTP master lost its master role, the stream box its allowlist.
+- Now: a good load refreshes `config.json.last-good` (atomic, only when changed); a failure runs
+  that copy (`loaded_from = "last-good"`), else `Config::default()` (`"defaults"`), writes
+  NOTHING, and keeps the clock alarm active + `/status.config_state` (`ConfigState`). The
+  migration is written back only after the typed parse succeeded.
+- A missing `config.json` WITH a last-good copy runs the copy (the template would drop the
+  operator's settings); only a genuine first install (neither file) writes `TEMPLATE`.
+- Decoding: a UTF-8 BOM is stripped, a UTF-16 LE/BE file with its BOM decoded
+  (`decode_text`). A non-object root is an error before the migration (whose root `IndexMut`
+  would panic on an array).
+- `main` loads the config AFTER the logger is up (before 1.21 every load message was lost); the
+  Windows service loads it once, in `my_service_main`.
+- Every atomically rewritten file goes through `crate::atomic_file` (temp + fsync + rename +
+  dir sync), shared with the master's `date-offset.json`.
 
 ## Never index a nested value mutably without proving it is an object
 
@@ -30,7 +52,8 @@ construction), but the nested form is not:
 }
 ```
 
-A malformed value must fall through to `load_config()`'s existing log-loudly-then-default path.
+A malformed value must fail the typed parse, which `config::file::load` answers with the
+last-good copy (never with a panic and never with a write).
 On a daemon under systemd / Windows Service, a startup panic is a restart loop, not a degraded
 start — and on the NTP master that takes the whole fleet's time source with it. Always add a test
 that feeds the migration a bool, a string, a number and an array.
@@ -53,5 +76,11 @@ that feeds the migration a bool, a string, a number and an array.
   fall back to their defaults). A `system.gm_allowlist` key MAY therefore be safely migrated into an
   existing file, or added by an operator, without breaking the parse. (Note the whole-FILE caveat:
   `Config.ntp_server` also gained a `#[serde(default)]` for the same rollout, so even a file that
-  contains ONLY `{"system": {"gm_allowlist": [...]}}` parses instead of tripping `load_config`'s
-  overwrite-with-defaults path — which would silently delete the operator's allowlist.)
+  contains ONLY `{"system": {"gm_allowlist": [...]}}` parses. Before #116 a failed parse
+  overwrote the file with defaults; now it runs the last-good copy, loudly.) Since #116
+  `gm_allowlist` also accepts a single string (`string_or_list`: split on commas / whitespace;
+  `null` = empty; a number still fails the parse).
+- A lenient deserializer is right for TUNING (a bad value = the default). For a SAFETY setting
+  (`system.interface`, #131) a non-string must FAIL the parse instead: the last-good config then
+  runs with the alarm, where a lenient "unset" would silently bring back the incident the key
+  exists for.
