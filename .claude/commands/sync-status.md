@@ -7,10 +7,15 @@ Check the current clock synchronization status across all DanteSync targets usin
 
 ## Instructions
 
+Fleet hosts are not in this repository: they are in `~/.config/dsync/TARGETS.md`. dsync
+queries no node until camera-box hands over the non-rig list, and never a camera-rig node
+(`docs/HANDOVER.md`). `scripts/sync-snapshot.py` without `--hosts` still queries its
+built-in list, so always pass `--hosts`.
+
 1. Run the sync-snapshot.py script to get instant status:
 
    ```bash
-   python3 scripts/sync-snapshot.py
+   python3 scripts/sync-snapshot.py --hosts <host> ...
    ```
 
 2. The output shows for each host:
@@ -32,26 +37,7 @@ Check the current clock synchronization status across all DanteSync targets usin
      ports of one clock, and a mixed 1.16/1.17 fleet shows both forms. Record it on issue 129;
      it is a problem only together with a lock or drift issue
 
-## Network Targets
-
-- strih.lan (10.77.9.202) - NTP MASTER
-- develbox (10.77.9.21) - Linux
-- stream.lan (10.77.9.204) - Windows
-- iem (10.77.9.231) - Windows
-- ableton-foh (10.77.9.230) - Windows
-- mbc.lan (10.77.9.232) - Windows
-- songs (10.77.9.212) - Windows
-- stagebox1.lan (10.77.9.237) - Windows
-- piano.lan (10.77.9.236) - Windows
-
 ## Troubleshooting
 
-If UDP queries fail, fall back to SSH log checks:
-
-```bash
-# Check Windows host log
-ssh newlevel@10.77.9.202 "powershell -Command \"Get-Content 'C:\\ProgramData\\DanteSync\\dantesync.log' -Tail 10\""
-
-# Check Linux host log
-ssh newlevel@10.77.9.21 "tail -10 /var/log/dantesync/dantesync.log"
-```
+If UDP queries fail, read the node's log only through the owner of that node (camera-box for
+the rig, via dstack).

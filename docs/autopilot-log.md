@@ -666,7 +666,7 @@ canary evidence before continuing.
   test's own unseeded noise via a rustc replica (same seeds, same result on master / branch /
   legacy); fixed by seeding (`d4a5a57`), bound unchanged.
 - Not released or deployed. Rollout: canary cam4, then the NTP master, then the rest
-  (`.claude/skills/dantesync-deployment.md` step 4).
+  (`docs/release-rollout.md` step 4).
 
 ## #119 — a backward fleet date correction is SLEWED, never stepped (v1.10.0, draft PR #120, branch `issue-119-backward-slew`)
 

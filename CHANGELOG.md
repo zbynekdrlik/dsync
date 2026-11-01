@@ -5,6 +5,16 @@ All notable changes to DanteSync will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.2] - 2026-11-01
+
+### Changed
+
+- The project moved to the dsync account (`docs/HANDOVER.md`): dsync releases, camera-box deploys.
+  `TARGETS.md` left the tree (#108); 1.20.1 carried that change and has the same binaries as 1.20.0.
+- The fleet deploy skill is gone. Its release-by-release rollout order is now
+  `docs/release-rollout.md`, with no hosts, transports or credentials. The status skill and command
+  name no hosts and query a node only with `--hosts`.
+
 ## [1.20.0] - 2026-10-26
 
 ### Changed
@@ -515,7 +525,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an older server never answers `"DSYX"`, so a new box on an old master keeps its local NTP date
   path. An older WINDOWS master logs a socket error per such poll (its 8-byte read buffer fails
   the padded request), so the NTP master is upgraded right after the canary
-  (`.claude/skills/dantesync-deployment.md`, step 4). Followers poll their NTP server's
+  (`docs/release-rollout.md`, step 4). Followers poll their NTP server's
   31900 once per second on a background thread; a host that has never answered is polled every
   30 s after a minute. Tuning: `system.date_offset.{step_bound_ms, step_lead_ms}`.
 - `/status` (additive): `clock_discipline`, `rate_source`, `ptp_phase_locked`,

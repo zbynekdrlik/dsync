@@ -8,29 +8,17 @@ description: Monitor and verify DanteSync clock synchronization across multiple 
 ## Quick Status Check
 
 ```bash
-python3 scripts/sync-snapshot.py           # Full comprehensive report
-python3 scripts/sync-snapshot.py --brief   # Quick status summary
-python3 scripts/sync-snapshot.py --json    # JSON output for scripting
-python3 scripts/sync-snapshot.py --hosts strih.lan develbox  # Specific hosts only
+python3 scripts/sync-snapshot.py --hosts <host> ...           # Full comprehensive report
+python3 scripts/sync-snapshot.py --hosts <host> ... --brief   # Quick status summary
+python3 scripts/sync-snapshot.py --hosts <host> ... --json    # JSON output for scripting
 ```
 
-## Network Architecture
+## Hosts
 
-```
-strih.lan (10.77.9.202) - NTP MASTER
-    └── PTP locked to Dante grandmaster
-    └── Serves NTP to all clients
-
-Clients (sync to strih.lan via NTP):
-    - develbox (10.77.9.21) - Linux
-    - stream.lan (10.77.9.204) - Windows
-    - iem (10.77.9.231) - Windows
-    - ableton-foh (10.77.9.230) - Windows
-    - mbc.lan (10.77.9.232) - Windows
-    - songs (10.77.9.212) - Windows
-    - stagebox1.lan (10.77.9.237) - Windows
-    - piano.lan (10.77.9.236) - Windows
-```
+Fleet hosts are not in this repository: they are in `~/.config/dsync/TARGETS.md`. dsync
+queries no node until camera-box hands over the non-rig list, and never a camera-rig node
+(`docs/HANDOVER.md`). `scripts/sync-snapshot.py` without `--hosts` still queries its
+built-in list, so always pass `--hosts`.
 
 ## Interpreting Results
 
@@ -73,7 +61,7 @@ logged loudly at startup) or the network/server path itself is genuinely noisy �
 
 **OFFLINE host:** Check service running + UDP port 31900 open in firewall
 
-**Large offset:** Check NTP config points to `10.77.9.202` (strih.lan)
+**Large offset:** Check the node's `ntp_server` points at the fleet's NTP master
 
 **Config Locations:**
 
