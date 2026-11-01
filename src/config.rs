@@ -39,8 +39,24 @@ pub struct SystemConfig {
     /// behavior. A single-GM network is unaffected. Parsing is fail-open (an
     /// all-invalid list degrades to unrestricted with a loud warning) so a config
     /// typo can never take the rig's clock offline. See `crate::gm_filter`.
+    ///
+    /// dantesync#116: a single string is accepted too (`"10.77.9.230"`, or several separated by
+    /// commas / whitespace) — the commonest hand-edit slip, which used to fail the whole file.
     #[serde(default)]
     pub gm_allowlist: Vec<String>,
+
+    /// dantesync#131 — the NIC PTP binds to, by name (`"enp56s0"`; on Windows the adapter's
+    /// name, e.g. `"Ethernet"`, or its GUID). The owner's ruling (1.11.2026): the interface is an
+    /// explicit setting, never chosen by listing order. When set, dantesync waits for that NIC's
+    /// IPv4 and never joins another one (startup and every PTP re-join); a missing NIC raises the
+    /// clock alarm with its name. `--interface` overrides it ([`SystemConfig::pinned_interface`]).
+    ///
+    /// Unset (`null`, `""`, absent — every pre-1.21 file): the previous selection, with a startup
+    /// warning that the interface is not pinned. A non-string value fails the parse, so the
+    /// last-good config runs, loudly (dantesync#116): a pin that silently became "unpinned" would
+    /// bring back exactly the incident it exists for.
+    #[serde(default)]
+    pub interface: Option<String>,
 
     /// dantesync#97 — the phase-slew feature switch (default OFF, per-box canary opt-in).
     ///
@@ -95,6 +111,49 @@ pub struct SystemConfig {
     /// Lenient as a whole: `null` or a non-object means the defaults, never a failed parse.
     #[serde(default, deserialize_with = "lenient_date_offset")]
     pub date_offset: DateOffsetConfig,
+}
+
+impl SystemConfig {
+    /// dantesync#131 — the PTP interface to pin: `--interface` (`cli`) over `system.interface`;
+    /// blank counts as unset.
+    pub fn pinned_interface(&self, cli: Option<&str>) -> Option<String> {
+        let _ = cli;
+        self.interface.clone()
+    }
+}
+
+/// dantesync#116 — `gm_allowlist` as a list of strings, or as one string holding one or more
+/// entries separated by commas / whitespace; `null` = empty (unrestricted). Anything else (a
+/// number, a list holding a non-string) still fails the parse.
+fn string_or_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrList {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<StringOrList>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(StringOrList::Many(list)) => list,
+        Some(StringOrList::One(s)) => s
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|e| !e.is_empty())
+            .map(str::to_string)
+            .collect(),
+    })
+}
+
+/// dantesync#131 — an optional interface name: trimmed, blank = `None`, `null` = `None`.
+fn optional_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty()))
 }
 
 /// The `system.clock_discipline` value that selects the new default.
@@ -739,6 +798,9 @@ impl Default for SystemConfig {
             // the historical last-writer-wins behavior. Backward compatible.
             gm_allowlist: Vec::new(),
 
+            // dantesync#131: not pinned (the previous selection, with a warning).
+            interface: None,
+
             // dantesync#97: phase slew is OFF by default — merging it changes nothing on the
             // fleet until a box opts in during the canary rollout.
             phase_slew: PhaseSlewConfig::default(),
@@ -762,6 +824,8 @@ impl Default for SystemConfig {
 // ============================================================================
 // TESTS
 // ============================================================================
+
+pub mod file;
 
 #[cfg(test)]
 mod tests;

@@ -11,6 +11,7 @@
 
 use crate::clock::SystemClock;
 use crate::clock_alarm::{self, ClockAlarm, ClockAlarmNotifier, ClockHealth, DesktopNotifier};
+use crate::config::file::ConfigState;
 use crate::config::SystemConfig;
 use crate::gm_filter::{GmAllowlist, ResolveOutcome, Resolver, StdResolver};
 use crate::phase_slew::{self, PhaseSlewOutput, PhaseSlewServo};
@@ -863,6 +864,9 @@ where
     /// dantesync#112 — the PTP re-join schedule, the receive rate and `/status.rejoin`, owned by
     /// `controller/ptp_liveness.rs`.
     ptp_liveness: ptp_liveness::PtpLiveness,
+    /// dantesync#116: where the running config came from (`None` until `main` says; the unit
+    /// tests' controllers never do). Anything but `"file"` keeps the clock alarm active.
+    config_state: Option<ConfigState>,
 
     /// dantesync#136 — the periodic NTP burst off the loop (its runner, the burst in flight, the
     /// wall steps), owned by `controller/ntp_check.rs`.
@@ -1057,6 +1061,7 @@ where
             phase_slew_preserve_streak: 0,
             date_sync,
             ptp_liveness: ptp_liveness::PtpLiveness::default(),
+            config_state: None,
             ntp_burst: ntp_check::NtpBurstState::default(),
         }
     }
@@ -2048,12 +2053,31 @@ where
             // #114 review: suppress the transient not-locked reason during the
             // initial boot acquisition window (never locked yet + within grace).
             in_acquisition: !self.ever_locked && self.started_at.elapsed() < ACQUISITION_GRACE,
+            // #131: the pinned PTP interface is missing / without an IPv4 (from the re-join).
+            interface_problem: self.ptp_liveness.interface_problem.clone(),
+            // #116: config.json did not load (the last-good copy or the defaults run).
+            config_problem: self
+                .config_state
+                .as_ref()
+                .and_then(ConfigState::alarm_reason),
         }
     }
 
     /// #114: advance the clock alarm and perform its emissions (LOST/REGAINED
     /// INFO edges, the per-cadence WARN log on every platform, and the desktop
     /// notification through the platform notifier), then publish the snapshot.
+    /// dantesync#116 — where the running config came from (`main`, once, before the loop). It is
+    /// published at once in `/status.config_state`, and a fallback keeps the clock alarm active.
+    pub fn set_config_state(&mut self, state: ConfigState) {
+        if let Some(reason) = state.alarm_reason() {
+            error!("[CONFIG] {}", reason);
+        }
+        if let Ok(mut status) = self.status_shared.write() {
+            status.config_state = Some(state.clone());
+        }
+        self.config_state = Some(state);
+    }
+
     fn evaluate_clock_alarm(&mut self) {
         // #114 review: once locked, the acquisition grace no longer applies (a
         // later unlock is a real loss and alarms immediately).
@@ -2073,6 +2097,16 @@ where
             now_epoch,
             &*self.clock_alarm_notifier,
         );
+        // #116: a config fallback is an ERROR every alarm cadence (the operator must fix the
+        // file), next to the alarm's own WARN line.
+        if tick.emit_notification {
+            if let Some(reason) = &health.config_problem {
+                error!(
+                    "[CONFIG] {} -- fix the file and restart dantesync (it is never overwritten)",
+                    reason
+                );
+            }
+        }
         if let Ok(mut status) = self.status_shared.write() {
             status.clock_alarm = tick.snapshot;
             status.clock_alarm_interval_s = self.clock_alarm_interval_s;

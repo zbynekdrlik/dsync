@@ -1,12 +1,37 @@
 ---
 paths:
   - "src/net.rs"
+  - "src/net_linux.rs"
   - "src/net_pcap.rs"
   - "src/net_winsock.rs"
   - "src/gm_filter.rs"
 ---
 
 # Multi-homed interface selection for the PTP receive path (camera-box issue 1073)
+
+## FIRST: the pinned interface (#131, owner ruling 1.11.2026) overrides everything below
+
+"by defaul dantesync musi mat jasne nastavenie na ktoru eth sa ma bindnut, neexistuje ze sa toto
+deje nejako nahodne". stream-snv ran a whole production without the Dante clock because a USB
+NIC (VBAN leg) got its /32 before the rig NIC at boot and was first in `getifaddrs` order.
+
+- `system.interface` / `--interface` (CLI wins, blank = unset; `SystemConfig::pinned_interface`)
+  pins the NIC by name. Windows: the adapter's friendly name (`Ethernet`) or its GUID
+  (`GetAdaptersAddresses`, feature `Win32_NetworkManagement_Ndis`). The pure classifier is
+  `net::classify_pinned` → `Ready(ip) | NoIpv4 | Missing`; loopback and link-local (APIPA) are
+  not an IPv4.
+- Pinned: startup WAITS for that NIC's IPv4 (`main::wait_for_pinned_interface`), never another;
+  the clock alarm names it at once when missing, after `net::PINNED_STARTUP_GRACE` (10 s)
+  without an IPv4 (`net::startup_wait_problem`). Every re-join (Linux `UdpPtpNetwork`, Npcap
+  `select_pinned_device`) uses ONLY the pinned NIC — no home address, no resolver, no subnet
+  rule — and returns a typed `net::PinnedInterfaceUnavailable` BEFORE closing anything; the
+  controller turns it into `ClockHealth.interface_problem` (first in the alarm precedence) and
+  looks again every 5 s (`PINNED_WAIT_RETRY`) instead of the 30..300 s backoff.
+- Unpinned: everything below, byte-identical, plus a startup WARN that the interface is not
+  pinned. `/status`: `ptp_interface_configured`, `ptp_interface`, `ptp_interface_ip` (the last
+  successful join).
+- The old stance in this file ("do not add a config field pinning the interface — the allowlist
+  IS the signal") is SUPERSEDED by the ruling. The subnet rule remains the unpinned fallback.
 
 On a DUAL-HOMED box (e.g. the stream box: rig `Ethernet` 10.77.9.204/24 + mbc `Ethernet 2`
 10.77.7.204/24) the PTP receive path must attach BOTH the pcap capture AND the IGMP `224.0.1.129`

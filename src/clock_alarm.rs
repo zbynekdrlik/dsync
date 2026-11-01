@@ -59,13 +59,21 @@ pub struct ClockHealth {
     /// (PTP stale = no packets at all, or an unresolvable hostname) still fires
     /// immediately, even during the grace, because those are real clock loss.
     pub in_acquisition: bool,
+    /// dantesync#131: the pinned PTP interface cannot be joined (`Some(reason)` names the NIC:
+    /// missing, or no IPv4). The most actionable reason there is: it comes first.
+    pub interface_problem: Option<String>,
+    /// dantesync#116: the node does not run its own `config.json` (the last-good copy or the
+    /// defaults run): `Some(reason)` keeps the alarm active until the file parses again, even
+    /// while the clock itself is locked — the master role or the allowlist may be gone.
+    pub config_problem: Option<String>,
 }
 
 impl ClockHealth {
     /// The single most-actionable reason the Dante clock is considered LOST, or
     /// `None` when the node is genuinely PTP-locked to an allowed grandmaster.
     ///
-    /// Precedence, most specific / actionable first: an unresolvable allowlist
+    /// Precedence, most specific / actionable first: the pinned PTP interface
+    /// unusable (#131), the config file not loaded (#116), an unresolvable allowlist
     /// hostname (#113), then PTP staleness (no allowed announce), then a plain
     /// not-locked / acquiring state, then a present-but-disallowed source.
     ///
@@ -322,6 +330,8 @@ mod tests {
             ptp_stale: false,
             allowlist_unresolvable: None,
             in_acquisition: false,
+            interface_problem: None,
+            config_problem: None,
         }
     }
 
@@ -333,6 +343,8 @@ mod tests {
             ptp_stale: false,
             allowlist_unresolvable: None,
             in_acquisition: false,
+            interface_problem: None,
+            config_problem: None,
         }
     }
 
@@ -433,6 +445,8 @@ mod tests {
             ptp_stale: true,
             allowlist_unresolvable: Some("video-clock.lan".to_string()),
             in_acquisition: false,
+            interface_problem: None,
+            config_problem: None,
         };
         assert_eq!(
             h.lost_reason().as_deref(),
@@ -447,6 +461,8 @@ mod tests {
             ptp_stale: true,
             allowlist_unresolvable: None,
             in_acquisition: false,
+            interface_problem: None,
+            config_problem: None,
         };
         assert_eq!(
             stale.lost_reason().as_deref(),
@@ -461,6 +477,8 @@ mod tests {
             ptp_stale: false,
             allowlist_unresolvable: None,
             in_acquisition: false,
+            interface_problem: None,
+            config_problem: None,
         };
         assert_eq!(
             disallowed.lost_reason().as_deref(),
@@ -481,6 +499,8 @@ mod tests {
             ptp_stale: false,
             allowlist_unresolvable: None,
             in_acquisition: false,
+            interface_problem: None,
+            config_problem: None,
         };
         assert!(half.lost_reason().is_some());
     }
@@ -496,6 +516,8 @@ mod tests {
             ptp_stale: false,
             allowlist_unresolvable: None,
             in_acquisition: true,
+            interface_problem: None,
+            config_problem: None,
         };
         assert_eq!(
             acquiring.lost_reason(),
@@ -537,6 +559,38 @@ mod tests {
             past_grace.lost_reason().as_deref(),
             Some("not PTP-locked to the grandmaster")
         );
+    }
+
+    #[test]
+    fn a_pinned_interface_problem_comes_first_then_a_config_fallback_131_116() {
+        let both = ClockHealth {
+            ptp_stale: true,
+            allowlist_unresolvable: Some("video-clock.lan".to_string()),
+            interface_problem: Some("PTP interface enp56s0 is missing".to_string()),
+            config_problem: Some("config.json not loaded (x), running defaults".to_string()),
+            ..lost_not_locked()
+        };
+        assert_eq!(
+            both.lost_reason().as_deref(),
+            Some("PTP interface enp56s0 is missing")
+        );
+        let config_only = ClockHealth {
+            interface_problem: None,
+            ..both.clone()
+        };
+        assert_eq!(
+            config_only.lost_reason().as_deref(),
+            Some("config.json not loaded (x), running defaults")
+        );
+        // A config fallback alarms even while the clock itself is locked and acquiring grace
+        // applies: the master role or the allowlist may be gone.
+        let locked = ClockHealth {
+            config_problem: Some("config.json not loaded (x), running the last-good config".into()),
+            in_acquisition: true,
+            ..healthy()
+        };
+        assert!(locked.lost_reason().is_some());
+        assert_eq!(healthy().lost_reason(), None);
     }
 
     #[test]

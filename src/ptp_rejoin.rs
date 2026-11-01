@@ -91,6 +91,12 @@ impl RejoinSchedule {
         }
     }
 
+    /// dantesync#131 — how long ago the last attempt of this silence was; `None` before the first.
+    pub fn since_last_attempt(&self, now: Instant) -> Option<Duration> {
+        self.last_attempt
+            .map(|prev| now.saturating_duration_since(prev))
+    }
+
     /// An attempt was made at `now`, whether it worked or not. Returns its number within the
     /// silence.
     pub fn record_attempt(&mut self, now: Instant) -> u32 {

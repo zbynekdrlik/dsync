@@ -20,6 +20,7 @@
 
 use super::*;
 use crate::ptp_rejoin::{rejoin_delay, RejoinSchedule, RejoinStatus, RxWindow};
+use std::net::Ipv4Addr;
 
 /// `/status.mode` while PTP is stale (no allowed packet for `PTP_TIMEOUT_SECS`), whatever the servo
 /// last reached: the name the offline edge always wrote, which the tray shows as its orange
@@ -38,7 +39,16 @@ pub(super) struct PtpLiveness {
     pub(super) rx: RxWindow,
     /// `/status.rejoin`.
     pub(super) rejoin: RejoinStatus,
+    /// dantesync#131: the last re-join found the PINNED interface unusable (missing, or no IPv4):
+    /// the clock alarm's reason naming the NIC, cleared by a successful re-join or an allowed
+    /// packet. While it is set the re-join is retried every [`PINNED_WAIT_RETRY`].
+    pub(super) interface_problem: Option<String>,
 }
+
+/// dantesync#131 — while the pinned interface is unusable, look again this often (a cheap
+/// interface lookup, nothing is opened): a NIC that comes back is joined within seconds, not at
+/// the 30..300 s backoff of a re-join that did open something.
+pub(super) const PINNED_WAIT_RETRY: Duration = Duration::from_secs(5);
 
 impl<C, N, S> PtpController<C, N, S>
 where
@@ -115,6 +125,7 @@ where
     pub(super) fn note_allowed_ptp_packet(&mut self, now: Instant) {
         self.last_ptp_packet = now;
         self.ptp_liveness.rx.record(now);
+        self.ptp_liveness.interface_problem = None;
         let attempts = self.ptp_liveness.schedule.reset();
         if attempts > 0 {
             info!(
@@ -127,7 +138,18 @@ where
     /// Every loop iteration: re-join the PTP multicast group when PTP is stale and the schedule
     /// says so. An error is logged, published and retried on the schedule; it is never fatal.
     pub(super) fn maybe_rejoin_ptp(&mut self, now: Instant) {
-        if !self.ptp_stale_at(now) || !self.ptp_liveness.schedule.due(self.last_ptp_packet, now) {
+        if !self.ptp_stale_at(now) {
+            return;
+        }
+        // #131: a pinned interface that was unusable is looked at again every 5 s.
+        let waiting_for_pin = false
+            && self.ptp_liveness.interface_problem.is_some()
+            && self
+                .ptp_liveness
+                .schedule
+                .since_last_attempt(now)
+                .is_some_and(|d| d >= PINNED_WAIT_RETRY);
+        if !waiting_for_pin && !self.ptp_liveness.schedule.due(self.last_ptp_packet, now) {
             return;
         }
         let attempt = self.ptp_liveness.schedule.record_attempt(now);
@@ -157,8 +179,14 @@ where
                     }
                 );
                 self.ptp_liveness.rejoin.record(epoch_s, Ok(outcome));
+                if let Some(problem) = self.ptp_liveness.interface_problem.take() {
+                    info!("[NET] {} -- resolved, PTP joined on it again", problem);
+                }
             }
             Err(e) => {
+                // #131: the pinned NIC is missing / has no IPv4: the alarm names it.
+                let pinned = e.downcast_ref::<crate::net::PinnedInterfaceUnavailable>();
+                let _ = pinned;
                 let text = format!("{e:#}");
                 warn!(
                     "[NET] PTP re-join attempt {} failed: {} -- next attempt in {}s",
@@ -172,6 +200,16 @@ where
         // Publish the attempt at once (a watchdog sees it without waiting for the 10 s tick).
         if let Ok(mut status) = self.status_shared.write() {
             status.rejoin = self.ptp_liveness.rejoin.clone();
+        }
+    }
+
+    /// dantesync#131 — the startup join (`main`): the pin (or `None`) and where PTP joined.
+    /// Published at once in `/status`; each successful re-join updates the joined interface.
+    pub fn set_ptp_interface(&mut self, configured: Option<String>, iface: &str, ip: Ipv4Addr) {
+        if let Ok(mut status) = self.status_shared.write() {
+            status.ptp_interface_configured = configured;
+            status.ptp_interface = Some(iface.to_string());
+            status.ptp_interface_ip = Some(ip.to_string());
         }
     }
 

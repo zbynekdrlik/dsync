@@ -1,4 +1,5 @@
 use crate::clock_alarm::ClockAlarmStatus;
+use crate::config::file::ConfigState;
 use crate::ptp_rejoin::RejoinStatus;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
@@ -500,6 +501,32 @@ pub struct SyncStatus {
     pub ptp_subdomain: Option<String>,
     #[serde(default)]
     pub ptp_source_uuid: Option<[u8; 6]>,
+
+    // ========================================================================
+    // The PTP interface (dantesync#131) and the config source (#116) — additive.
+    // ========================================================================
+    /// dantesync#131: the pinned PTP interface (`system.interface` / `--interface`); `null` when
+    /// the node is not pinned (it then joins the first IPv4 NIC, as before 1.21) and in a
+    /// pre-1.21 blob.
+    #[serde(default)]
+    pub ptp_interface_configured: Option<String>,
+
+    /// dantesync#131: the interface of the last successful PTP join (the startup join, then each
+    /// re-join): the interface name on Linux, the Npcap device on Windows. `null` until joined,
+    /// and in a pre-1.21 blob. With a pin it can only be the pinned NIC.
+    #[serde(default)]
+    pub ptp_interface: Option<String>,
+
+    /// dantesync#131: the IPv4 of that join (dotted quad); `null` like `ptp_interface`.
+    #[serde(default)]
+    pub ptp_interface_ip: Option<String>,
+
+    /// dantesync#116: where the running configuration came from — `loaded_from` = `"file"`
+    /// (`config.json`), `"last-good"` (it did not load; the copy of the last good load runs) or
+    /// `"defaults"` (neither loaded) — and why `config.json` was not used. Anything but `"file"`
+    /// also raises the clock alarm. `null` in a pre-1.21 blob.
+    #[serde(default)]
+    pub config_state: Option<ConfigState>,
 }
 
 fn default_clock_alarm_interval_s() -> u64 {
@@ -614,6 +641,11 @@ impl Default for SyncStatus {
             ptp_version: None,
             ptp_subdomain: None,
             ptp_source_uuid: None,
+            // #131 / #116: published by the controller
+            ptp_interface_configured: None,
+            ptp_interface: None,
+            ptp_interface_ip: None,
+            config_state: None,
         }
     }
 }

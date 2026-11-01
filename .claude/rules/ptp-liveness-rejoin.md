@@ -83,7 +83,12 @@ offset `D` from its own NTP-stepped wall: 29.9.2026, −19.8 ms, every box stepp
   sockets bind INADDR_ANY:319/320, so a runt or a Delay_Req can reach a fallback join (tailscale0
   while the NIC is unplugged), and making that the home would pin every later re-join there. On
   Npcap the device is selected BEFORE the old capture is dropped.
-- **Known limits on Linux (not in this change), one root: the Linux backend does not know the
+- **A pinned interface (#131) replaces the whole choice above.** With `system.interface` set, a
+  re-join joins only that NIC (its CURRENT IPv4, so a DHCP move on it is followed) and returns
+  `net::PinnedInterfaceUnavailable` before closing anything when it is missing / has no IPv4;
+  the controller names it in the alarm and retries every 5 s. The limits below apply only to an
+  UNPINNED node — pinning is their fix (see `multi-homed-interface-selection.md`).
+- **Known limits on Linux (unpinned only), one root: the Linux backend does not know the
   trusted grandmaster.**
   - A DHCP move to a new address on a multi-interface box still falls back to the listing-ordered
     resolver, like a restart does.

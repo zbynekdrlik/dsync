@@ -79,113 +79,10 @@ use dantesync::{
     sync_loop, time_server,
 };
 
+use config::file::{Config, ConfigState, Loaded};
 use config::{HttpStatusConfig, NtpServerConfig, SystemConfig};
 use controller::PtpController;
-use serde::{Deserialize, Serialize};
 use status::SyncStatus;
-
-/// Simplified configuration - only NTP server needs to be managed
-/// All other parameters auto-adjust based on platform defaults
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Config {
-    /// camera-box issue 1073: this gained `#[serde(default)]` so a file that
-    /// omits `ntp_server` (e.g. an operator who writes only
-    /// `{"system": {"gm_allowlist": [...]}}` during the fix rollout) parses
-    /// instead of failing the WHOLE-file parse — which would send `load_config`
-    /// down its overwrite-with-defaults path and SILENTLY DELETE the allowlist
-    /// they just added, re-exposing the box to the foreign grandmaster. Missing
-    /// → the fleet default (same value the fresh-config template already writes).
-    #[serde(default = "default_ntp_server")]
-    ntp_server: String,
-
-    /// NTP server mode configuration (optional - disabled by default)
-    /// When enabled, this machine becomes an NTP server for the network
-    #[serde(default)]
-    ntp_server_mode: NtpServerConfig,
-
-    /// HTTP status endpoint configuration (optional - enabled by default, port 8898).
-    /// Lets LAN automation (e.g. camera-box CI) read PTP/NTP status without the
-    /// Windows-only named pipe (#47).
-    #[serde(default)]
-    http_status: HttpStatusConfig,
-
-    /// Advanced system tuning (optional - uses auto-optimized defaults if omitted)
-    #[serde(default)]
-    system: SystemConfig,
-}
-
-fn default_ntp_server() -> String {
-    "10.77.8.2".to_string()
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            ntp_server: default_ntp_server(),
-            ntp_server_mode: NtpServerConfig::default(),
-            http_status: HttpStatusConfig::default(),
-            system: SystemConfig::default(),
-        }
-    }
-}
-
-/// Fill in config keys added by later versions, returning `true` when anything
-/// changed (i.e. the file should be written back).
-///
-/// Extracted from `load_config()` in #68 so it is testable at all: `load_config`
-/// reads a hardcoded system path, which is why the migration had no test and a
-/// panicking mutable index reached the fleet's clock master.
-///
-/// **Never index a nested value mutably without proving it is an object first.**
-/// `serde_json`'s `IndexMut<&str>` panics on any value that is neither an object
-/// nor null, so a hand-edited `"ntp_server_mode": true` — a very plausible
-/// attempt to enable it — would abort the daemon at startup, which under a
-/// service manager is a restart loop rather than a degraded start. A malformed
-/// value is instead left alone and falls through to `load_config`'s existing
-/// log-loudly-then-default path.
-fn migrate_config_json(json: &mut serde_json::Value) -> bool {
-    let mut needs_migration = false;
-
-    // Migrate: add _ntp_server_examples if missing
-    if json.get("_ntp_server_examples").is_none() {
-        json["_ntp_server_examples"] = serde_json::Value::String(
-            "sk.pool.ntp.org, europe.pool.ntp.org, time.google.com, time.cloudflare.com"
-                .to_string(),
-        );
-        needs_migration = true;
-    }
-
-    // Migrate: add ntp_server_mode if missing
-    if json.get("ntp_server_mode").is_none() {
-        json["ntp_server_mode"] = serde_json::json!({
-            "enabled": false,
-            "port": 123,
-            "stratum": 3,
-            "max_step_us": 100_000
-        });
-        needs_migration = true;
-    } else if let Some(server_mode) = json["ntp_server_mode"].as_object_mut() {
-        // #68: an EXISTING master's config predates the correction bound.
-        // `#[serde(default)]` already supplies it, but writing it out makes the
-        // knob visible/tunable in the file the operator actually reads.
-        if !server_mode.contains_key("max_step_us") {
-            server_mode.insert("max_step_us".to_string(), serde_json::json!(100_000));
-            needs_migration = true;
-        }
-    }
-
-    // Migrate: add http_status if missing (#47 — existing installs get the
-    // endpoint enabled by default on next start, same as a fresh config)
-    if json.get("http_status").is_none() {
-        json["http_status"] = serde_json::json!({
-            "enabled": true,
-            "port": 8898
-        });
-        needs_migration = true;
-    }
-
-    needs_migration
-}
 
 /// dantesync#126 — where the NTP master keeps its fleet date offset across a restart: beside
 /// `config.json`, in a file of its own (never inside the config). Only the master writes it.
@@ -194,74 +91,96 @@ const DATE_STATE_PATH: &str = r"C:\ProgramData\DanteSync\date-offset.json";
 #[cfg(not(windows))]
 const DATE_STATE_PATH: &str = "/etc/dantesync/date-offset.json";
 
-fn load_config() -> Config {
-    #[cfg(windows)]
-    let path = r"C:\ProgramData\DanteSync\config.json";
-    #[cfg(not(windows))]
-    let path = "/etc/dantesync/config.json";
+/// dantesync#116: the config file. A file that does not parse is never overwritten; the loader
+/// keeps `config.json.last-good` beside it (`config::file::load`).
+#[cfg(windows)]
+const CONFIG_PATH: &str = r"C:\ProgramData\DanteSync\config.json";
+#[cfg(not(windows))]
+const CONFIG_PATH: &str = "/etc/dantesync/config.json";
 
-    if let Ok(content) = std::fs::read_to_string(path) {
-        // Try to parse as JSON Value first to check for missing fields
-        if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
-            let needs_migration = migrate_config_json(&mut json);
+fn load_config() -> Loaded {
+    let path = std::path::Path::new(CONFIG_PATH);
+    config::file::load(path, &config::file::last_good_path(path))
+}
 
-            // Write back migrated config
-            if needs_migration {
-                if let Ok(pretty) = serde_json::to_string_pretty(&json) {
-                    let _ = std::fs::write(path, pretty);
-                    log::info!(
-                        "Config migrated: added ntp_server_mode / http_status / NTP examples (as needed)"
-                    );
+/// dantesync#131 — wait for the pinned PTP interface `name` to carry a usable IPv4; `None` when
+/// the service is stopped meanwhile. Never another NIC. While it is missing (at once) or without
+/// an IPv4 past `net::PINNED_STARTUP_GRACE`, the clock alarm names it in `/status` and in the
+/// log every alarm cadence: the controller that normally drives the alarm does not exist yet.
+fn wait_for_pinned_interface(
+    name: &str,
+    running: &AtomicBool,
+    status: &RwLock<SyncStatus>,
+    alarm_interval_s: u64,
+    config_state: &ConfigState,
+) -> Option<(String, std::net::Ipv4Addr)> {
+    use dantesync::clock_alarm::{self, ClockAlarm, ClockHealth, DesktopNotifier};
+    if let Ok(mut s) = status.write() {
+        s.ptp_interface_configured = Some(name.to_string());
+    }
+    let started = Instant::now();
+    let mut alarm = ClockAlarm::from_interval_secs(alarm_interval_s);
+    let mut last: Option<net::PinnedLookup> = None;
+    loop {
+        let lookup = net::pinned_interface(name);
+        if last != Some(lookup) {
+            match lookup {
+                net::PinnedLookup::Ready(ip) => {
+                    info!("[NET] pinned PTP interface {} is up with {}", name, ip)
+                }
+                net::PinnedLookup::NoIpv4 => warn!(
+                    "[NET] pinned PTP interface {} has no IPv4 address yet -- waiting for it \
+                     (never another NIC)",
+                    name
+                ),
+                net::PinnedLookup::Missing => error!(
+                    "[NET] pinned PTP interface {} is missing -- waiting for it (never another \
+                     NIC)",
+                    name
+                ),
+            }
+            last = Some(lookup);
+        }
+        if let net::PinnedLookup::Ready(ip) = lookup {
+            if alarm.is_active() {
+                info!(
+                    "[CLOCK-ALARM] cleared -- the pinned PTP interface {} is up",
+                    name
+                );
+                if let Ok(mut s) = status.write() {
+                    s.clock_alarm = Default::default();
                 }
             }
-
-            // Parse the (possibly migrated) config
-            match serde_json::from_value::<Config>(json) {
-                Ok(cfg) => return cfg,
-                Err(e) => {
-                    // #47 review: this used to fail SILENTLY for any field missing
-                    // its own #[serde(default)] (e.g. a hand-edited http_status/
-                    // ntp_server_mode object present but incomplete), then fall
-                    // through below and overwrite the file with fresh defaults —
-                    // losing the user's real ntp_server address and any other
-                    // customization with zero signal. Per-field defaults now cover
-                    // the known partial-object shapes (see config.rs), but log
-                    // loudly on ANY remaining parse failure so a genuinely corrupt
-                    // config.json never gets silently replaced without a trace.
-                    log::error!(
-                        "Failed to parse {} as Config: {} — falling back to a fresh default config (the existing file will be overwritten)",
-                        path,
-                        e
-                    );
-                }
+            return Some((name.to_string(), ip));
+        }
+        if let Some(problem) = net::startup_wait_problem(name, lookup, started.elapsed()) {
+            let health = ClockHealth {
+                is_locked: false,
+                mode_locked: false,
+                gm_allowed: false,
+                ptp_stale: true,
+                allowlist_unresolvable: None,
+                in_acquisition: false,
+                interface_problem: Some(problem.alarm_reason()),
+                config_problem: config_state.alarm_reason(),
+            };
+            let epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let tick =
+                clock_alarm::drive(&mut alarm, &health, Instant::now(), epoch, &DesktopNotifier);
+            if let Ok(mut s) = status.write() {
+                s.clock_alarm = tick.snapshot;
+                s.clock_alarm_interval_s =
+                    alarm_interval_s.max(clock_alarm::CLOCK_ALARM_INTERVAL_FLOOR_S);
             }
         }
+        if !running.load(Ordering::SeqCst) {
+            return None;
+        }
+        thread::sleep(Duration::from_secs(1));
     }
-
-    // Create new config with all sections visible
-    let cfg = Config::default();
-    let simple_config = r#"{
-  "_ntp_server_examples": "sk.pool.ntp.org, europe.pool.ntp.org, time.google.com, time.cloudflare.com",
-  "ntp_server": "10.77.8.2",
-  "ntp_server_mode": {
-    "enabled": false,
-    "port": 123,
-    "stratum": 3,
-    "max_step_us": 100000
-  },
-  "http_status": {
-    "enabled": true,
-    "port": 8898
-  },
-  "system": {
-    "_phase_slew": "dantesync#97 — set enabled:true (per-box, canary rollout) to SLEW sub-50ms UTC errors instead of stepping",
-    "phase_slew": {
-      "enabled": false
-    }
-  }
-}"#;
-    let _ = std::fs::write(path, simple_config);
-    cfg
 }
 
 /// Resolve the NTP server address: CLI arg takes priority, then config file value.
@@ -584,6 +503,7 @@ fn run_sync_loop(
     system_config: SystemConfig,
     ntp_server_config: NtpServerConfig,
     http_status_config: HttpStatusConfig,
+    config_state: ConfigState,
 ) -> Result<()> {
     // Notify systemd (Linux) that we are starting
     #[cfg(unix)]
@@ -598,6 +518,10 @@ fn run_sync_loop(
 
     // Initialize Shared Status
     let status_shared = Arc::new(RwLock::new(SyncStatus::default()));
+    // dantesync#116: the config source is visible at once, also while startup waits below.
+    if let Ok(mut s) = status_shared.write() {
+        s.config_state = Some(config_state.clone());
+    }
 
     // Start IPC Server immediately (so Tray App can connect even if network is down)
     start_ipc_server(status_shared.clone());
@@ -647,25 +571,66 @@ fn run_sync_loop(
     };
     info!("System clock control initialized.");
 
-    // Network Interface Selection (Retry Loop)
-    let (iface_name, iface_ip) = loop {
-        match net::get_default_interface() {
-            Ok(res) => break res,
-            Err(e) => {
-                if !running.load(Ordering::SeqCst) {
-                    return Ok(());
+    // dantesync#131 (owner ruling 1.11.2026): the PTP interface is an explicit setting. Pinned
+    // (`system.interface` / `--interface`): wait for exactly that NIC's IPv4 — never another NIC
+    // — with the clock alarm naming it while it is missing. Unpinned: the previous selection,
+    // with a warning.
+    let pinned = system_config.pinned_interface(args.interface.as_deref());
+    let (iface_name, iface_ip) = match &pinned {
+        Some(name) => {
+            info!(
+                "[NET] PTP interface pinned to {} ({})",
+                name,
+                if args.interface.is_some() {
+                    "--interface"
+                } else {
+                    "system.interface"
                 }
-                warn!("Waiting for network interface... ({})", e);
-                thread::sleep(Duration::from_secs(5));
+            );
+            match wait_for_pinned_interface(
+                name,
+                &running,
+                &status_shared,
+                system_config.clock_alarm_interval_s,
+                &config_state,
+            ) {
+                Some(found) => found,
+                None => return Ok(()),
+            }
+        }
+        None => {
+            warn!(
+                "[NET] the PTP interface is NOT pinned (system.interface / --interface unset): \
+                 joining the first IPv4 interface in listing order — set system.interface to the \
+                 PTP NIC (dantesync#131)"
+            );
+            loop {
+                match net::get_default_interface() {
+                    Ok(res) => break res,
+                    Err(e) => {
+                        if !running.load(Ordering::SeqCst) {
+                            return Ok(());
+                        }
+                        warn!("Waiting for network interface... ({})", e);
+                        thread::sleep(Duration::from_secs(5));
+                    }
+                }
             }
         }
     };
 
     // Platform-specific network setup
     // Linux: the event + general sockets join the PTP group (IGMP) with kernel timestamping
-    // (`net_linux`, which logs the "Joined Multicast Groups on ..." line).
+    // (`net_linux`, which logs the "Joined Multicast Groups on ..." line). A pinned interface
+    // is the only one any later re-join may use (#131).
     #[cfg(unix)]
-    let network = net_linux::UdpPtpNetwork::join(net_linux::KernelSockets, iface_name, iface_ip)?;
+    let network = net_linux::UdpPtpNetwork::join(net_linux::KernelSockets, iface_name, iface_ip)?
+        .pinned_to(pinned.clone());
+    #[cfg(unix)]
+    let (joined_iface, joined_ip) = network
+        .interface()
+        .map(|(name, ip)| (name.to_string(), ip))
+        .unwrap_or((String::new(), iface_ip));
 
     #[cfg(windows)]
     let network = {
@@ -678,6 +643,7 @@ fn run_sync_loop(
         // it picks the capture/IGMP-join interface on the grandmaster's subnet
         // when the allowlist can disambiguate, and otherwise falls back to the
         // default interface (single-homed / no-allowlist boxes are unchanged).
+        // dantesync#131: a PINNED interface alone selects the device (no subnet rule).
         let mut gm_allowlist =
             dantesync::gm_filter::GmAllowlist::parse(&system_config.gm_allowlist);
         // dantesync#113: resolve hostname entries BEFORE interface selection so a
@@ -692,7 +658,7 @@ fn run_sync_loop(
                 gm_allowlist.unresolved_hostnames()
             );
         }
-        match net_pcap::NpcapPtpNetwork::new(&iface_name, &gm_allowlist) {
+        match net_pcap::NpcapPtpNetwork::new(&iface_name, &gm_allowlist, pinned.clone()) {
             Ok(npcap_net) => {
                 info!(
                     "Using Npcap HostHighPrec timestamps (default-interface hint {} / {})",
@@ -708,6 +674,11 @@ fn run_sync_loop(
                 return Err(e);
             }
         }
+    };
+    #[cfg(windows)]
+    let (joined_iface, joined_ip) = {
+        let (name, ip) = network.joined();
+        (name.to_string(), ip)
     };
 
     let ntp_server = args
@@ -729,6 +700,9 @@ fn run_sync_loop(
         system_config,
     );
     controller.set_date_step_requests(date_step_rx);
+    // dantesync#131 / #116: /status names the pin, the joined interface and the config source.
+    controller.set_ptp_interface(pinned, &joined_iface, joined_ip);
+    controller.set_config_state(config_state);
     let burst_client = ntp_client.clone();
     match dantesync::ntp_burst::NtpBurstThread::spawn(
         move || burst_client.get_offset(),
@@ -902,7 +876,10 @@ fn my_service_main(_arguments: Vec<OsString>) {
     // We need to reload config or pass it?
     // Windows Service entry doesn't allow easy closure capture without unsafe global.
     // But we can just reload it, it's cheap.
-    let config = load_config();
+    let Loaded {
+        config,
+        state: config_state,
+    } = load_config();
 
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
 
@@ -948,6 +925,7 @@ fn my_service_main(_arguments: Vec<OsString>) {
             config.system,
             config.ntp_server_mode,
             config.http_status,
+            config_state,
         ) {
             error!("Service loop failed: {}", e);
         }
@@ -976,7 +954,7 @@ fn my_service_main(_arguments: Vec<OsString>) {
 define_windows_service!(ffi_service_main, my_service_main);
 
 #[cfg(windows)]
-fn run_service_logic(_args: Args, _config: Config) -> Result<()> {
+fn run_service_logic(_args: Args) -> Result<()> {
     info!("Service logic starting...");
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)?;
     Ok(())
@@ -984,10 +962,6 @@ fn run_service_logic(_args: Args, _config: Config) -> Result<()> {
 
 fn main() -> Result<()> {
     let mut args = Args::parse();
-    let config = load_config();
-
-    // Resolve NTP server: CLI arg > config file > default
-    args.ntp_server = Some(resolve_ntp_server(&args.ntp_server, &config));
 
     #[cfg(windows)]
     if args.service {
@@ -1024,7 +998,8 @@ fn main() -> Result<()> {
         }
 
         info!("Service Started: v{}", env!("CARGO_PKG_VERSION"));
-        return run_service_logic(args, config);
+        // The service entry (`my_service_main`) loads the config itself, after this logger.
+        return run_service_logic(args);
     }
 
     // Console Mode Logging (clean format)
@@ -1037,6 +1012,14 @@ fn main() -> Result<()> {
 
     // Log Version immediately
     info!("DanteSync v{}", env!("CARGO_PKG_VERSION"));
+
+    // dantesync#116: loaded after the logger, so every load / fallback decision is logged.
+    let Loaded {
+        config,
+        state: config_state,
+    } = load_config();
+    // Resolve NTP server: CLI arg > config file > default
+    args.ntp_server = Some(resolve_ntp_server(&args.ntp_server, &config));
 
     // Console Mode
     let _lock_file = match acquire_singleton_lock() {
@@ -1061,12 +1044,14 @@ fn main() -> Result<()> {
         config.system,
         config.ntp_server_mode,
         config.http_status,
+        config_state,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dantesync::config::file::migrate_config_json;
 
     fn config_with_ntp(server: &str) -> Config {
         Config {

@@ -9,8 +9,9 @@
 
 use crate::date_offset::{AuthorityState, DateOffsetState, DateSlew, STATE_VERSION};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct SlewFile {
@@ -128,12 +129,10 @@ pub(super) fn write_atomic(path: &Path, state: &DateOffsetState) -> std::io::Res
 }
 
 /// The directory a record at `path` lives in (the directory to sync after the rename; `.` for a
-/// bare file name).
+/// bare file name). Shared with every atomically written file (`crate::atomic_file`).
+#[cfg(test)]
 fn dir_to_sync(path: &Path) -> Option<PathBuf> {
-    match path.parent() {
-        Some(d) if d.as_os_str().is_empty() => Some(PathBuf::from(".")),
-        other => other.map(Path::to_path_buf),
-    }
+    crate::atomic_file::dir_to_sync(path)
 }
 
 /// A directory sync that failed after the rename is warned about once per process: the record is
@@ -142,11 +141,7 @@ static DIR_SYNC_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 
 /// Sync a directory (Unix; a no-op elsewhere).
 fn sync_dir(dir: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    std::fs::File::open(dir)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = dir;
-    Ok(())
+    crate::atomic_file::sync_dir(dir)
 }
 
 fn write_atomic_with(
@@ -154,27 +149,17 @@ fn write_atomic_with(
     state: &DateOffsetState,
     sync_dir: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = std::path::PathBuf::from(tmp);
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(encode(state).as_bytes())?;
-        f.write_all(b"\n")?;
-        f.sync_all()?;
-    }
-    std::fs::rename(&tmp, path)?;
+    let mut bytes = encode(state).into_bytes();
+    bytes.push(b'\n');
     // Renamed: the new record is in place. A directory that refuses the sync does not undo it.
-    if let Some(dir) = dir_to_sync(path) {
-        if let Err(e) = sync_dir(&dir) {
-            if !DIR_SYNC_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                log::warn!(
-                    "[DATE] the fleet date offset is saved to {}, but its directory could not be \
-                     synced: {} (a power cut could bring the previous record back; warned once)",
-                    path.display(),
-                    e
-                );
-            }
+    if let Some(e) = crate::atomic_file::write_with(path, &bytes, sync_dir)? {
+        if !DIR_SYNC_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            log::warn!(
+                "[DATE] the fleet date offset is saved to {}, but its directory could not be \
+                 synced: {} (a power cut could bring the previous record back; warned once)",
+                path.display(),
+                e
+            );
         }
     }
     Ok(())

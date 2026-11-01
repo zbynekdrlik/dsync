@@ -414,3 +414,139 @@ fn a_followers_delay_req_neither_names_the_grandmaster_nor_clears_the_drop_count
     assert_eq!(c.gm_dropped_since_accepted, 1);
     assert_eq!(c.current_sync_source_ip, None);
 }
+
+/// dantesync#131: a network whose pinned interface `enp56s0` is missing for the first `down`
+/// re-joins, then back (`eth0()` stands for the joined NIC).
+fn pinned_network(down: u32, calls: Arc<AtomicU32>, missing: bool) -> MockPtpNetwork {
+    let mut net = MockPtpNetwork::new();
+    net.expect_rejoin().returning(move || {
+        if calls.fetch_add(1, Ordering::SeqCst) < down {
+            Err(crate::net::PinnedInterfaceUnavailable {
+                name: "enp56s0".to_string(),
+                missing,
+            }
+            .into())
+        } else {
+            Ok(eth0())
+        }
+    });
+    net
+}
+
+#[test]
+fn a_missing_pinned_interface_names_the_nic_in_the_clock_alarm_131() {
+    let calls = Arc::new(AtomicU32::new(0));
+    let (mut c, st) = controller(pinned_network(1, calls.clone(), true));
+    let t0 = Instant::now();
+    c.note_allowed_ptp_packet(t0);
+    c.maybe_rejoin_ptp(t0 + ms(10_500));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        c.sample_clock_health().lost_reason().as_deref(),
+        Some("PTP interface enp56s0 is missing"),
+        "the alarm names the pinned NIC, ahead of the generic PTP-stale reason"
+    );
+    c.evaluate_clock_alarm();
+    {
+        let st = st.read().expect("status");
+        assert!(st.clock_alarm.active);
+        assert_eq!(st.clock_alarm.reason, "PTP interface enp56s0 is missing");
+        assert!(st
+            .rejoin
+            .last_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("never another NIC"));
+    }
+
+    // The NIC is back: the next look (5 s later, not the 30 s backoff) joins it and clears the
+    // interface reason.
+    c.maybe_rejoin_ptp(t0 + ms(15_500));
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "looked again after 5 s");
+    assert_eq!(c.ptp_liveness.interface_problem, None);
+    let st = st.read().expect("status");
+    assert_eq!(st.ptp_interface.as_deref(), Some("enx002427159965"));
+    assert_eq!(st.ptp_interface_ip.as_deref(), Some("10.77.9.202"));
+}
+
+#[test]
+fn a_pinned_interface_without_ipv4_is_looked_at_every_five_seconds_131() {
+    let calls = Arc::new(AtomicU32::new(0));
+    let (mut c, _st) = controller(pinned_network(u32::MAX, calls.clone(), false));
+    let t0 = Instant::now();
+    c.note_allowed_ptp_packet(t0);
+    c.maybe_rejoin_ptp(t0 + ms(10_500));
+    assert_eq!(
+        c.sample_clock_health().lost_reason().as_deref(),
+        Some("PTP interface enp56s0 has no IPv4 address")
+    );
+    c.maybe_rejoin_ptp(t0 + ms(15_499));
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "not before 5 s");
+    for (at, want) in [(15_500, 2), (20_500, 3), (25_499, 3), (25_500, 4)] {
+        c.maybe_rejoin_ptp(t0 + ms(at));
+        assert_eq!(calls.load(Ordering::SeqCst), want, "at {at} ms");
+    }
+}
+
+#[test]
+fn an_unpinned_rejoin_failure_keeps_the_backoff_and_names_no_interface_131() {
+    // Only the typed pinned error speeds the re-join up and becomes the alarm's reason.
+    let calls = Arc::new(AtomicU32::new(0));
+    let seen = calls.clone();
+    let mut net = MockPtpNetwork::new();
+    net.expect_rejoin().returning(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+        Err(anyhow::anyhow!("No suitable IPv4 interface found"))
+    });
+    let (mut c, _st) = controller(net);
+    let t0 = Instant::now();
+    c.note_allowed_ptp_packet(t0);
+    c.maybe_rejoin_ptp(t0 + ms(10_500));
+    c.maybe_rejoin_ptp(t0 + ms(15_500));
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the 30 s backoff");
+    assert_eq!(c.ptp_liveness.interface_problem, None);
+}
+
+#[test]
+fn the_startup_join_is_published_with_the_pin_131() {
+    let (mut c, st) = controller(MockPtpNetwork::new());
+    c.set_ptp_interface(
+        Some("enp56s0".to_string()),
+        "enp56s0",
+        Ipv4Addr::new(10, 77, 9, 204),
+    );
+    let st = st.read().expect("status");
+    assert_eq!(st.ptp_interface_configured.as_deref(), Some("enp56s0"));
+    assert_eq!(st.ptp_interface.as_deref(), Some("enp56s0"));
+    assert_eq!(st.ptp_interface_ip.as_deref(), Some("10.77.9.204"));
+}
+
+#[test]
+fn a_config_fallback_keeps_the_clock_alarm_active_and_is_published_116() {
+    use crate::config::file::{ConfigState, LOADED_FROM_DEFAULTS, LOADED_FROM_FILE};
+    let (mut c, st) = controller(MockPtpNetwork::new());
+    c.set_config_state(ConfigState {
+        loaded_from: LOADED_FROM_DEFAULTS.to_string(),
+        error: Some("not JSON: expected value at line 1 column 1".to_string()),
+    });
+    c.evaluate_clock_alarm();
+    {
+        let st = st.read().expect("status");
+        assert_eq!(
+            st.config_state.as_ref().map(|s| s.loaded_from.as_str()),
+            Some("defaults")
+        );
+        assert!(st.clock_alarm.active);
+        assert!(
+            st.clock_alarm.reason.contains("running defaults"),
+            "{}",
+            st.clock_alarm.reason
+        );
+    }
+    // The node's own file: no config reason.
+    c.set_config_state(ConfigState {
+        loaded_from: LOADED_FROM_FILE.to_string(),
+        error: None,
+    });
+    assert_eq!(c.sample_clock_health().config_problem, None);
+}

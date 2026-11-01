@@ -46,6 +46,211 @@ pub fn get_default_interface() -> Result<(String, Ipv4Addr)> {
     Err(anyhow!("No suitable IPv4 interface found"))
 }
 
+/// dantesync#131 — what the pinned PTP interface (`system.interface` / `--interface`) is now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinnedLookup {
+    /// The NIC exists and carries this usable IPv4 (the first one, in listing order).
+    Ready(Ipv4Addr),
+    /// The NIC exists but has no usable IPv4 yet (DHCP pending, cable out, an APIPA address).
+    NoIpv4,
+    /// No NIC of that name.
+    Missing,
+}
+
+/// One NIC as the OS lists it: every name it answers to (Linux: its name; Windows: the friendly
+/// name and the adapter GUID) and its IPv4 addresses.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NicSnapshot {
+    pub names: Vec<String>,
+    pub ipv4: Vec<Ipv4Addr>,
+}
+
+/// dantesync#131 — classify the pinned NIC `name` among `nics` (pure). A loopback or link-local
+/// (169.254/16, a Windows APIPA address while DHCP has not answered) address is not usable.
+pub fn classify_pinned(name: &str, nics: &[NicSnapshot]) -> PinnedLookup {
+    let _ = (name, nics);
+    PinnedLookup::Missing
+}
+
+/// The NICs of this host now, for [`classify_pinned`] (Linux: `getifaddrs` plus `name` itself
+/// when the kernel knows it but it carries no address at all).
+#[cfg(not(windows))]
+fn nic_snapshots(name: &str) -> Vec<NicSnapshot> {
+    let mut nics: Vec<NicSnapshot> = Vec::new();
+    match if_addrs::get_if_addrs() {
+        Ok(ifaces) => {
+            for iface in ifaces {
+                let pos = match nics.iter().position(|n| n.names[0] == iface.name) {
+                    Some(pos) => pos,
+                    None => {
+                        nics.push(NicSnapshot {
+                            names: vec![iface.name.clone()],
+                            ipv4: Vec::new(),
+                        });
+                        nics.len() - 1
+                    }
+                };
+                if let IpAddr::V4(ip) = iface.ip() {
+                    nics[pos].ipv4.push(ip);
+                }
+            }
+        }
+        Err(e) => log::warn!("[NET] cannot list the interfaces: {}", e),
+    }
+    if !nics.iter().any(|n| n.names[0] == name) && nix::net::if_::if_nametoindex(name).is_ok() {
+        nics.push(NicSnapshot {
+            names: vec![name.to_string()],
+            ipv4: Vec::new(),
+        });
+    }
+    nics
+}
+
+/// The NICs of this host now, for [`classify_pinned`]: every adapter `GetAdaptersAddresses`
+/// lists (also one with no address), named by its friendly name and its GUID.
+#[cfg(windows)]
+fn nic_snapshots(_name: &str) -> Vec<NicSnapshot> {
+    match windows_adapters() {
+        Ok(nics) => nics,
+        Err(e) => {
+            log::warn!("[NET] cannot list the network adapters: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_adapters() -> Result<Vec<NicSnapshot>> {
+    use windows::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows::Win32::Networking::WinSock::{AF_INET, AF_UNSPEC, SOCKADDR_IN};
+
+    const ERROR_BUFFER_OVERFLOW: u32 = 111;
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut size: u32 = 16 * 1024;
+    // u64 words keep the buffer aligned for IP_ADAPTER_ADDRESSES_LH.
+    let mut buf: Vec<u64> = Vec::new();
+    let mut rc = ERROR_BUFFER_OVERFLOW;
+    for _ in 0..4 {
+        buf = vec![0u64; size as usize / 8 + 1];
+        rc = unsafe {
+            GetAdaptersAddresses(
+                AF_UNSPEC.0 as u32,
+                flags,
+                None,
+                Some(buf.as_mut_ptr() as *mut IP_ADAPTER_ADDRESSES_LH),
+                &mut size,
+            )
+        };
+        if rc != ERROR_BUFFER_OVERFLOW {
+            break;
+        }
+    }
+    if rc != 0 {
+        return Err(anyhow!("GetAdaptersAddresses failed: error {}", rc));
+    }
+    let mut nics = Vec::new();
+    let mut cur = buf.as_ptr() as *const IP_ADAPTER_ADDRESSES_LH;
+    while !cur.is_null() {
+        // SAFETY: a list GetAdaptersAddresses filled into `buf`, which outlives this walk.
+        let a = unsafe { &*cur };
+        let mut names = Vec::new();
+        if let Ok(friendly) = unsafe { a.FriendlyName.to_string() } {
+            names.push(friendly);
+        }
+        if let Ok(guid) = unsafe { a.AdapterName.to_string() } {
+            names.push(guid);
+        }
+        let mut ipv4 = Vec::new();
+        let mut ua = a.FirstUnicastAddress;
+        while !ua.is_null() {
+            let u = unsafe { &*ua };
+            let sa = u.Address.lpSockaddr;
+            if !sa.is_null() && unsafe { (*sa).sa_family } == AF_INET {
+                let sin = unsafe { &*(sa as *const SOCKADDR_IN) };
+                let raw = unsafe { sin.sin_addr.S_un.S_addr };
+                ipv4.push(Ipv4Addr::from(u32::from_be(raw)));
+            }
+            ua = u.Next;
+        }
+        nics.push(NicSnapshot { names, ipv4 });
+        cur = a.Next;
+    }
+    Ok(nics)
+}
+
+/// dantesync#131 — how long a pinned NIC may sit without an IPv4 at startup before the clock
+/// alarm names it: the PTP staleness bound (`controller::PTP_TIMEOUT_SECS`), so a normal boot
+/// (DHCP / NetworkManager bringing the NIC up) never alarms, a dead one does like any lost clock.
+pub const PINNED_STARTUP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// dantesync#131 — the alarm-worthy problem of a pinned NIC while startup waits for it (pure): a
+/// MISSING NIC at once, one without an IPv4 only after [`PINNED_STARTUP_GRACE`]; `None` when it
+/// is ready or still within the grace.
+pub fn startup_wait_problem(
+    name: &str,
+    lookup: PinnedLookup,
+    waited: std::time::Duration,
+) -> Option<PinnedInterfaceUnavailable> {
+    let _ = (name, lookup, waited);
+    None
+}
+
+/// dantesync#131 — the pinned PTP interface `name` now.
+pub fn pinned_interface(name: &str) -> PinnedLookup {
+    classify_pinned(name, &nic_snapshots(name))
+}
+
+/// dantesync#131 — the pinned PTP interface cannot be joined now. Returned (inside an `anyhow`
+/// error) by every backend's `PtpNetwork::rejoin` BEFORE it closes anything; the controller
+/// downcasts it into the clock alarm's reason and retries quickly while it lasts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedInterfaceUnavailable {
+    pub name: String,
+    /// `true` = no NIC of that name; `false` = it exists without a usable IPv4.
+    pub missing: bool,
+}
+
+impl PinnedInterfaceUnavailable {
+    /// The pin `name` is not usable per `lookup`; `None` when it is `Ready`.
+    pub fn from_lookup(name: &str, lookup: PinnedLookup) -> Option<Self> {
+        match lookup {
+            PinnedLookup::Ready(_) => None,
+            PinnedLookup::NoIpv4 => Some(Self {
+                name: name.to_string(),
+                missing: false,
+            }),
+            PinnedLookup::Missing => Some(Self {
+                name: name.to_string(),
+                missing: true,
+            }),
+        }
+    }
+
+    /// The clock alarm's reason, naming the NIC.
+    pub fn alarm_reason(&self) -> String {
+        if self.missing {
+            format!("PTP interface {} is missing", self.name)
+        } else {
+            format!("PTP interface {} has no IPv4 address", self.name)
+        }
+    }
+}
+
+impl std::fmt::Display for PinnedInterfaceUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "pinned {} -- waiting for it, never another NIC",
+            self.alarm_reason()
+        )
+    }
+}
+
+impl std::error::Error for PinnedInterfaceUnavailable {}
+
 /// dantesync#112 — the name of the interface that carries exactly `ip` now (never loopback), if
 /// any. The PTP re-join looks for the NIC it last received PTP on this way: a NIC that is re-plugged
 /// (USB) comes back with a new, higher ifindex, often under a new name, so the listing-ordered
@@ -219,6 +424,105 @@ pub fn recv_with_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn nic(names: &[&str], ipv4: &[[u8; 4]]) -> NicSnapshot {
+        NicSnapshot {
+            names: names.iter().map(|n| n.to_string()).collect(),
+            ipv4: ipv4.iter().map(|o| Ipv4Addr::from(*o)).collect(),
+        }
+    }
+
+    #[test]
+    fn a_pinned_interface_is_found_by_name_never_by_listing_order_131() {
+        // stream-snv on 1.11.2026: the USB NIC got its /32 first and is listed first.
+        let nics = [
+            nic(&["enx00e04c680185"], &[[10, 77, 7, 204]]),
+            nic(&["enp56s0"], &[[10, 77, 9, 204]]),
+        ];
+        assert_eq!(
+            classify_pinned("enp56s0", &nics),
+            PinnedLookup::Ready(Ipv4Addr::new(10, 77, 9, 204))
+        );
+        assert_eq!(classify_pinned("eth9", &nics), PinnedLookup::Missing);
+        assert_eq!(
+            classify_pinned("enp56", &nics),
+            PinnedLookup::Missing,
+            "exact name"
+        );
+    }
+
+    #[test]
+    fn a_pinned_interface_without_a_usable_ipv4_is_waited_for_131() {
+        // Up but no DHCP yet, or a Windows APIPA address: not usable, never another NIC.
+        let nics = [
+            nic(&["eth0"], &[[10, 77, 9, 1]]),
+            nic(&["Ethernet", "{4A1B-GUID}"], &[[169, 254, 3, 7]]),
+            nic(&["enp56s0"], &[]),
+        ];
+        assert_eq!(classify_pinned("enp56s0", &nics), PinnedLookup::NoIpv4);
+        assert_eq!(classify_pinned("Ethernet", &nics), PinnedLookup::NoIpv4);
+        // A Windows adapter answers to its friendly name and to its GUID.
+        let up = [nic(
+            &["Ethernet", "{4A1B-GUID}"],
+            &[[169, 254, 3, 7], [10, 77, 9, 204]],
+        )];
+        assert_eq!(
+            classify_pinned("{4A1B-GUID}", &up),
+            PinnedLookup::Ready(Ipv4Addr::new(10, 77, 9, 204))
+        );
+    }
+
+    #[test]
+    fn startup_alarms_at_once_for_a_missing_nic_and_after_the_grace_for_no_ipv4_131() {
+        let s = std::time::Duration::from_secs;
+        assert_eq!(
+            startup_wait_problem("enp56s0", PinnedLookup::Missing, s(0)),
+            Some(PinnedInterfaceUnavailable {
+                name: "enp56s0".to_string(),
+                missing: true
+            })
+        );
+        assert_eq!(
+            startup_wait_problem("enp56s0", PinnedLookup::NoIpv4, s(10)),
+            None
+        );
+        assert_eq!(
+            startup_wait_problem("enp56s0", PinnedLookup::NoIpv4, s(11)).map(|p| p.alarm_reason()),
+            Some("PTP interface enp56s0 has no IPv4 address".to_string())
+        );
+        assert_eq!(
+            startup_wait_problem("enp56s0", PinnedLookup::Ready(Ipv4Addr::LOCALHOST), s(99)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_pinned_error_names_the_nic_and_survives_anyhow_131() {
+        let e: anyhow::Error = PinnedInterfaceUnavailable {
+            name: "enp56s0".to_string(),
+            missing: true,
+        }
+        .into();
+        assert_eq!(
+            e.to_string(),
+            "pinned PTP interface enp56s0 is missing -- waiting for it, never another NIC"
+        );
+        assert!(e.downcast_ref::<PinnedInterfaceUnavailable>().is_some());
+    }
+
+    #[test]
+    fn the_os_lookup_of_a_name_no_host_has_is_missing_131() {
+        assert_eq!(
+            pinned_interface("dsync-no-such-nic0"),
+            PinnedLookup::Missing
+        );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            pinned_interface("lo"),
+            PinnedLookup::NoIpv4,
+            "loopback only"
+        );
+    }
 
     /// Test that get_default_interface filters out loopback addresses
     #[test]

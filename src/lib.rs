@@ -1,3 +1,4 @@
+pub mod atomic_file;
 pub mod clock;
 pub mod clock_alarm;
 pub mod config;
