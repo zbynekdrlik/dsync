@@ -48,6 +48,10 @@ use ptp_sender::{describe_grandmaster, PtpSender};
 /// thread). A child module like `date_sync`.
 mod ntp_check;
 
+/// dantesync#142 — a window without a previous offset is not a measurement.
+#[cfg(test)]
+mod first_window_tests;
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
