@@ -15,7 +15,7 @@ Owner rules from 2026-11-01:
 
 - dev1: this project's account, with no sudo and no local Dante network access assumed.
 - Rig nodes belong to camera-box. Do not deploy to them.
-- Non-rig nodes mbc, fohabl and resolume come to you when camera-box hands over the node list. Until that handover you have no fleet access.
+- Non-rig nodes mbc and fohabl come to you when camera-box hands over the node list. Until that handover you have no fleet access.
 
 ## What else acts on the machines
 
