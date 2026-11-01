@@ -17,16 +17,22 @@ NIC (VBAN leg) got its /32 before the rig NIC at boot and was first in `getifadd
 
 - `system.interface` / `--interface` (CLI wins, blank = unset; `SystemConfig::pinned_interface`)
   pins the NIC by name. Windows: the adapter's friendly name (`Ethernet`) or its GUID
-  (`GetAdaptersAddresses`, feature `Win32_NetworkManagement_Ndis`). The pure classifier is
-  `net::classify_pinned` → `Ready(ip) | NoIpv4 | Missing`; loopback and link-local (APIPA) are
-  not an IPv4.
-- Pinned: startup WAITS for that NIC's IPv4 (`main::wait_for_pinned_interface`), never another;
-  the clock alarm names it at once when missing, after `net::PINNED_STARTUP_GRACE` (10 s)
-  without an IPv4 (`net::startup_wait_problem`). Every re-join (Linux `UdpPtpNetwork`, Npcap
-  `select_pinned_device`) uses ONLY the pinned NIC — no home address, no resolver, no subnet
-  rule — and returns a typed `net::PinnedInterfaceUnavailable` BEFORE closing anything; the
-  controller turns it into `ClockHealth.interface_problem` (first in the alarm precedence) and
-  looks again every 5 s (`PINNED_WAIT_RETRY`) instead of the 30..300 s backoff.
+  (`GetAdaptersAddresses`, feature `Win32_NetworkManagement_Ndis`), case-insensitive, a GUID with
+  or without braces / `\Device\NPF_` (`net::classify_pinned_with`). The pure classifier returns
+  `Ready(ip) | LinkLocalOnly(ip) | NoIpv4 | Missing`; loopback never counts. A link-local-only
+  NIC (a Dante segment without DHCP — or an APIPA placeholder at boot) is taken by the startup
+  only after `net::PINNED_STARTUP_GRACE` (10 s, `net::usable_pinned_ip`), by a re-join at once.
+- Pinned startup: `pinned_wait::PinnedWait::run` (every OS boundary injected, unit-tested) looks
+  every second until the NIC has an IPv4 AND the receive path OPENS on it — an open failure
+  (Windows: the Npcap device list lags the adapter list at boot) is retried, never fatal. The
+  clock alarm names the NIC at once when missing, after the grace when without an IPv4 or not
+  opening; the REGAINED edge is driven when it opens. Never another NIC.
+- Pinned re-join (Linux `UdpPtpNetwork`, Npcap `select_pinned_device`): ONLY the pinned NIC — no
+  home address, no resolver, no subnet rule — with a typed `net::PinnedInterfaceUnavailable`
+  BEFORE closing anything. The controller (which knows the pin from `set_ptp_interface`) turns
+  ANY re-join failure of a pinned node into `ClockHealth.interface_problem` (first in the alarm
+  precedence) and looks again every 5 s (`PINNED_WAIT_RETRY`) instead of the 30..300 s backoff,
+  logging the two WARN lines on a changed reason and every 60th look (DEBUG between).
 - Unpinned: everything below, byte-identical, plus a startup WARN that the interface is not
   pinned. `/status`: `ptp_interface_configured`, `ptp_interface`, `ptp_interface_ip` (the last
   successful join).

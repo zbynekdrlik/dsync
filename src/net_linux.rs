@@ -182,7 +182,7 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         // clock alarm and looks again in seconds; another NIC is never joined.
         let (iface, ip) = match &self.pinned {
             Some(name) => match self.factory.lookup_pinned(name) {
-                PinnedLookup::Ready(ip) => (name.clone(), ip),
+                PinnedLookup::Ready(ip) | PinnedLookup::LinkLocalOnly(ip) => (name.clone(), ip),
                 PinnedLookup::NoIpv4 => {
                     return Err(PinnedInterfaceUnavailable {
                         name: name.clone(),

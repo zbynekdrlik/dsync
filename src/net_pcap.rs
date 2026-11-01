@@ -399,12 +399,23 @@ fn select_ptp_device(
 /// the one carrying that address. Otherwise a [`crate::net::PinnedInterfaceUnavailable`] (the
 /// controller names the NIC in the alarm) — never another device, never the subnet rule.
 fn select_pinned_device(name: &str) -> Result<(Device, Ipv4Addr)> {
-    let lookup = crate::net::pinned_interface(name);
-    if let Some(unavailable) = crate::net::PinnedInterfaceUnavailable::from_lookup(name, lookup) {
-        return Err(unavailable.into());
-    }
-    let crate::net::PinnedLookup::Ready(ip) = lookup else {
-        unreachable!("from_lookup returns None only for Ready");
+    use crate::net::{PinnedInterfaceUnavailable, PinnedLookup};
+    let ip = match crate::net::pinned_interface(name) {
+        PinnedLookup::Ready(ip) | PinnedLookup::LinkLocalOnly(ip) => ip,
+        PinnedLookup::NoIpv4 => {
+            return Err(PinnedInterfaceUnavailable {
+                name: name.to_string(),
+                missing: false,
+            }
+            .into())
+        }
+        PinnedLookup::Missing => {
+            return Err(PinnedInterfaceUnavailable {
+                name: name.to_string(),
+                missing: true,
+            }
+            .into())
+        }
     };
     let device = device_with_ip(ip).ok_or_else(|| {
         anyhow!("pinned PTP interface {name} ({ip}): no Npcap device carries {ip}")

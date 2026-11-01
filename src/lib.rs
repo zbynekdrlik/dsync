@@ -14,6 +14,7 @@ pub mod ntp_burst;
 pub mod ntp_packet;
 pub mod ntp_server;
 pub mod phase_slew;
+pub mod pinned_wait;
 pub mod ptp;
 pub mod ptp_phase_lock;
 pub mod ptp_rejoin;

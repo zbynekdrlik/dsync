@@ -49,8 +49,12 @@ pub fn get_default_interface() -> Result<(String, Ipv4Addr)> {
 /// dantesync#131 — what the pinned PTP interface (`system.interface` / `--interface`) is now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PinnedLookup {
-    /// The NIC exists and carries this usable IPv4 (the first one, in listing order).
+    /// The NIC exists and carries this routable IPv4 (the first one, in listing order).
     Ready(Ipv4Addr),
+    /// The NIC carries only a link-local IPv4 (169.254/16): a Dante segment without DHCP uses
+    /// one for good, but it is also what Windows (APIPA) or avahi assign while DHCP has not
+    /// answered yet. Startup takes it only after [`PINNED_STARTUP_GRACE`]; a re-join takes it.
+    LinkLocalOnly(Ipv4Addr),
     /// The NIC exists but has no usable IPv4 yet (DHCP pending, cable out, an APIPA address).
     NoIpv4,
     /// No NIC of that name.
@@ -65,24 +69,61 @@ pub struct NicSnapshot {
     pub ipv4: Vec<Ipv4Addr>,
 }
 
-/// dantesync#131 — classify the pinned NIC `name` among `nics` (pure). A loopback or link-local
-/// (169.254/16, a Windows APIPA address while DHCP has not answered) address is not usable.
-pub fn classify_pinned(name: &str, nics: &[NicSnapshot]) -> PinnedLookup {
+/// dantesync#131 — classify the pinned NIC `name` among `nics` (pure). A routable IPv4 wins over
+/// a link-local one; loopback and 0.0.0.0 never count. Names compare exactly on Linux; on
+/// Windows ([`classify_pinned`]) case-insensitively, and a GUID matches with or without its
+/// braces or the Npcap `\Device\NPF_` prefix.
+pub fn classify_pinned_with(name: &str, nics: &[NicSnapshot], windows_names: bool) -> PinnedLookup {
+    let matches = |candidate: &str| {
+        if windows_names {
+            normalize_windows_name(candidate).eq_ignore_ascii_case(normalize_windows_name(name))
+        } else {
+            candidate == name
+        }
+    };
     let mut found = false;
-    for nic in nics.iter().filter(|n| n.names.iter().any(|n| n == name)) {
+    let mut link_local = None;
+    for nic in nics.iter().filter(|n| n.names.iter().any(|n| matches(n))) {
         found = true;
-        if let Some(ip) = nic
+        for ip in nic
             .ipv4
             .iter()
-            .find(|ip| !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified())
+            .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
         {
-            return PinnedLookup::Ready(*ip);
+            if !ip.is_link_local() {
+                return PinnedLookup::Ready(*ip);
+            }
+            link_local.get_or_insert(*ip);
         }
     }
-    if found {
-        PinnedLookup::NoIpv4
-    } else {
-        PinnedLookup::Missing
+    match (found, link_local) {
+        (_, Some(ip)) => PinnedLookup::LinkLocalOnly(ip),
+        (true, None) => PinnedLookup::NoIpv4,
+        (false, None) => PinnedLookup::Missing,
+    }
+}
+
+/// A Windows adapter name for comparison: without an Npcap `\Device\NPF_` prefix and without
+/// the braces of a GUID.
+fn normalize_windows_name(name: &str) -> &str {
+    let name = name.trim();
+    let name = name.strip_prefix(r"\Device\NPF_").unwrap_or(name);
+    name.trim_start_matches('{').trim_end_matches('}')
+}
+
+/// dantesync#131 — [`classify_pinned_with`] by this platform's naming rules.
+pub fn classify_pinned(name: &str, nics: &[NicSnapshot]) -> PinnedLookup {
+    classify_pinned_with(name, nics, cfg!(windows))
+}
+
+/// dantesync#131 — the IPv4 the startup may join the pinned NIC on after waiting `waited`: a
+/// routable one at once, a link-local one only after [`PINNED_STARTUP_GRACE`] (a DHCP answer
+/// may still replace it), else none.
+pub fn usable_pinned_ip(lookup: PinnedLookup, waited: std::time::Duration) -> Option<Ipv4Addr> {
+    match lookup {
+        PinnedLookup::Ready(ip) => Some(ip),
+        PinnedLookup::LinkLocalOnly(ip) if waited > PINNED_STARTUP_GRACE => Some(ip),
+        _ => None,
     }
 }
 
@@ -210,6 +251,8 @@ pub fn startup_wait_problem(
 ) -> Option<PinnedInterfaceUnavailable> {
     match lookup {
         PinnedLookup::NoIpv4 if waited <= PINNED_STARTUP_GRACE => None,
+        // Taken after the grace (`usable_pinned_ip`); waiting for DHCP until then is no fault.
+        PinnedLookup::LinkLocalOnly(_) => None,
         other => PinnedInterfaceUnavailable::from_lookup(name, other),
     }
 }
@@ -230,10 +273,11 @@ pub struct PinnedInterfaceUnavailable {
 }
 
 impl PinnedInterfaceUnavailable {
-    /// The pin `name` is not usable per `lookup`; `None` when it is `Ready`.
+    /// The pin `name` is not usable per `lookup`; `None` when it carries an IPv4 (a re-join
+    /// takes a link-local one too: the NIC is up and that is its address now).
     pub fn from_lookup(name: &str, lookup: PinnedLookup) -> Option<Self> {
         match lookup {
-            PinnedLookup::Ready(_) => None,
+            PinnedLookup::Ready(_) | PinnedLookup::LinkLocalOnly(_) => None,
             PinnedLookup::NoIpv4 => Some(Self {
                 name: name.to_string(),
                 missing: false,
@@ -476,7 +520,10 @@ mod tests {
             nic(&["enp56s0"], &[]),
         ];
         assert_eq!(classify_pinned("enp56s0", &nics), PinnedLookup::NoIpv4);
-        assert_eq!(classify_pinned("Ethernet", &nics), PinnedLookup::NoIpv4);
+        assert_eq!(
+            classify_pinned("Ethernet", &nics),
+            PinnedLookup::LinkLocalOnly(Ipv4Addr::new(169, 254, 3, 7))
+        );
         // A Windows adapter answers to its friendly name and to its GUID.
         let up = [nic(
             &["Ethernet", "{4A1B-GUID}"],
@@ -485,6 +532,63 @@ mod tests {
         assert_eq!(
             classify_pinned("{4A1B-GUID}", &up),
             PinnedLookup::Ready(Ipv4Addr::new(10, 77, 9, 204))
+        );
+    }
+
+    #[test]
+    fn a_link_local_only_pinned_nic_is_taken_after_the_grace_131() {
+        // A Dante segment without DHCP lives on 169.254/16 for good; at boot the same address
+        // can be a placeholder until DHCP answers.
+        let ll = Ipv4Addr::new(169, 254, 9, 9);
+        let s = std::time::Duration::from_secs;
+        assert_eq!(
+            usable_pinned_ip(PinnedLookup::LinkLocalOnly(ll), s(10)),
+            None
+        );
+        assert_eq!(
+            usable_pinned_ip(PinnedLookup::LinkLocalOnly(ll), s(11)),
+            Some(ll)
+        );
+        assert_eq!(
+            startup_wait_problem("eth0", PinnedLookup::LinkLocalOnly(ll), s(99)),
+            None
+        );
+        let rig = Ipv4Addr::new(10, 77, 9, 204);
+        assert_eq!(usable_pinned_ip(PinnedLookup::Ready(rig), s(0)), Some(rig));
+        assert_eq!(usable_pinned_ip(PinnedLookup::NoIpv4, s(99)), None);
+        assert_eq!(
+            PinnedInterfaceUnavailable::from_lookup("eth0", PinnedLookup::LinkLocalOnly(ll)),
+            None,
+            "a re-join takes the NIC's link-local address"
+        );
+    }
+
+    #[test]
+    fn windows_names_match_case_insensitively_and_a_guid_in_any_spelling_131() {
+        let nics = [nic(
+            &["Ethernet 2", "{4A1B2C3D-0000-1111-2222-333344445555}"],
+            &[[10, 77, 9, 204]],
+        )];
+        let rig = PinnedLookup::Ready(Ipv4Addr::new(10, 77, 9, 204));
+        for pin in [
+            "ethernet 2",
+            "ETHERNET 2",
+            "4a1b2c3d-0000-1111-2222-333344445555",
+            "{4A1B2C3D-0000-1111-2222-333344445555}",
+            r"\Device\NPF_{4A1B2C3D-0000-1111-2222-333344445555}",
+        ] {
+            assert_eq!(classify_pinned_with(pin, &nics, true), rig, "{pin}");
+        }
+        assert_eq!(
+            classify_pinned_with("Ethernet", &nics, true),
+            PinnedLookup::Missing,
+            "no prefix match"
+        );
+        // Linux names are case-sensitive and exact.
+        let linux = [nic(&["enp56s0"], &[[10, 77, 9, 204]])];
+        assert_eq!(
+            classify_pinned_with("ENP56S0", &linux, false),
+            PinnedLookup::Missing
         );
     }
 

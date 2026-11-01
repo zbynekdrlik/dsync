@@ -344,9 +344,20 @@ pub fn load(path: &Path, last_good: &Path) -> Loaded {
                 path.display()
             );
             let parsed = parse(TEMPLATE.as_bytes()).expect("the built-in template parses");
-            if write_logged(path, TEMPLATE.as_bytes(), "config.json template") {
-                keep_last_good(last_good, &parsed.json);
+            if !write_logged(path, TEMPLATE.as_bytes(), "config.json template") {
+                // The template's values ARE the defaults; say there is no file behind them.
+                return Loaded {
+                    config: parsed.config,
+                    state: ConfigState {
+                        loaded_from: LOADED_FROM_DEFAULTS.to_string(),
+                        error: Some(format!(
+                            "{} is missing and cannot be written",
+                            path.display()
+                        )),
+                    },
+                };
             }
+            keep_last_good(last_good, &parsed.json);
             return Loaded {
                 config: parsed.config,
                 state: ConfigState::file(),

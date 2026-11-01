@@ -43,7 +43,15 @@ pub(super) struct PtpLiveness {
     /// the clock alarm's reason naming the NIC, cleared by a successful re-join or an allowed
     /// packet. While it is set the re-join is retried every [`PINNED_WAIT_RETRY`].
     pub(super) interface_problem: Option<String>,
+    /// dantesync#131: the pinned interface (`main`'s `set_ptp_interface`); `None` = not pinned.
+    /// Any re-join failure of a pinned node is a fault of THAT interface: named, retried fast.
+    pub(super) pinned: Option<String>,
 }
+
+/// dantesync#131 — while the pinned interface stays unusable, the re-join's two WARN lines are
+/// written for the first failure, a changed reason, and then every this many looks (5 min at
+/// [`PINNED_WAIT_RETRY`]); the looks between go to DEBUG. The clock alarm keeps its own cadence.
+pub(super) const PINNED_WAIT_LOG_EVERY: u32 = 60;
 
 /// dantesync#131 — while the pinned interface is unusable, look again this often (a cheap
 /// interface lookup, nothing is opened): a NIC that comes back is joined within seconds, not at
@@ -152,7 +160,15 @@ where
             return;
         }
         let attempt = self.ptp_liveness.schedule.record_attempt(now);
-        warn!(
+        // #131: a pinned NIC that stays unusable is looked at every 5 s; log it at a pace.
+        let quiet = waiting_for_pin && attempt % PINNED_WAIT_LOG_EVERY != 0;
+        let level = if quiet {
+            log::Level::Debug
+        } else {
+            log::Level::Warn
+        };
+        log::log!(
+            level,
             "[NET] no PTP announce for {}s -- re-joining PTP multicast (attempt {})",
             now.saturating_duration_since(self.last_ptp_packet)
                 .as_secs(),
@@ -187,15 +203,36 @@ where
                 }
             }
             Err(e) => {
-                // #131: the pinned NIC is missing / has no IPv4: the alarm names it.
-                let pinned = e.downcast_ref::<crate::net::PinnedInterfaceUnavailable>();
-                self.ptp_liveness.interface_problem = pinned.map(|p| p.alarm_reason());
                 let text = format!("{e:#}");
-                warn!(
+                // #131: the pinned NIC is missing / has no IPv4 / does not open: the alarm names
+                // it and it is looked at again in 5 s.
+                let problem = match (
+                    e.downcast_ref::<crate::net::PinnedInterfaceUnavailable>(),
+                    &self.ptp_liveness.pinned,
+                ) {
+                    (Some(unavailable), _) => Some(unavailable.alarm_reason()),
+                    (None, Some(name)) => {
+                        Some(format!("PTP interface {name} could not be joined: {text}"))
+                    }
+                    (None, None) => None,
+                };
+                let changed = problem != self.ptp_liveness.interface_problem;
+                self.ptp_liveness.interface_problem = problem;
+                let next_s = if self.ptp_liveness.interface_problem.is_some() {
+                    PINNED_WAIT_RETRY.as_secs()
+                } else {
+                    rejoin_delay(attempt + 1).as_secs()
+                };
+                log::log!(
+                    if quiet && !changed {
+                        log::Level::Debug
+                    } else {
+                        log::Level::Warn
+                    },
                     "[NET] PTP re-join attempt {} failed: {} -- next attempt in {}s",
                     attempt,
                     text,
-                    rejoin_delay(attempt + 1).as_secs()
+                    next_s
                 );
                 self.ptp_liveness.rejoin.record(epoch_s, Err(text.as_str()));
             }
@@ -209,6 +246,7 @@ where
     /// dantesync#131 — the startup join (`main`): the pin (or `None`) and where PTP joined.
     /// Published at once in `/status`; each successful re-join updates the joined interface.
     pub fn set_ptp_interface(&mut self, configured: Option<String>, iface: &str, ip: Ipv4Addr) {
+        self.ptp_liveness.pinned = configured.clone();
         if let Ok(mut status) = self.status_shared.write() {
             status.ptp_interface_configured = configured;
             status.ptp_interface = Some(iface.to_string());

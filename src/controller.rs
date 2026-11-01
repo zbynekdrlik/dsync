@@ -2063,9 +2063,6 @@ where
         }
     }
 
-    /// #114: advance the clock alarm and perform its emissions (LOST/REGAINED
-    /// INFO edges, the per-cadence WARN log on every platform, and the desktop
-    /// notification through the platform notifier), then publish the snapshot.
     /// dantesync#116 — where the running config came from (`main`, once, before the loop). It is
     /// published at once in `/status.config_state`, and a fallback keeps the clock alarm active.
     pub fn set_config_state(&mut self, state: ConfigState) {
@@ -2078,6 +2075,9 @@ where
         self.config_state = Some(state);
     }
 
+    /// #114: advance the clock alarm and perform its emissions (LOST/REGAINED
+    /// INFO edges, the per-cadence WARN log on every platform, and the desktop
+    /// notification through the platform notifier), then publish the snapshot.
     fn evaluate_clock_alarm(&mut self) {
         // #114 review: once locked, the acquisition grace no longer applies (a
         // later unlock is a real loss and alarms immediately).

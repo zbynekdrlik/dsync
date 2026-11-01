@@ -103,84 +103,166 @@ fn load_config() -> Loaded {
     config::file::load(path, &config::file::last_good_path(path))
 }
 
-/// dantesync#131 — wait for the pinned PTP interface `name` to carry a usable IPv4; `None` when
-/// the service is stopped meanwhile. Never another NIC. While it is missing (at once) or without
-/// an IPv4 past `net::PINNED_STARTUP_GRACE`, the clock alarm names it in `/status` and in the
-/// log every alarm cadence: the controller that normally drives the alarm does not exist yet.
-fn wait_for_pinned_interface(
-    name: &str,
-    running: &AtomicBool,
-    status: &RwLock<SyncStatus>,
-    alarm_interval_s: u64,
-    config_state: &ConfigState,
-) -> Option<(String, std::net::Ipv4Addr)> {
-    use dantesync::clock_alarm::{self, ClockAlarm, ClockHealth, DesktopNotifier};
-    if let Ok(mut s) = status.write() {
-        s.ptp_interface_configured = Some(name.to_string());
+/// The PTP receive path of this platform: kernel-timestamped sockets on Linux, Npcap on Windows.
+#[cfg(unix)]
+type PlatformNetwork = net_linux::UdpPtpNetwork;
+#[cfg(windows)]
+type PlatformNetwork = net_pcap::NpcapPtpNetwork;
+
+/// Where `/status` says PTP joined at startup: the pin (or `None`), the interface and its IPv4.
+struct StartupJoin {
+    network: PlatformNetwork,
+    pinned: Option<String>,
+    iface: String,
+    ip: std::net::Ipv4Addr,
+}
+
+/// Open the PTP receive path for `iface_name` / `iface_ip` (the startup choice). `pinned`
+/// (dantesync#131) is the only interface the backend may use from now on, re-joins included.
+fn open_ptp_network(
+    iface_name: &str,
+    iface_ip: std::net::Ipv4Addr,
+    pinned: Option<String>,
+    system_config: &SystemConfig,
+) -> Result<(PlatformNetwork, String, std::net::Ipv4Addr)> {
+    // Linux: the event + general sockets join the PTP group (IGMP) with kernel timestamping
+    // (`net_linux`, which logs the "Joined Multicast Groups on ..." line).
+    #[cfg(unix)]
+    {
+        let _ = system_config;
+        let network = net_linux::UdpPtpNetwork::join(
+            net_linux::KernelSockets,
+            iface_name.to_string(),
+            iface_ip,
+        )?
+        .pinned_to(pinned);
+        let (iface, ip) = network
+            .interface()
+            .map(|(name, ip)| (name.to_string(), ip))
+            .unwrap_or((iface_name.to_string(), iface_ip));
+        Ok((network, iface, ip))
     }
-    let started = Instant::now();
-    let mut alarm = ClockAlarm::from_interval_secs(alarm_interval_s);
-    let mut last: Option<net::PinnedLookup> = None;
-    loop {
-        let lookup = net::pinned_interface(name);
-        if last != Some(lookup) {
-            match lookup {
-                net::PinnedLookup::Ready(ip) => {
-                    info!("[NET] pinned PTP interface {} is up with {}", name, ip)
-                }
-                net::PinnedLookup::NoIpv4 => warn!(
-                    "[NET] pinned PTP interface {} has no IPv4 address yet -- waiting for it \
-                     (never another NIC)",
-                    name
-                ),
-                net::PinnedLookup::Missing => error!(
-                    "[NET] pinned PTP interface {} is missing -- waiting for it (never another \
-                     NIC)",
-                    name
-                ),
-            }
-            last = Some(lookup);
+
+    #[cfg(windows)]
+    {
+        // Use Npcap with HostHighPrec timestamps (KeQuerySystemTimePrecise)
+        // This provides driver-level timestamps that are both precise AND synced with system time.
+        //
+        // camera-box issue 1073: on a multi-homed box the OS default interface
+        // (iface_name/iface_ip above) may be the WRONG NIC (e.g. the mbc side on
+        // the stream box), so hand NpcapPtpNetwork the trusted-source allowlist —
+        // it picks the capture/IGMP-join interface on the grandmaster's subnet
+        // when the allowlist can disambiguate, and otherwise falls back to the
+        // default interface (single-homed / no-allowlist boxes are unchanged).
+        // dantesync#131: a PINNED interface alone selects the device (no subnet rule).
+        let mut gm_allowlist =
+            dantesync::gm_filter::GmAllowlist::parse(&system_config.gm_allowlist);
+        // dantesync#113: resolve hostname entries BEFORE interface selection so a
+        // hostname-addressed grandmaster (e.g. video-clock.lan) can pick the
+        // capture NIC on the GM's subnet on a multi-homed box, exactly like a
+        // literal entry. The controller re-resolves periodically after this.
+        if gm_allowlist.has_hostnames() {
+            let outcome = gm_allowlist.resolve(&dantesync::gm_filter::StdResolver);
+            info!(
+                "gm_allowlist: startup hostname resolution {:?} (unresolved: {:?})",
+                outcome.new_resolved,
+                gm_allowlist.unresolved_hostnames()
+            );
         }
-        if let net::PinnedLookup::Ready(ip) = lookup {
-            if alarm.is_active() {
+        match net_pcap::NpcapPtpNetwork::new(iface_name, &gm_allowlist, pinned) {
+            Ok(npcap_net) => {
                 info!(
-                    "[CLOCK-ALARM] cleared -- the pinned PTP interface {} is up",
-                    name
+                    "Using Npcap HostHighPrec timestamps (default-interface hint {} / {})",
+                    iface_name, iface_ip
                 );
-                if let Ok(mut s) = status.write() {
-                    s.clock_alarm = Default::default();
+                let (iface, ip) = npcap_net.joined();
+                let (iface, ip) = (iface.to_string(), ip);
+                Ok((npcap_net, iface, ip))
+            }
+            Err(e) => {
+                error!(
+                    "Failed to initialize Npcap: {}. Npcap is required on Windows.",
+                    e
+                );
+                Err(e)
+            }
+        }
+    }
+}
+
+/// dantesync#131 (owner ruling 1.11.2026): the PTP interface is an explicit setting.
+///
+/// Pinned (`system.interface` / `--interface`): wait for exactly that NIC and open on it —
+/// never another NIC — with the clock alarm naming it meanwhile (`pinned_wait`). Unpinned: the
+/// previous selection, with a warning. `Ok(None)` = the service stopped while waiting.
+fn join_ptp_network(
+    args: &Args,
+    system_config: &SystemConfig,
+    running: &AtomicBool,
+    status_shared: &RwLock<SyncStatus>,
+    config_state: &ConfigState,
+) -> Result<Option<StartupJoin>> {
+    let cli = args
+        .interface
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    let pinned = system_config.pinned_interface(cli);
+    let Some(name) = pinned else {
+        warn!(
+            "[NET] the PTP interface is NOT pinned (system.interface / --interface unset): \
+             joining the first IPv4 interface in listing order — set system.interface to the \
+             PTP NIC (dantesync#131)"
+        );
+        let (iface_name, iface_ip) = loop {
+            match net::get_default_interface() {
+                Ok(res) => break res,
+                Err(e) => {
+                    if !running.load(Ordering::SeqCst) {
+                        return Ok(None);
+                    }
+                    warn!("Waiting for network interface... ({})", e);
+                    thread::sleep(Duration::from_secs(5));
                 }
             }
-            return Some((name.to_string(), ip));
+        };
+        let (network, iface, ip) = open_ptp_network(&iface_name, iface_ip, None, system_config)?;
+        return Ok(Some(StartupJoin {
+            network,
+            pinned: None,
+            iface,
+            ip,
+        }));
+    };
+    info!(
+        "[NET] PTP interface pinned to {} ({})",
+        name,
+        if cli.is_some() {
+            "--interface"
+        } else {
+            "system.interface"
         }
-        if let Some(problem) = net::startup_wait_problem(name, lookup, started.elapsed()) {
-            let health = ClockHealth {
-                is_locked: false,
-                mode_locked: false,
-                gm_allowed: false,
-                ptp_stale: true,
-                allowlist_unresolvable: None,
-                in_acquisition: false,
-                interface_problem: Some(problem.alarm_reason()),
-                config_problem: config_state.alarm_reason(),
-            };
-            let epoch = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            let tick =
-                clock_alarm::drive(&mut alarm, &health, Instant::now(), epoch, &DesktopNotifier);
-            if let Ok(mut s) = status.write() {
-                s.clock_alarm = tick.snapshot;
-                s.clock_alarm_interval_s =
-                    alarm_interval_s.max(clock_alarm::CLOCK_ALARM_INTERVAL_FLOOR_S);
-            }
-        }
-        if !running.load(Ordering::SeqCst) {
-            return None;
-        }
-        thread::sleep(Duration::from_secs(1));
-    }
+    );
+    let wait = dantesync::pinned_wait::PinnedWait {
+        name: &name,
+        status: status_shared,
+        alarm_interval_s: system_config.clock_alarm_interval_s,
+        config_problem: config_state.alarm_reason(),
+        notifier: dantesync::clock_alarm::DesktopNotifier,
+        running,
+    };
+    let opened = wait.run(
+        || net::pinned_interface(&name),
+        |ip| open_ptp_network(&name, ip, Some(name.clone()), system_config),
+        || thread::sleep(dantesync::pinned_wait::LOOK_EVERY),
+        Instant::now,
+    );
+    Ok(opened.map(|((network, iface, ip), _)| StartupJoin {
+        network,
+        pinned: Some(name.clone()),
+        iface,
+        ip,
+    }))
 }
 
 /// Resolve the NTP server address: CLI arg takes priority, then config file value.
@@ -571,114 +653,21 @@ fn run_sync_loop(
     };
     info!("System clock control initialized.");
 
-    // dantesync#131 (owner ruling 1.11.2026): the PTP interface is an explicit setting. Pinned
-    // (`system.interface` / `--interface`): wait for exactly that NIC's IPv4 — never another NIC
-    // — with the clock alarm naming it while it is missing. Unpinned: the previous selection,
-    // with a warning.
-    let pinned = system_config.pinned_interface(args.interface.as_deref());
-    let (iface_name, iface_ip) = match &pinned {
-        Some(name) => {
-            info!(
-                "[NET] PTP interface pinned to {} ({})",
-                name,
-                if args.interface.is_some() {
-                    "--interface"
-                } else {
-                    "system.interface"
-                }
-            );
-            match wait_for_pinned_interface(
-                name,
-                &running,
-                &status_shared,
-                system_config.clock_alarm_interval_s,
-                &config_state,
-            ) {
-                Some(found) => found,
-                None => return Ok(()),
-            }
-        }
-        None => {
-            warn!(
-                "[NET] the PTP interface is NOT pinned (system.interface / --interface unset): \
-                 joining the first IPv4 interface in listing order — set system.interface to the \
-                 PTP NIC (dantesync#131)"
-            );
-            loop {
-                match net::get_default_interface() {
-                    Ok(res) => break res,
-                    Err(e) => {
-                        if !running.load(Ordering::SeqCst) {
-                            return Ok(());
-                        }
-                        warn!("Waiting for network interface... ({})", e);
-                        thread::sleep(Duration::from_secs(5));
-                    }
-                }
-            }
-        }
-    };
-
-    // Platform-specific network setup
-    // Linux: the event + general sockets join the PTP group (IGMP) with kernel timestamping
-    // (`net_linux`, which logs the "Joined Multicast Groups on ..." line). A pinned interface
-    // is the only one any later re-join may use (#131).
-    #[cfg(unix)]
-    let network = net_linux::UdpPtpNetwork::join(net_linux::KernelSockets, iface_name, iface_ip)?
-        .pinned_to(pinned.clone());
-    #[cfg(unix)]
-    let (joined_iface, joined_ip) = network
-        .interface()
-        .map(|(name, ip)| (name.to_string(), ip))
-        .unwrap_or((String::new(), iface_ip));
-
-    #[cfg(windows)]
-    let network = {
-        // Use Npcap with HostHighPrec timestamps (KeQuerySystemTimePrecise)
-        // This provides driver-level timestamps that are both precise AND synced with system time.
-        //
-        // camera-box issue 1073: on a multi-homed box the OS default interface
-        // (iface_name/iface_ip above) may be the WRONG NIC (e.g. the mbc side on
-        // the stream box), so hand NpcapPtpNetwork the trusted-source allowlist —
-        // it picks the capture/IGMP-join interface on the grandmaster's subnet
-        // when the allowlist can disambiguate, and otherwise falls back to the
-        // default interface (single-homed / no-allowlist boxes are unchanged).
-        // dantesync#131: a PINNED interface alone selects the device (no subnet rule).
-        let mut gm_allowlist =
-            dantesync::gm_filter::GmAllowlist::parse(&system_config.gm_allowlist);
-        // dantesync#113: resolve hostname entries BEFORE interface selection so a
-        // hostname-addressed grandmaster (e.g. video-clock.lan) can pick the
-        // capture NIC on the GM's subnet on a multi-homed box, exactly like a
-        // literal entry. The controller re-resolves periodically after this.
-        if gm_allowlist.has_hostnames() {
-            let outcome = gm_allowlist.resolve(&dantesync::gm_filter::StdResolver);
-            info!(
-                "gm_allowlist: startup hostname resolution {:?} (unresolved: {:?})",
-                outcome.new_resolved,
-                gm_allowlist.unresolved_hostnames()
-            );
-        }
-        match net_pcap::NpcapPtpNetwork::new(&iface_name, &gm_allowlist, pinned.clone()) {
-            Ok(npcap_net) => {
-                info!(
-                    "Using Npcap HostHighPrec timestamps (default-interface hint {} / {})",
-                    iface_name, iface_ip
-                );
-                npcap_net
-            }
-            Err(e) => {
-                error!(
-                    "Failed to initialize Npcap: {}. Npcap is required on Windows.",
-                    e
-                );
-                return Err(e);
-            }
-        }
-    };
-    #[cfg(windows)]
-    let (joined_iface, joined_ip) = {
-        let (name, ip) = network.joined();
-        (name.to_string(), ip)
+    // dantesync#131: the PTP interface — pinned (wait for it, never another NIC) or not.
+    let Some(StartupJoin {
+        network,
+        pinned,
+        iface: joined_iface,
+        ip: joined_ip,
+    }) = join_ptp_network(
+        &args,
+        &system_config,
+        &running,
+        &status_shared,
+        &config_state,
+    )?
+    else {
+        return Ok(());
     };
 
     let ntp_server = args

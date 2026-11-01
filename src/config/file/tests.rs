@@ -262,3 +262,17 @@ fn the_state_serializes_for_status_116() {
     );
     assert_eq!(ConfigState::file().alarm_reason(), None);
 }
+
+#[test]
+fn a_first_install_that_cannot_write_the_template_says_defaults_116() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config = tmp.path().join("no/such/dir/config.json");
+    let loaded = load(&config, &last_good_path(&config));
+    assert_eq!(loaded.state.loaded_from, LOADED_FROM_DEFAULTS);
+    assert!(loaded
+        .state
+        .error
+        .as_deref()
+        .unwrap_or("")
+        .contains("cannot be written"));
+}

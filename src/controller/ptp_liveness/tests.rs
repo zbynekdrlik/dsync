@@ -550,3 +550,31 @@ fn a_config_fallback_keeps_the_clock_alarm_active_and_is_published_116() {
     });
     assert_eq!(c.sample_clock_health().config_problem, None);
 }
+
+#[test]
+fn any_rejoin_failure_of_a_pinned_node_names_the_nic_and_is_retried_fast_131() {
+    // The pinned NIC is up, but the join itself fails (Windows: no Npcap device carries its
+    // address yet): still that NIC's fault, never another NIC, looked at again in 5 s.
+    let calls = Arc::new(AtomicU32::new(0));
+    let seen = calls.clone();
+    let mut net = MockPtpNetwork::new();
+    net.expect_rejoin().returning(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+        Err(anyhow::anyhow!("no Npcap device carries 10.77.9.204"))
+    });
+    let (mut c, _st) = controller(net);
+    c.set_ptp_interface(
+        Some("enp56s0".to_string()),
+        "enp56s0",
+        Ipv4Addr::new(10, 77, 9, 204),
+    );
+    let t0 = Instant::now();
+    c.note_allowed_ptp_packet(t0);
+    c.maybe_rejoin_ptp(t0 + ms(10_500));
+    assert_eq!(
+        c.sample_clock_health().lost_reason().as_deref(),
+        Some("PTP interface enp56s0 could not be joined: no Npcap device carries 10.77.9.204")
+    );
+    c.maybe_rejoin_ptp(t0 + ms(15_500));
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "5 s, not the 30 s backoff");
+}
