@@ -5,6 +5,25 @@ All notable changes to DanteSync will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.0] - 2026-11-02
+
+### Fixed
+
+- A cold boot reaches LOCK sooner (#142, dstack: gen3 audio waited ~86 s after boot). The first
+  PTP window after warmup, and the first after any measurement reset (a clock step, a PTP outage),
+  carries no rate: it is no longer counted as a measured 0 µs/s. It changes no gain mode (no false
+  PROD), no lock count and no smoothing.
+
+### Added
+
+- The learned frequency survives a restart (#142), like chrony's and ntpd's `driftfile`:
+  `drift.json` beside `date-offset.json` (`/etc/dantesync/`, `C:\ProgramData\DanteSync\`) is
+  written power-loss safe (temp file, fsync, rename, directory fsync) only while LOCKED, every 10
+  minutes and at shutdown. At start a file under 30 days old within ±500 ppm seeds the servo before
+  the warmup; anything else starts from 0 and logs why. If the first measured windows disagree with
+  the seed (beyond 20 µs/s) the seed is dropped and the servo learns from 0. LOCK is exactly as
+  strict as before. `/status` adds `freq_seed_ppm` and `freq_seed_source`.
+
 ## [1.21.0] - 2026-11-01
 
 ### Added
