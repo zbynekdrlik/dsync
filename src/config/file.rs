@@ -175,9 +175,18 @@ impl ConfigState {
     /// does. A fallback means the master role, the allowlist or the pinned interface of the file
     /// may be missing: a production fault that must stay loud until the file is fixed.
     pub fn alarm_reason(&self) -> Option<String> {
-        // RED: a fallback is not reported.
-        let _ = (LOADED_FROM_LAST_GOOD, LOADED_FROM_DEFAULTS, self);
-        None
+        if self.loaded_from == LOADED_FROM_FILE {
+            return None;
+        }
+        let running = if self.loaded_from == LOADED_FROM_LAST_GOOD {
+            "running the last-good config"
+        } else {
+            "running defaults"
+        };
+        Some(format!(
+            "config.json not loaded ({}), {running}",
+            self.error.as_deref().unwrap_or("unknown error")
+        ))
     }
 }
 
@@ -213,8 +222,14 @@ pub fn decode_text(bytes: &[u8]) -> Result<String, String> {
             .collect::<Result<String, _>>()
             .map_err(|e| format!("invalid UTF-16: {e}"))
     }
-    let _ = utf16;
-    String::from_utf8(bytes.to_vec()).map_err(|e| format!("invalid UTF-8: {e}"))
+    match bytes {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => {
+            String::from_utf8(rest.to_vec()).map_err(|e| format!("invalid UTF-8: {e}"))
+        }
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, true),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, false),
+        _ => String::from_utf8(bytes.to_vec()).map_err(|e| format!("invalid UTF-8: {e}")),
+    }
 }
 
 /// A config text that parsed: the typed config, its (migrated) JSON, and whether the migration
@@ -232,6 +247,9 @@ pub fn parse(bytes: &[u8]) -> Result<Parsed, String> {
     let mut json: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("not JSON: {e}"))?;
     // The migration indexes the root mutably: anything but an object would panic there.
+    if !json.is_object() {
+        return Err("not a JSON object".to_string());
+    }
     let migrated = migrate_config_json(&mut json);
     let config = serde_json::from_value::<Config>(json.clone())
         .map_err(|e| format!("not a valid config: {e}"))?;
@@ -305,23 +323,72 @@ fn read_parsed(path: &Path) -> Result<Option<Parsed>, String> {
 ///   template would drop its settings); with none it is a first install, and the template is
 ///   written and used (`"file"`).
 pub fn load(path: &Path, last_good: &Path) -> Loaded {
-    // RED (pre-#116 behaviour, moved verbatim): any failure overwrites the file with the template.
-    let _ = last_good;
-    if let Ok(bytes) = std::fs::read(path) {
-        if let Ok(parsed) = parse(&bytes) {
+    let error = match read_parsed(path) {
+        Ok(Some(parsed)) => {
             if parsed.migrated {
-                let _ = std::fs::write(path, render(&parsed.json));
+                write_logged(path, &render(&parsed.json), "migrated config.json");
+                log::info!(
+                    "Config migrated: added ntp_server_mode / http_status / NTP examples (as needed)"
+                );
+            }
+            keep_last_good(last_good, &parsed.json);
+            log::info!("[CONFIG] loaded {}", path.display());
+            return Loaded {
+                config: parsed.config,
+                state: ConfigState::file(),
+            };
+        }
+        Ok(None) if !last_good.exists() => {
+            log::info!(
+                "[CONFIG] no {} and no last-good copy: first install, writing the template",
+                path.display()
+            );
+            let parsed = parse(TEMPLATE.as_bytes()).expect("the built-in template parses");
+            if write_logged(path, TEMPLATE.as_bytes(), "config.json template") {
+                keep_last_good(last_good, &parsed.json);
             }
             return Loaded {
                 config: parsed.config,
                 state: ConfigState::file(),
             };
         }
-    }
-    let _ = std::fs::write(path, TEMPLATE);
-    Loaded {
-        config: Config::default(),
-        state: ConfigState::file(),
+        Ok(None) => format!("{} is missing", path.display()),
+        Err(e) => e,
+    };
+    log::error!(
+        "[CONFIG] {} not loaded: {} -- the file is left untouched; falling back",
+        path.display(),
+        error
+    );
+    match read_parsed(last_good) {
+        Ok(Some(parsed)) => {
+            log::error!(
+                "[CONFIG] running the last-good copy {} until {} parses again",
+                last_good.display(),
+                path.display()
+            );
+            Loaded {
+                config: parsed.config,
+                state: ConfigState {
+                    loaded_from: LOADED_FROM_LAST_GOOD.to_string(),
+                    error: Some(error),
+                },
+            }
+        }
+        other => {
+            let error = match other {
+                Err(e) => format!("{error}; last-good copy not loaded: {e}"),
+                _ => error,
+            };
+            log::error!("[CONFIG] no usable last-good copy: running DEFAULTS ({error})");
+            Loaded {
+                config: Config::default(),
+                state: ConfigState {
+                    loaded_from: LOADED_FROM_DEFAULTS.to_string(),
+                    error: Some(error),
+                },
+            }
+        }
     }
 }
 

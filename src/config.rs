@@ -42,7 +42,7 @@ pub struct SystemConfig {
     ///
     /// dantesync#116: a single string is accepted too (`"10.77.9.230"`, or several separated by
     /// commas / whitespace) — the commonest hand-edit slip, which used to fail the whole file.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_list")]
     pub gm_allowlist: Vec<String>,
 
     /// dantesync#131 — the NIC PTP binds to, by name (`"enp56s0"`; on Windows the adapter's
@@ -55,7 +55,7 @@ pub struct SystemConfig {
     /// warning that the interface is not pinned. A non-string value fails the parse, so the
     /// last-good config runs, loudly (dantesync#116): a pin that silently became "unpinned" would
     /// bring back exactly the incident it exists for.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_name")]
     pub interface: Option<String>,
 
     /// dantesync#97 — the phase-slew feature switch (default OFF, per-box canary opt-in).
@@ -117,8 +117,10 @@ impl SystemConfig {
     /// dantesync#131 — the PTP interface to pin: `--interface` (`cli`) over `system.interface`;
     /// blank counts as unset.
     pub fn pinned_interface(&self, cli: Option<&str>) -> Option<String> {
-        let _ = cli;
-        self.interface.clone()
+        cli.map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+            .or_else(|| self.interface.clone())
     }
 }
 

@@ -142,8 +142,7 @@ where
             return;
         }
         // #131: a pinned interface that was unusable is looked at again every 5 s.
-        let waiting_for_pin = false
-            && self.ptp_liveness.interface_problem.is_some()
+        let waiting_for_pin = self.ptp_liveness.interface_problem.is_some()
             && self
                 .ptp_liveness
                 .schedule
@@ -182,11 +181,15 @@ where
                 if let Some(problem) = self.ptp_liveness.interface_problem.take() {
                     info!("[NET] {} -- resolved, PTP joined on it again", problem);
                 }
+                if let Ok(mut status) = self.status_shared.write() {
+                    status.ptp_interface = Some(outcome.iface.clone());
+                    status.ptp_interface_ip = Some(outcome.ip.to_string());
+                }
             }
             Err(e) => {
                 // #131: the pinned NIC is missing / has no IPv4: the alarm names it.
                 let pinned = e.downcast_ref::<crate::net::PinnedInterfaceUnavailable>();
-                let _ = pinned;
+                self.ptp_liveness.interface_problem = pinned.map(|p| p.alarm_reason());
                 let text = format!("{e:#}");
                 warn!(
                     "[NET] PTP re-join attempt {} failed: {} -- next attempt in {}s",

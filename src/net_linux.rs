@@ -180,7 +180,7 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         // dantesync#131: a PINNED interface is the only candidate. Not usable now (missing, no
         // IPv4) = a typed error BEFORE anything is closed: the controller names the NIC in the
         // clock alarm and looks again in seconds; another NIC is never joined.
-        let (iface, ip) = match &None::<String> {
+        let (iface, ip) = match &self.pinned {
             Some(name) => match self.factory.lookup_pinned(name) {
                 PinnedLookup::Ready(ip) => (name.clone(), ip),
                 PinnedLookup::NoIpv4 => {

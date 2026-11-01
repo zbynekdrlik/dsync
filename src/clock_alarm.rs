@@ -84,6 +84,12 @@ impl ClockHealth {
     /// catch-all below therefore only fires in the near-impossible locked-but-no-
     /// allowed-source case, and is kept for completeness.
     pub fn lost_reason(&self) -> Option<String> {
+        if let Some(reason) = &self.interface_problem {
+            return Some(reason.clone());
+        }
+        if let Some(reason) = &self.config_problem {
+            return Some(reason.clone());
+        }
         if let Some(name) = &self.allowlist_unresolvable {
             return Some(format!("grandmaster hostname {name} unresolvable"));
         }

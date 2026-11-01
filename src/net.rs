@@ -68,8 +68,22 @@ pub struct NicSnapshot {
 /// dantesync#131 — classify the pinned NIC `name` among `nics` (pure). A loopback or link-local
 /// (169.254/16, a Windows APIPA address while DHCP has not answered) address is not usable.
 pub fn classify_pinned(name: &str, nics: &[NicSnapshot]) -> PinnedLookup {
-    let _ = (name, nics);
-    PinnedLookup::Missing
+    let mut found = false;
+    for nic in nics.iter().filter(|n| n.names.iter().any(|n| n == name)) {
+        found = true;
+        if let Some(ip) = nic
+            .ipv4
+            .iter()
+            .find(|ip| !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified())
+        {
+            return PinnedLookup::Ready(*ip);
+        }
+    }
+    if found {
+        PinnedLookup::NoIpv4
+    } else {
+        PinnedLookup::Missing
+    }
 }
 
 /// The NICs of this host now, for [`classify_pinned`] (Linux: `getifaddrs` plus `name` itself
@@ -194,8 +208,10 @@ pub fn startup_wait_problem(
     lookup: PinnedLookup,
     waited: std::time::Duration,
 ) -> Option<PinnedInterfaceUnavailable> {
-    let _ = (name, lookup, waited);
-    None
+    match lookup {
+        PinnedLookup::NoIpv4 if waited <= PINNED_STARTUP_GRACE => None,
+        other => PinnedInterfaceUnavailable::from_lookup(name, other),
+    }
 }
 
 /// dantesync#131 — the pinned PTP interface `name` now.
