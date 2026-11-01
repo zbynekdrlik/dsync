@@ -191,3 +191,54 @@ fn a_stopped_service_ends_the_wait_131() {
     assert_eq!(r.opened, None);
     assert_eq!(r.looks, 1);
 }
+
+#[test]
+fn a_raised_alarm_follows_the_nic_state_inside_the_grace_131() {
+    // Missing (alarm at once), then present without an IPv4 inside the grace: the alarm must not
+    // keep saying "missing".
+    let r = run(
+        &[PinnedLookup::Missing, PinnedLookup::NoIpv4],
+        vec![Ok(1)],
+        Some(3),
+    );
+    assert_eq!(
+        r.reasons,
+        vec![
+            Some("PTP interface enp56s0 is missing".to_string()),
+            Some("PTP interface enp56s0 has no IPv4 address".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn a_config_fallback_keeps_the_alarm_once_the_pinned_nic_opens_131_116() {
+    let status = RwLock::new(SyncStatus::default());
+    let running = AtomicBool::new(true);
+    let seconds = Cell::new(0u64);
+    let base = Instant::now();
+    let mut looks = vec![PinnedLookup::Ready(RIG), PinnedLookup::Missing];
+    let wait = PinnedWait {
+        name: "enp56s0",
+        status: &status,
+        alarm_interval_s: 60,
+        config_problem: Some("config.json not loaded (x), running defaults".to_string()),
+        notifier: Counting::default(),
+        running: &running,
+    };
+    let opened = wait.run(
+        || looks.pop().expect("scripted"),
+        |_| Ok(1u32),
+        || seconds.set(seconds.get() + 1),
+        || base + Duration::from_secs(seconds.get()),
+    );
+    assert_eq!(opened, Some((1, RIG)));
+    let s = status.read().expect("status");
+    assert!(
+        s.clock_alarm.active,
+        "no false clear while the config fallback runs"
+    );
+    assert_eq!(
+        s.clock_alarm.reason,
+        "config.json not loaded (x), running defaults"
+    );
+}

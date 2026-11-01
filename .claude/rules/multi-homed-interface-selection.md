@@ -26,7 +26,11 @@ NIC (VBAN leg) got its /32 before the rig NIC at boot and was first in `getifadd
   every second until the NIC has an IPv4 AND the receive path OPENS on it — an open failure
   (Windows: the Npcap device list lags the adapter list at boot) is retried, never fatal. The
   clock alarm names the NIC at once when missing, after the grace when without an IPv4 or not
-  opening; the REGAINED edge is driven when it opens. Never another NIC.
+  opening, and once raised follows the NIC's CURRENT state. On open the interface reason ends:
+  the snapshot is cleared without a "re-locked" edge (nothing is locked yet), or keeps a #116
+  config reason. A pinned Npcap open uses the IPv4 the wait approved
+  (`select_pinned_device_at`), skips the allowlist resolution and is not an ERROR per retry.
+  Never another NIC.
 - Pinned re-join (Linux `UdpPtpNetwork`, Npcap `select_pinned_device`): ONLY the pinned NIC — no
   home address, no resolver, no subnet rule — with a typed `net::PinnedInterfaceUnavailable`
   BEFORE closing anything. The controller (which knows the pin from `set_ptp_interface`) turns

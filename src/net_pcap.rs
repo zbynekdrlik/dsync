@@ -417,6 +417,12 @@ fn select_pinned_device(name: &str) -> Result<(Device, Ipv4Addr)> {
             .into())
         }
     };
+    select_pinned_device_at(name, ip)
+}
+
+/// dantesync#131 — the Npcap device of the pinned interface `name` at the IPv4 the caller already
+/// approved (the startup's `pinned_wait`, which applies the link-local grace).
+fn select_pinned_device_at(name: &str, ip: Ipv4Addr) -> Result<(Device, Ipv4Addr)> {
     let device = device_with_ip(ip).ok_or_else(|| {
         anyhow!("pinned PTP interface {name} ({ip}): no Npcap device carries {ip}")
     })?;
@@ -486,18 +492,19 @@ pub struct NpcapPtpNetwork {
 }
 
 impl NpcapPtpNetwork {
-    /// `pinned` (dantesync#131): the pinned interface, which then alone selects the device.
+    /// `pinned` (dantesync#131): the pinned interface and the IPv4 the startup approved for it;
+    /// it alone selects the device, now and at every re-join.
     pub fn new(
         interface_name: &str,
         gm_allowlist: &crate::gm_filter::GmAllowlist,
-        pinned: Option<String>,
+        pinned: Option<(String, Ipv4Addr)>,
     ) -> Result<Self> {
         info!(
             "Initializing Npcap capture (default-interface hint: {}, pinned: {:?})",
             interface_name, pinned
         );
         let (device, ip) = match &pinned {
-            Some(name) => select_pinned_device(name)?,
+            Some((name, ip)) => select_pinned_device_at(name, *ip)?,
             None => select_ptp_device(interface_name, gm_allowlist, None)?,
         };
         let open = open_ptp_capture(device, ip)?;
@@ -519,7 +526,7 @@ impl NpcapPtpNetwork {
             gm_allowlist: gm_allowlist.clone(),
             last_join,
             home_ip: ip,
-            pinned,
+            pinned: pinned.map(|(name, _)| name),
         })
     }
 

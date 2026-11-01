@@ -578,3 +578,13 @@ fn any_rejoin_failure_of_a_pinned_node_names_the_nic_and_is_retried_fast_131() {
     c.maybe_rejoin_ptp(t0 + ms(15_500));
     assert_eq!(calls.load(Ordering::SeqCst), 2, "5 s, not the 30 s backoff");
 }
+
+#[test]
+fn a_pinned_wait_logs_warn_on_a_changed_reason_and_every_sixtieth_look_131() {
+    use log::Level::{Debug, Warn};
+    assert_eq!(pinned_wait_log_level(2, false), Debug, "the 2nd fast look");
+    assert_eq!(pinned_wait_log_level(59, false), Debug);
+    assert_eq!(pinned_wait_log_level(60, false), Warn, "every 60th (5 min)");
+    assert_eq!(pinned_wait_log_level(120, false), Warn);
+    assert_eq!(pinned_wait_log_level(7, true), Warn, "a changed reason");
+}

@@ -154,7 +154,23 @@ fn open_ptp_network(
         // it picks the capture/IGMP-join interface on the grandmaster's subnet
         // when the allowlist can disambiguate, and otherwise falls back to the
         // default interface (single-homed / no-allowlist boxes are unchanged).
-        // dantesync#131: a PINNED interface alone selects the device (no subnet rule).
+        // dantesync#131: a PINNED interface alone selects the device (no subnet rule, so no
+        // allowlist resolution), and a failed open is the pinned wait's to report and retry
+        // (once per change, never an ERROR per second).
+        if let Some(name) = pinned {
+            let npcap_net = net_pcap::NpcapPtpNetwork::new(
+                iface_name,
+                &dantesync::gm_filter::GmAllowlist::default(),
+                Some((name, iface_ip)),
+            )?;
+            info!(
+                "Using Npcap HostHighPrec timestamps (pinned {})",
+                iface_name
+            );
+            let (iface, ip) = npcap_net.joined();
+            let (iface, ip) = (iface.to_string(), ip);
+            return Ok((npcap_net, iface, ip));
+        }
         let mut gm_allowlist =
             dantesync::gm_filter::GmAllowlist::parse(&system_config.gm_allowlist);
         // dantesync#113: resolve hostname entries BEFORE interface selection so a
@@ -169,7 +185,7 @@ fn open_ptp_network(
                 gm_allowlist.unresolved_hostnames()
             );
         }
-        match net_pcap::NpcapPtpNetwork::new(iface_name, &gm_allowlist, pinned) {
+        match net_pcap::NpcapPtpNetwork::new(iface_name, &gm_allowlist, None) {
             Ok(npcap_net) => {
                 info!(
                     "Using Npcap HostHighPrec timestamps (default-interface hint {} / {})",

@@ -107,7 +107,11 @@ pub fn classify_pinned_with(name: &str, nics: &[NicSnapshot], windows_names: boo
 /// the braces of a GUID.
 fn normalize_windows_name(name: &str) -> &str {
     let name = name.trim();
-    let name = name.strip_prefix(r"\Device\NPF_").unwrap_or(name);
+    const NPF: &str = r"\Device\NPF_";
+    let name = match name.get(..NPF.len()) {
+        Some(prefix) if prefix.eq_ignore_ascii_case(NPF) => &name[NPF.len()..],
+        _ => name,
+    };
     name.trim_start_matches('{').trim_end_matches('}')
 }
 
@@ -576,6 +580,7 @@ mod tests {
             "4a1b2c3d-0000-1111-2222-333344445555",
             "{4A1B2C3D-0000-1111-2222-333344445555}",
             r"\Device\NPF_{4A1B2C3D-0000-1111-2222-333344445555}",
+            r"\device\npf_{4a1b2c3d-0000-1111-2222-333344445555}",
         ] {
             assert_eq!(classify_pinned_with(pin, &nics, true), rig, "{pin}");
         }

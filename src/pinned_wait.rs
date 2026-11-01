@@ -8,8 +8,10 @@
 //! at boot, so an open failure is waited out too, never fatal). Meanwhile the controller — which
 //! normally drives the clock alarm — does not exist yet, so the alarm is driven here: a MISSING
 //! NIC alarms at once, a NIC without an IPv4 or one that does not open yet after
-//! [`net::PINNED_STARTUP_GRACE`]. Once open, the alarm REGAINED edge is logged / notified and the
-//! `/status` snapshot cleared; the controller takes over from there.
+//! [`net::PINNED_STARTUP_GRACE`]; once raised, it keeps naming the CURRENT state of the NIC. Once
+//! open, the interface reason is dropped: the `/status` snapshot is cleared (or keeps a #116
+//! config reason) and the controller judges the clock from there — no "re-locked" edge is
+//! claimed, nothing is locked yet.
 //!
 //! Every OS boundary (the lookup, the open, the pause, the clock) is injected, so the loop is
 //! unit-tested.
@@ -68,7 +70,9 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
             let at = now();
             let waited = at.saturating_duration_since(started);
             let lookup = lookup();
-            let (seen, problem) = match net::usable_pinned_ip(lookup, waited) {
+            // `problem` raises the alarm; `state` is what the NIC is now, which keeps an alarm
+            // that is already up truthful inside the grace (e.g. missing -> no IPv4 yet).
+            let (seen, problem, state) = match net::usable_pinned_ip(lookup, waited) {
                 Some(ip) => match open(ip) {
                     Ok(opened) => {
                         info!(
@@ -82,14 +86,15 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
                     }
                     Err(e) => {
                         let text = format!("{e:#}");
-                        let problem = (waited > net::PINNED_STARTUP_GRACE)
-                            .then(|| format!("PTP interface {name} could not be joined: {text}"));
-                        (Seen::OpenFailed(text), problem)
+                        let state = format!("PTP interface {name} could not be joined: {text}");
+                        let problem = (waited > net::PINNED_STARTUP_GRACE).then(|| state.clone());
+                        (Seen::OpenFailed(text), problem, state)
                     }
                 },
                 None => (
                     Seen::Lookup(lookup),
                     net::startup_wait_problem(name, lookup, waited).map(|p| p.alarm_reason()),
+                    lookup_state(name, lookup),
                 ),
             };
             if last.as_ref() != Some(&seen) {
@@ -98,6 +103,8 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
             }
             if let Some(reason) = problem {
                 self.raise_alarm(&mut alarm, reason, at);
+            } else if alarm.is_active() {
+                self.raise_alarm(&mut alarm, state, at);
             }
             if !self.running.load(Ordering::SeqCst) {
                 return None;
@@ -130,24 +137,24 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
         self.publish(tick.snapshot);
     }
 
-    /// The pinned NIC is open: a raised alarm ends with its REGAINED edge (log + notifier) and a
-    /// clear `/status` snapshot; the controller judges the clock from here on.
+    /// The pinned NIC is open: the interface reason ends. A #116 config fallback stays in the
+    /// alarm (no false clear); otherwise the `/status` snapshot is cleared without a REGAINED
+    /// edge (nothing is locked yet) and the controller judges the clock from here on.
     fn clear_alarm(&self, alarm: &mut ClockAlarm, at: Instant) {
         if !alarm.is_active() {
             return;
         }
-        let healthy = ClockHealth {
-            is_locked: true,
-            mode_locked: true,
-            gm_allowed: true,
-            ptp_stale: false,
-            allowlist_unresolvable: None,
-            in_acquisition: false,
-            interface_problem: None,
-            config_problem: None,
-        };
-        let tick = clock_alarm::drive(alarm, &healthy, at, epoch_s(), &self.notifier);
-        self.publish(tick.snapshot);
+        match &self.config_problem {
+            Some(reason) => self.raise_alarm(alarm, reason.clone(), at),
+            None => {
+                info!(
+                    "[NET] pinned PTP interface {} is open -- its startup alarm is cleared, the \
+                     clock is judged from here on",
+                    self.name
+                );
+                self.publish(clock_alarm::ClockAlarmStatus::default());
+            }
+        }
     }
 
     fn publish(&self, snapshot: clock_alarm::ClockAlarmStatus) {
@@ -157,6 +164,18 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
                 .alarm_interval_s
                 .max(clock_alarm::CLOCK_ALARM_INTERVAL_FLOOR_S);
         }
+    }
+}
+
+/// The alarm text for the NIC's state while no IPv4 is usable yet.
+fn lookup_state(name: &str, lookup: PinnedLookup) -> String {
+    match lookup {
+        PinnedLookup::LinkLocalOnly(ip) => {
+            format!("PTP interface {name} has only the link-local address {ip} (waiting for DHCP)")
+        }
+        PinnedLookup::Ready(ip) => format!("PTP interface {name} has {ip}"),
+        PinnedLookup::NoIpv4 => format!("PTP interface {name} has no IPv4 address"),
+        PinnedLookup::Missing => format!("PTP interface {name} is missing"),
     }
 }
 

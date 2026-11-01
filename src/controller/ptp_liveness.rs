@@ -48,10 +48,21 @@ pub(super) struct PtpLiveness {
     pub(super) pinned: Option<String>,
 }
 
-/// dantesync#131 — while the pinned interface stays unusable, the re-join's two WARN lines are
-/// written for the first failure, a changed reason, and then every this many looks (5 min at
-/// [`PINNED_WAIT_RETRY`]); the looks between go to DEBUG. The clock alarm keeps its own cadence.
+/// dantesync#131 — while the pinned interface stays unusable, a fast look's two lines are WARN on
+/// a changed reason and every this many looks (5 min at [`PINNED_WAIT_RETRY`]), DEBUG between.
+/// The first failure is a normal scheduled attempt (WARN). The clock alarm keeps its own cadence.
 pub(super) const PINNED_WAIT_LOG_EVERY: u32 = 60;
+
+/// dantesync#131 — the level of a fast look's two lines (the announce and the failure) while a
+/// pinned NIC stays unusable: WARN when the reason changed and on every
+/// [`PINNED_WAIT_LOG_EVERY`]th attempt, DEBUG between.
+pub(super) fn pinned_wait_log_level(attempt: u32, changed: bool) -> log::Level {
+    if changed || attempt % PINNED_WAIT_LOG_EVERY == 0 {
+        log::Level::Warn
+    } else {
+        log::Level::Debug
+    }
+}
 
 /// dantesync#131 — while the pinned interface is unusable, look again this often (a cheap
 /// interface lookup, nothing is opened): a NIC that comes back is joined within seconds, not at
@@ -160,20 +171,17 @@ where
             return;
         }
         let attempt = self.ptp_liveness.schedule.record_attempt(now);
-        // #131: a pinned NIC that stays unusable is looked at every 5 s; log it at a pace.
-        let quiet = waiting_for_pin && attempt % PINNED_WAIT_LOG_EVERY != 0;
-        let level = if quiet {
-            log::Level::Debug
-        } else {
-            log::Level::Warn
-        };
-        log::log!(
-            level,
+        let announce = format!(
             "[NET] no PTP announce for {}s -- re-joining PTP multicast (attempt {})",
             now.saturating_duration_since(self.last_ptp_packet)
                 .as_secs(),
             attempt
         );
+        // #131: a pinned NIC that stays unusable is looked at every 5 s; its lines are logged
+        // after the result, at `pinned_wait_log_level`. Every other attempt: as before 1.21.
+        if !waiting_for_pin {
+            warn!("{}", announce);
+        }
         // Only the receive path is re-opened. The clock, the servos and the date offset are not
         // touched: a re-join must never do what a restart does to the fleet date.
         let result = self.network.rejoin();
@@ -183,6 +191,9 @@ where
             .as_secs();
         match &result {
             Ok(outcome) => {
+                if waiting_for_pin {
+                    warn!("{}", announce);
+                }
                 info!(
                     "[NET] PTP multicast re-joined on {} ({}){}",
                     outcome.iface,
@@ -223,12 +234,16 @@ where
                 } else {
                     rejoin_delay(attempt + 1).as_secs()
                 };
+                let level = if waiting_for_pin {
+                    pinned_wait_log_level(attempt, changed)
+                } else {
+                    log::Level::Warn
+                };
+                if waiting_for_pin {
+                    log::log!(level, "{}", announce);
+                }
                 log::log!(
-                    if quiet && !changed {
-                        log::Level::Debug
-                    } else {
-                        log::Level::Warn
-                    },
+                    level,
                     "[NET] PTP re-join attempt {} failed: {} -- next attempt in {}s",
                     attempt,
                     text,
