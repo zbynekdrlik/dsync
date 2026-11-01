@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults), with the clock alarm active and `/status.config_state` naming the source and the
   error. A UTF-8 (or UTF-16) BOM is accepted, and so is a single string for `gm_allowlist`.
 
+### Changed
+
+- `docs/HANDOVER.md`: `TARGETS.md` was removed from the tree in v1.20.1; its old values stay in
+  git history by the owner's decision of 2026-11-01 (no security role on the closed network).
+
 ## [1.20.3] - 2026-11-01
 
 ### Changed
