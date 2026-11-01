@@ -2589,6 +2589,13 @@ where
             .map(|t| now.duration_since(t).as_secs_f64())
             .unwrap_or(1.0);
 
+        // dantesync#142: a window without a previous offset (the first after warmup, the first
+        // after any measurement reset: a clock step, a PTP outage) has no rate to measure. It only
+        // records the offset: no spike-filter or smoothing input, no gain-mode change, no
+        // integrator step and no lock count. Before 1.22 it went on as a measured 0 µs/s, which
+        // switched a cold box to PROD for one window and counted toward LOCK (gen3, dstack).
+        let measured = self.last_offset_us.is_some();
+
         // Calculate instantaneous rate of change (drift rate in ppm)
         // delta_offset / delta_time gives us the frequency error
         let raw_rate_ppm = if let Some(prev_offset) = self.last_offset_us {
@@ -2627,6 +2634,28 @@ where
         }
         .clamp(-500.0, 500.0);
 
+        if !measured {
+            debug!(
+                "[Servo] window without a previous offset: offset {:+.1}us recorded, no rate yet",
+                offset_us
+            );
+        }
+
+        let rate_ppm = if measured {
+            self.measure_servo_rate(raw_rate_ppm)
+        } else {
+            self.smoothed_rate_ppm
+        };
+        let abs_rate = rate_ppm.abs();
+        if measured {
+            self.update_servo_modes(rate_ppm);
+        }
+        self.finish_servo_window(rate_ppm, abs_rate, measured, phase_median_ns, dt_secs);
+    }
+
+    /// The rate of a MEASURED window (dantesync#142: never called for a window without a previous
+    /// offset): the spike filter, the smoothed rate and the accumulated phase error.
+    fn measure_servo_rate(&mut self, raw_rate_ppm: f64) -> f64 {
         // =======================================================================
         // ADAPTIVE SPIKE DETECTION
         // =======================================================================
@@ -2703,7 +2732,12 @@ where
             self.accumulated_phase_error_us += rate_ppm * dt;
         }
         self.last_phase_accumulation_time = Some(now_phase);
+        rate_ppm
+    }
 
+    /// The servo's gain mode after a MEASURED window (dantesync#142: never moved by a window
+    /// without a previous offset): NANO entry/exit while locked, then ACQ/PROD.
+    fn update_servo_modes(&mut self, rate_ppm: f64) {
         // THREE-PHASE CONTROL: ACQ → PROD → NANO based on rate stability
         let abs_rate = rate_ppm.abs();
 
@@ -2772,7 +2806,19 @@ where
             // Rate unstable above 20µs/s
             self.in_production_mode = false;
         }
+    }
 
+    /// The frequency word for this window: the gains of the current mode, the integrator and the
+    /// lock count (both only for a MEASURED window, dantesync#142), then the phase lock and the
+    /// clock write.
+    fn finish_servo_window(
+        &mut self,
+        rate_ppm: f64,
+        abs_rate: f64,
+        measured: bool,
+        phase_median_ns: Option<i64>,
+        dt_secs: f64,
+    ) {
         // Select gains based on mode
         let (p_gain, p_max, i_gain, phase_name) = if self.in_nano_mode {
             (P_GAIN_NANO, P_MAX_NANO_PPM, I_GAIN_NANO, "NANO")
@@ -2796,8 +2842,10 @@ where
         // I-term: Integrate rate error to learn true drift
         // Uses mode-appropriate gain
         let i_term = -effective_rate * i_gain;
-        self.drift_baseline_ppm =
-            (self.drift_baseline_ppm + i_term).clamp(-DRIFT_MAX_PPM, DRIFT_MAX_PPM);
+        if measured {
+            self.drift_baseline_ppm =
+                (self.drift_baseline_ppm + i_term).clamp(-DRIFT_MAX_PPM, DRIFT_MAX_PPM);
+        }
 
         // Total correction = drift baseline + P-term
         let total_correction =
@@ -2805,7 +2853,9 @@ where
 
         // Lock state: based on rate stability, not absolute offset
         let rate_stable = abs_rate < 5.0; // Within 5ppm
-        if rate_stable {
+        if !measured {
+            // dantesync#142: no rate, no lock evidence either way.
+        } else if rate_stable {
             self.lock_stable_count += 1;
             if self.lock_stable_count >= LOCK_STABLE_COUNT && !self.is_locked {
                 self.is_locked = true;
