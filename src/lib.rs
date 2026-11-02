@@ -5,6 +5,7 @@ pub mod config;
 pub mod controller;
 pub mod date_offset;
 pub mod date_step_trigger;
+pub mod drift_file;
 pub mod dscp;
 pub mod gm_filter;
 pub mod http_status;

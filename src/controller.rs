@@ -48,6 +48,15 @@ use ptp_sender::{describe_grandmaster, PtpSender};
 /// thread). A child module like `date_sync`.
 mod ntp_check;
 
+/// dantesync#142 — a window without a previous offset is not a measurement.
+#[cfg(test)]
+mod first_window_tests;
+
+/// dantesync#142 — the learned frequency across a restart (`crate::drift_file`): the seed at
+/// start, its judge, the save while LOCKED. A child module like `date_sync`; its state is the one
+/// `freq_seed` field.
+mod freq_seed;
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
@@ -871,6 +880,10 @@ where
     /// dantesync#136 — the periodic NTP burst off the loop (its runner, the burst in flight, the
     /// wall steps), owned by `controller/ntp_check.rs`.
     ntp_burst: ntp_check::NtpBurstState,
+
+    /// dantesync#142 — the drift file: the seed, its judge, the save while LOCKED, owned by
+    /// `controller/freq_seed.rs`.
+    freq_seed: freq_seed::FreqSeed,
 }
 
 struct PendingSync {
@@ -1063,6 +1076,7 @@ where
             ptp_liveness: ptp_liveness::PtpLiveness::default(),
             config_state: None,
             ntp_burst: ntp_check::NtpBurstState::default(),
+            freq_seed: freq_seed::FreqSeed::default(),
         }
     }
 
@@ -2585,6 +2599,13 @@ where
             .map(|t| now.duration_since(t).as_secs_f64())
             .unwrap_or(1.0);
 
+        // dantesync#142: a window without a previous offset (the first after warmup, the first
+        // after any measurement reset: a clock step, a PTP outage) has no rate to measure. It only
+        // records the offset: no spike-filter or smoothing input, no gain-mode change, no
+        // integrator step and no lock count. Before 1.22 it went on as a measured 0 µs/s, which
+        // switched a cold box to PROD for one window and counted toward LOCK (gen3, dstack).
+        let measured = self.last_offset_us.is_some();
+
         // Calculate instantaneous rate of change (drift rate in ppm)
         // delta_offset / delta_time gives us the frequency error
         let raw_rate_ppm = if let Some(prev_offset) = self.last_offset_us {
@@ -2623,6 +2644,43 @@ where
         }
         .clamp(-500.0, 500.0);
 
+        if !measured {
+            debug!(
+                "[Servo] window without a previous offset: offset {:+.1}us recorded, no rate yet",
+                offset_us
+            );
+        }
+
+        // dantesync#142: a seeded start is judged on its first measured windows (before the
+        // integrator step below, so a dropped seed learns from 0 already in this window; its rate
+        // is then rebased to a word of 0).
+        // A window shorter than 0.1 s carries the smoothed rate, not its own: not judged.
+        let raw_rate_ppm = if measured && dt_secs > 0.1 {
+            raw_rate_ppm - self.judge_freq_seed(raw_rate_ppm, dt_secs)
+        } else {
+            raw_rate_ppm
+        };
+
+        let rate_ppm = if measured {
+            self.measure_servo_rate(raw_rate_ppm)
+        } else {
+            // Intended: the unmeasured window keeps the last smoothed rate for its P term (a
+            // reset is a step or an outage, not evidence that the rate went to 0). Once the phase
+            // lock is engaged it sets the word anyway.
+            self.smoothed_rate_ppm
+        };
+        let abs_rate = rate_ppm.abs();
+        if measured {
+            self.update_servo_modes(rate_ppm);
+        }
+        self.finish_servo_window(rate_ppm, abs_rate, measured, phase_median_ns, dt_secs);
+        // dantesync#142: while LOCKED, the learned frequency is saved every 10 minutes.
+        self.tick_drift_file();
+    }
+
+    /// The rate of a MEASURED window (dantesync#142: never called for a window without a previous
+    /// offset): the spike filter, the smoothed rate and the accumulated phase error.
+    fn measure_servo_rate(&mut self, raw_rate_ppm: f64) -> f64 {
         // =======================================================================
         // ADAPTIVE SPIKE DETECTION
         // =======================================================================
@@ -2699,7 +2757,12 @@ where
             self.accumulated_phase_error_us += rate_ppm * dt;
         }
         self.last_phase_accumulation_time = Some(now_phase);
+        rate_ppm
+    }
 
+    /// The servo's gain mode after a MEASURED window (dantesync#142: never moved by a window
+    /// without a previous offset): NANO entry/exit while locked, then ACQ/PROD.
+    fn update_servo_modes(&mut self, rate_ppm: f64) {
         // THREE-PHASE CONTROL: ACQ → PROD → NANO based on rate stability
         let abs_rate = rate_ppm.abs();
 
@@ -2768,7 +2831,19 @@ where
             // Rate unstable above 20µs/s
             self.in_production_mode = false;
         }
+    }
 
+    /// The frequency word for this window: the gains of the current mode, the integrator and the
+    /// lock count (both only for a MEASURED window, dantesync#142), then the phase lock and the
+    /// clock write.
+    fn finish_servo_window(
+        &mut self,
+        rate_ppm: f64,
+        abs_rate: f64,
+        measured: bool,
+        phase_median_ns: Option<i64>,
+        dt_secs: f64,
+    ) {
         // Select gains based on mode
         let (p_gain, p_max, i_gain, phase_name) = if self.in_nano_mode {
             (P_GAIN_NANO, P_MAX_NANO_PPM, I_GAIN_NANO, "NANO")
@@ -2792,8 +2867,10 @@ where
         // I-term: Integrate rate error to learn true drift
         // Uses mode-appropriate gain
         let i_term = -effective_rate * i_gain;
-        self.drift_baseline_ppm =
-            (self.drift_baseline_ppm + i_term).clamp(-DRIFT_MAX_PPM, DRIFT_MAX_PPM);
+        if measured {
+            self.drift_baseline_ppm =
+                (self.drift_baseline_ppm + i_term).clamp(-DRIFT_MAX_PPM, DRIFT_MAX_PPM);
+        }
 
         // Total correction = drift baseline + P-term
         let total_correction =
@@ -2801,7 +2878,9 @@ where
 
         // Lock state: based on rate stability, not absolute offset
         let rate_stable = abs_rate < 5.0; // Within 5ppm
-        if rate_stable {
+        if !measured {
+            // dantesync#142: no rate, no lock evidence either way.
+        } else if rate_stable {
             self.lock_stable_count += 1;
             if self.lock_stable_count >= LOCK_STABLE_COUNT && !self.is_locked {
                 self.is_locked = true;
@@ -2998,6 +3077,8 @@ where
 
             // Extended fields for tray app
             status.is_locked = self.is_locked && !stale;
+            // dantesync#142: the frequency seed from the drift file.
+            self.publish_freq_seed(&mut status);
             status.smoothed_rate_ppm = self.smoothed_rate_ppm;
             status.mode = if stale {
                 ptp_liveness::PTP_STALE_MODE.to_string()

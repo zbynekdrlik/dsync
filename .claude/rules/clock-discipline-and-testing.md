@@ -63,6 +63,12 @@ paths:
   - "src/controller/date_sync/boot.rs"
   - "src/controller/date_sync/boot_tests.rs"
   - "tests/two_clock_bench/boot.rs"
+  - "src/drift_file.rs"
+  - "src/drift_file/tests.rs"
+  - "src/controller/freq_seed.rs"
+  - "src/controller/freq_seed/tests.rs"
+  - "src/controller/freq_seed/sim_tests.rs"
+  - "src/controller/first_window_tests.rs"
 ---
 
 # Disciplining a clock here — and how to test one without fooling yourself
@@ -1238,3 +1244,65 @@ burst runs on the `ntp-burst` thread (`ntp_burst::NtpBurstThread`, `controller/n
   against `ntp_burst::test_support::SlowNtpUpstream`, a real `NtpServer` behind a delaying relay
   — red on 1.19 at 1.0 s; failed bursts across a step / beside a pending boot reading count),
   `ntp_burst/tests.rs`.
+
+## dantesync#142 (v1.22) — a cold boot locks in seconds: no false first sample, a drift file
+
+iemmixer's gen3 box (v1.20.0, 1.11.2026): "Sync established" at 15 s, a PROD at 15.6 s, back to ACQ,
+LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was learned:
+
+- **A window without a previous offset is not a measurement.** The rate servo differentiates the
+  window offset; the first window after warmup and after EVERY measurement reset (a step, a PTP
+  outage) has nothing to differentiate. Before 1.22 it went on as a measured 0 µs/s: a false PROD
+  for one window and a count toward LOCK. Now it only records the offset; the window's word is
+  the baseline + the P term of the UNCHANGED smoothed rate, and the phase lock still gets its
+  window (it measures `e`, not a rate). `apply_self_tuning_servo` is split into
+  `measure_servo_rate` / `update_servo_modes` / `finish_servo_window` on a `measured` flag.
+- **The learned frequency survives a restart** (`src/drift_file.rs` + `controller/freq_seed.rs`):
+  `drift.json` beside `date-offset.json`, saved only while LOCKED and PTP online, every 10 minutes
+  (the first an interval after the lock) and at shutdown, through `crate::atomic_file`. A start
+  seeds `drift_baseline_ppm` AND writes the word to the clock before the warmup when the record is
+  ≤ 30 days old (≤ 1 day in the future, for an RTC behind), finite and within `DRIFT_MAX_PPM`;
+  anything else is a cold learn with `[FREQ-SEED] none: <why>`.
+- **Judge the seed against the SEED, not against the applied word.** After the first measured
+  window the ACQ P term (gain 0.8) moves the word toward the truth, so the raw rate of the next
+  windows understates a wrong seed (25 ppm off reads ~25, ~15, ~11: a raw-rate judge accepts it).
+  The judge reads `raw − (word − seed)`, the word being the average of the two words in force
+  over the window's span (a window's median sits mid-window: half under the previous word, half
+  under the last one). Pinned by `the_judge_reads_the_error_against_the_seed_not_against_the_p_term_142`
+  (red with the compensation removed).
+- **Judge on the SLOPE over the span, not a median of per-window rates.** Per-window rates
+  telescope: their dt-weighted mean is the offset's slope over the 4 measured windows (2 s), so
+  only the end windows' jitter remains and a spike inside cancels. A median of 3 per-window rates
+  kept each window's own jitter (tens of µs/s on a Windows box). 4 windows (< 5 =
+  `LOCK_STABLE_COUNT`, a const assert), beyond 20 µs/s → rejected.
+- **A rejection puts the servo where a cold start would be**: the integrator and the lock count
+  to 0, AND this window's rate, the smoothed rate and the spike filter rebased to a word of 0.
+  Without the rebase the smoothed rate still read the oscillator against the seeded word and
+  the integrator's first steps went the seed's way (review round 1: −1.2 ppm for a +35 target).
+  The jitter estimate is cleared too (its history would mix both). Every one of these is pinned:
+  review round 2 mutated each away (and the window-average word into either single word) and
+  each mutation fails a test.
+- **A systemd stop is SIGTERM**, which ctrlc handles only with its `termination` feature. Without
+  it `run_sync_loop` never returned on Linux and no shutdown code ran (since forever); 1.22 enables
+  it so the shutdown save runs. A Windows host shutdown sends the service SHUTDOWN, not STOP:
+  accepted since 1.22 for the same reason.
+- **A save that fails (a read-only root answers EROFS) warns once per process**, then at debug;
+  the 10-minute save runs on the loop, like `date-offset.json`'s heartbeat.
+- **Simulation (`freq_seed/sim_tests.rs`, closed loop, 4 seeded-jitter samples per 0.5 s window,
+  the median mid-window, the servo learns +35 ppm):** a seed within 2 ppm locks at window 6 =
+  3.0 s after Sync established at 1 µs per-sample jitter (LOCK still needs 5 measured windows
+  after the unmeasured first); a seed 25 or 50 ppm off is rejected after the 4th measured window
+  and locks at 33.0-34.5 s, like the cold start (32.5-33.5 s); 15 ppm off is kept and locks at
+  15-20 s. Under 10 µs per-sample jitter a 2 ppm-off seed is kept in 40 of 40 runs (LOCK median
+  4-5 s); under a pessimistic 30 µs in 33-34 of 40 (a dropped one costs the cold learn, never a
+  wrong seed) and a 50 ppm-off seed is dropped in 40 of 40
+  (`a_good_seed_is_kept_under_windows_level_jitter_142`). A one-off measurement during the work
+  (the 1-value-per-window model, fix 1 reverted by hand, not a test): the gen3 signature, PROD at
+  window 1, back to ACQ at window 4. The model's cold LOCK (~33 s) is
+  faster than the rig's (~70 s after Sync established): read the RELATIVE numbers, and the rig's
+  own boot log for the absolute one.
+- **Keep closed-loop statistics short.** The first version ran 160 loops of 600 windows per
+  jitter case; under CI's coverage instrumentation that CPU starved the NTP-burst timing test
+  running beside it (`the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136`: a
+  424 ms stall vs its 300 ms bound, PR 143's first run). Each statistical run now stops where its
+  assertion is decided (`run_for`: 60 windows to a lock, 6 to a verdict), ~11x fewer windows.

@@ -91,6 +91,14 @@ const DATE_STATE_PATH: &str = r"C:\ProgramData\DanteSync\date-offset.json";
 #[cfg(not(windows))]
 const DATE_STATE_PATH: &str = "/etc/dantesync/date-offset.json";
 
+/// dantesync#142 — the learned frequency across a restart (a drift file, as chrony's and ntpd's
+/// `driftfile`): beside `date-offset.json`, written only while LOCKED (every 10 min and at
+/// shutdown), read at start to seed the servo before the warmup (`dantesync::drift_file`).
+#[cfg(windows)]
+const DRIFT_FILE_PATH: &str = r"C:\ProgramData\DanteSync\drift.json";
+#[cfg(not(windows))]
+const DRIFT_FILE_PATH: &str = "/etc/dantesync/drift.json";
+
 /// dantesync#116: the config file. A file that does not parse is never overwritten; the loader
 /// keeps `config.json.last-good` beside it (`config::file::load`).
 #[cfg(windows)]
@@ -705,6 +713,8 @@ fn run_sync_loop(
         system_config,
     );
     controller.set_date_step_requests(date_step_rx);
+    // dantesync#142: seed the servo with the learned frequency before the warmup (or log why not).
+    controller.open_drift_file(std::path::Path::new(DRIFT_FILE_PATH));
     // dantesync#131 / #116: /status names the pin, the joined interface and the config source.
     controller.set_ptp_interface(pinned, &joined_iface, joined_ip);
     controller.set_config_state(config_state);
@@ -862,6 +872,8 @@ fn run_sync_loop(
     });
 
     info!("Sync Loop Exiting.");
+    // dantesync#142: keep the learned frequency for the next start (only when LOCKED).
+    controller.save_drift_file_at_shutdown();
     #[cfg(unix)]
     {
         let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Stopping]);
@@ -890,7 +902,9 @@ fn my_service_main(_arguments: Vec<OsString>) {
 
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
-            ServiceControl::Stop => {
+            // dantesync#142: a host shutdown/reboot ends the loop like a stop, so the learned
+            // frequency is saved (Windows sends SHUTDOWN, not STOP, to a service at shutdown).
+            ServiceControl::Stop | ServiceControl::Shutdown => {
                 let _ = shutdown_tx.send(());
                 ServiceControlHandlerResult::NoError
             }
@@ -908,7 +922,7 @@ fn my_service_main(_arguments: Vec<OsString>) {
     let _ = status_handle.set_service_status(ServiceStatus {
         service_type: SERVICE_TYPE,
         current_state: ServiceState::Running,
-        controls_accepted: ServiceControlAccept::STOP,
+        controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
         exit_code: ServiceExitCode::Win32(0),
         checkpoint: 0,
         wait_hint: Duration::default(),
@@ -939,7 +953,17 @@ fn my_service_main(_arguments: Vec<OsString>) {
     // Wait for stop signal
     let _ = shutdown_rx.recv();
 
-    // Stop
+    // Stop. dantesync#142: say StopPending with a wait hint first, so the SCM (also at a host
+    // shutdown) waits for the loop to end and the learned frequency to be saved.
+    let _ = status_handle.set_service_status(ServiceStatus {
+        service_type: SERVICE_TYPE,
+        current_state: ServiceState::StopPending,
+        controls_accepted: ServiceControlAccept::empty(),
+        exit_code: ServiceExitCode::Win32(0),
+        checkpoint: 1,
+        wait_hint: Duration::from_secs(10),
+        process_id: None,
+    });
     running.store(false, Ordering::SeqCst);
     let _ = handle.join();
 
@@ -1039,7 +1063,9 @@ fn main() -> Result<()> {
     let r = running.clone();
 
     ctrlc::set_handler(move || {
-        info!("Ctrl+C received. Shutting down...");
+        // dantesync#142: SIGTERM (systemd stop) and SIGHUP too (ctrlc's `termination`), so a
+        // stopped service ends the loop and saves the learned frequency.
+        info!("Stop signal received (Ctrl+C / SIGTERM / SIGHUP). Shutting down...");
         r.store(false, Ordering::SeqCst);
     })?;
 

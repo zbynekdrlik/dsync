@@ -867,3 +867,22 @@ canary evidence before continuing.
   `config::file::tests::*` (16), `atomic_file::tests::*`, `clock_alarm::tests::a_pinned_interface_problem_comes_first_*`.
   The config is now loaded AFTER the logger (its messages were lost before).
 - Review: fresh-context round 1 (0🔴 5🟡 6🔵) and round 2 (0🔴 1🟡 6🔵), every finding fixed in-branch.
+
+## 1.22.0 — #142 cold boot: no false first sample, the learned frequency kept (PR 143, 2.11.2026)
+
+- **#142** (dstack, iemmixer gen3: LOCK ~86 s after boot, a PROD at 15.6 s then back to ACQ).
+  Bump `3857065`. RED `392dd33` → GREEN `4f89fc5`: a window without a previous offset is not a
+  measurement (no gain mode, no lock count, no smoothing). Feature `69004f1`: `drift.json` beside
+  `date-offset.json` (`src/drift_file.rs`, `src/controller/freq_seed.rs`), saved only while LOCKED
+  every 10 min and at shutdown (atomic_file), seeded before the warmup (≤ 30 days, ±500 ppm), the
+  seed judged on the first 4 measured windows (slope vs the SEED, window-average word, > 20 µs/s
+  = rejected, the servo rebased to a cold start); `/status.freq_seed_ppm` / `freq_seed_source`;
+  ctrlc `termination` (SIGTERM ends the loop) and the Windows SHUTDOWN control. Review fixes
+  `40005a4`, `6598cb0`. Tests: `controller::first_window_tests::*` (3),
+  `drift_file::tests::*` (10), `controller::freq_seed::tests::*` (10),
+  `controller::freq_seed::sim_tests::*` (5), `status::tests::the_frequency_seed_fields_are_additive_142`.
+- Sim (closed loop, the servo learns +35 ppm): seed within 2 ppm → LOCK at 3.0 s after Sync
+  established (1 µs jitter), 4-5 s median at 10 µs; 25/50 ppm off → rejected, LOCK 33.0-34.5 s
+  vs cold 32.5-33.5 s; 15 ppm off kept, 15-20 s. LOCK criterion and ACQ gains unchanged.
+- Review: fresh-context round 1 (0🔴 5🟡 6🔵) and round 2 (0🔴 1🟡 5🔵), every finding fixed in-branch.
+- Rig check is dstack's (HANDOVER: no deploy from here): gen3 cold boot, byte [41] = 1 well before 86 s.
