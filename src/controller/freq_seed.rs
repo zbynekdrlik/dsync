@@ -8,6 +8,9 @@
 //! [`SEED_JUDGE_WINDOWS`] measured windows disagree with is dropped: the integrator returns to 0
 //! and the servo learns as a cold start does. The file is rewritten only while LOCKED, so a
 //! dropped seed is replaced only by a freshly locked value.
+//!
+//! The save (a small file, fsync'd twice) runs on the sync loop once per 10 minutes, as the
+//! master's `date-offset.json` heartbeat does (#126): a few ms on a 1 ms loop, between windows.
 
 use super::*;
 use crate::drift_file::{self, DriftRecord, SeedJudge, SeedVerdict, SEED_JUDGE_WINDOWS};
@@ -33,6 +36,14 @@ pub(super) struct FreqSeed {
     pub(super) judge: Option<SeedJudge>,
     /// The next save while LOCKED; `None` while not locked (set at the lock).
     pub(super) next_save: Option<Instant>,
+    /// The servo's word (`applied_freq_ppm`) written at the end of the last window, and the one
+    /// before it. A window's median sits mid-window, so a window's rate spans half of the
+    /// previous window (under `word_before`) and half of this one (under `word_last`).
+    word_last: f64,
+    word_before: f64,
+    /// A failed save is warned about once per process (a read-only root answers EROFS every 10
+    /// minutes); later failures are logged at debug, a recovery at info.
+    save_failing: bool,
 }
 
 impl<C, N, S> PtpController<C, N, S>
@@ -69,6 +80,8 @@ where
         self.freq_seed.seed_ppm = Some(ppm);
         self.freq_seed.source = "file".to_string();
         self.freq_seed.judge = Some(SeedJudge::default());
+        self.freq_seed.word_last = ppm;
+        self.freq_seed.word_before = ppm;
         match self.clock.adjust_frequency(1.0 + ppm / 1_000_000.0) {
             Ok(()) => info!(
                 "[FREQ-SEED] seeded {:+.3}ppm from the drift file (saved {} s ago); judged on the \
@@ -86,50 +99,67 @@ where
         }
     }
 
-    /// dantesync#142: a MEASURED window's raw rate while the seed is judged. The judge reads the
-    /// rate the oscillator shows against the SEED itself: the raw rate minus what the word applied
-    /// over this window (the seed plus the servo's P term) differed from the seed, so the ACQ P
-    /// term cannot hide a wrong seed. A rejected seed returns the integrator to 0 (the cold learn)
-    /// before this window's integrator step.
-    pub(super) fn judge_freq_seed(&mut self, raw_rate_ppm: f64) {
+    /// dantesync#142: a MEASURED window's raw rate (over `dt_secs`) while the seed is judged. The
+    /// judge reads the rate the oscillator shows against the SEED itself: the raw rate minus what
+    /// the word in force over this window's span (half the previous word, half the last one, see
+    /// `FreqSeed::word_last`) differed from the seed, so the ACQ P term (gain 0.8) neither hides
+    /// nor inflates a seed's error.
+    ///
+    /// Returns the amount to take off this window's raw rate: 0, except at a rejection, where the
+    /// servo is put where a cold start would be — the integrator at 0, the lock count at 0, and
+    /// this window's rate, the smoothed rate and the spike filter rebased to a word of 0 (they
+    /// were measured against the seeded word; left as they are, the integrator's first steps went
+    /// the wrong way).
+    pub(super) fn judge_freq_seed(&mut self, raw_rate_ppm: f64, dt_secs: f64) -> f64 {
         let seed = self.freq_seed.seed_ppm.unwrap_or(0.0);
-        let off_seed_ppm = raw_rate_ppm - (self.applied_freq_ppm - seed);
+        let word_ppm = (self.freq_seed.word_before + self.freq_seed.word_last) / 2.0;
+        let off_seed_ppm = raw_rate_ppm - (word_ppm - seed);
         let Some(judge) = self.freq_seed.judge.as_mut() else {
-            return;
+            return 0.0;
         };
-        let Some(verdict) = judge.on_measured(off_seed_ppm) else {
-            return;
+        let Some(verdict) = judge.on_measured(off_seed_ppm, dt_secs) else {
+            return 0.0;
         };
         self.freq_seed.judge = None;
         match verdict {
-            SeedVerdict::Accepted { median_rate_ppm } => info!(
-                "[FREQ-SEED] accepted {:+.3}ppm: the first {} measured windows are {:+.1}us/s \
-                 off it",
-                seed, SEED_JUDGE_WINDOWS, median_rate_ppm
-            ),
-            SeedVerdict::Rejected { median_rate_ppm } => {
+            SeedVerdict::Accepted { mean_rate_ppm } => {
+                info!(
+                    "[FREQ-SEED] accepted {:+.3}ppm: over the first {} measured windows the \
+                     oscillator runs {:+.1}us/s off it",
+                    seed, SEED_JUDGE_WINDOWS, mean_rate_ppm
+                );
+                0.0
+            }
+            SeedVerdict::Rejected { mean_rate_ppm } => {
                 warn!(
-                    "[FREQ-SEED] REJECTED {:+.3}ppm: the first {} measured windows are \
-                     {:+.1}us/s off it (beyond {}us/s; another oscillator?) — learning the \
-                     frequency from 0",
+                    "[FREQ-SEED] REJECTED {:+.3}ppm: over the first {} measured windows the \
+                     oscillator runs {:+.1}us/s off it (beyond {}us/s; another oscillator?) — \
+                     learning the frequency from 0",
                     seed,
                     SEED_JUDGE_WINDOWS,
-                    median_rate_ppm,
+                    mean_rate_ppm,
                     drift_file::SEED_REJECT_RATE_PPM
                 );
                 self.freq_seed.source = format!(
-                    "rejected: the first {} measured windows were {:+.1} us/s off the seed",
-                    SEED_JUDGE_WINDOWS, median_rate_ppm
+                    "rejected: over the first {} measured windows the oscillator ran {:+.1} us/s \
+                     off the seed",
+                    SEED_JUDGE_WINDOWS, mean_rate_ppm
                 );
                 self.drift_baseline_ppm = 0.0;
                 self.lock_stable_count = 0;
+                self.smoothed_rate_ppm -= word_ppm;
+                self.spike_filter.clear();
+                word_ppm
             }
         }
     }
 
-    /// dantesync#142: after each window — while LOCKED, save the learned frequency every
-    /// [`DRIFT_SAVE_INTERVAL`] (the first one an interval after the lock).
+    /// dantesync#142: after each window — note the word it wrote (for the seed judge), and while
+    /// LOCKED save the learned frequency every [`DRIFT_SAVE_INTERVAL`] (the first one an interval
+    /// after the lock).
     pub(super) fn tick_drift_file(&mut self) {
+        self.freq_seed.word_before = self.freq_seed.word_last;
+        self.freq_seed.word_last = self.applied_freq_ppm;
         if !self.is_locked || self.ptp_offline || self.freq_seed.path.is_none() {
             self.freq_seed.next_save = None;
             return;
@@ -164,12 +194,20 @@ where
             written_unix_s: wall_now_ns().div_euclid(1_000_000_000),
         };
         match drift_file::save(&path, &record) {
-            Ok(None) => info!(
-                "[FREQ-SEED] saved {:+.3}ppm ({}) to {}",
-                record.freq_ppm,
-                why,
-                path.display()
-            ),
+            Ok(None) => {
+                let recovered = std::mem::take(&mut self.freq_seed.save_failing);
+                info!(
+                    "[FREQ-SEED] saved {:+.3}ppm ({}) to {}{}",
+                    record.freq_ppm,
+                    why,
+                    path.display(),
+                    if recovered {
+                        " (saving works again)"
+                    } else {
+                        ""
+                    }
+                );
+            }
             Ok(Some(e)) => warn!(
                 "[FREQ-SEED] saved {:+.3}ppm ({}), but syncing {}'s directory failed: {} (a power \
                  cut may bring the previous record back)",
@@ -178,13 +216,25 @@ where
                 path.display(),
                 e
             ),
-            Err(e) => warn!(
+            Err(e) if self.freq_seed.save_failing => debug!(
                 "[FREQ-SEED] could not save {:+.3}ppm ({}) to {}: {}",
                 record.freq_ppm,
                 why,
                 path.display(),
                 e
             ),
+            Err(e) => {
+                self.freq_seed.save_failing = true;
+                warn!(
+                    "[FREQ-SEED] could not save {:+.3}ppm ({}) to {}: {} — the next start learns \
+                     the frequency from 0 (or from an older record); further failures are logged \
+                     at debug",
+                    record.freq_ppm,
+                    why,
+                    path.display(),
+                    e
+                );
+            }
         }
     }
 

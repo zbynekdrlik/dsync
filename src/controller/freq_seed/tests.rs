@@ -224,7 +224,7 @@ fn a_seed_the_first_measured_windows_disagree_with_is_dropped_before_any_lock_14
     assert!(c.freq_seed.judge.is_none(), "judged");
     let source = status(&c).freq_seed_source.expect("source");
     assert!(source.starts_with("rejected: "), "{source}");
-    assert!(source.contains("+50.0 us/s"), "{source}");
+    assert!(source.contains("us/s off the seed"), "{source}");
     assert_eq!(
         status(&c).freq_seed_ppm,
         Some(85.0),
@@ -235,6 +235,10 @@ fn a_seed_the_first_measured_windows_disagree_with_is_dropped_before_any_lock_14
         "back to the cold learn (one window's integrator step): {}",
         c.drift_baseline_ppm
     );
+    // Rebased to a word of 0: the oscillator needs +35 (85 − 50), so the integrator's first step
+    // from 0 goes up, and the smoothed rate reads the oscillator against 0 (about −35).
+    assert!(c.drift_baseline_ppm > 0.0, "{}", c.drift_baseline_ppm);
+    assert!(c.smoothed_rate_ppm < -20.0, "{}", c.smoothed_rate_ppm);
     assert!(!c.is_locked);
 }
 

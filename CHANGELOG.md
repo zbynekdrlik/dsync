@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the seed (beyond 20 µs/s) the seed is dropped and the servo learns from 0. LOCK is exactly as
   strict as before. `/status` adds `freq_seed_ppm` and `freq_seed_source`.
 
+### Changed
+
+- On Linux a `SIGTERM` (systemd stop, shutdown) or `SIGHUP` now ends the sync loop cleanly like
+  Ctrl+C (ctrlc's `termination` feature), so the shutdown save of the learned frequency runs.
+- The Windows service also accepts the host's SHUTDOWN control (it accepted only STOP), so a
+  reboot ends the loop cleanly and saves the learned frequency too.
+
 ## [1.21.0] - 2026-11-01
 
 ### Added

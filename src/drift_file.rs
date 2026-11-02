@@ -36,12 +36,14 @@ pub const MAX_FUTURE_SKEW_S: i64 = 86_400;
 
 /// How many MEASURED windows judge a seed. Fewer than `LOCK_STABLE_COUNT` (5), so a seed is
 /// always accepted or dropped before the servo can lock on it.
-pub const SEED_JUDGE_WINDOWS: usize = 3;
+pub const SEED_JUDGE_WINDOWS: usize = 4;
 
-/// A seed is dropped when the median rate of the first [`SEED_JUDGE_WINDOWS`] measured windows is
-/// beyond this (µs/s = ppm off the seed): the rate at which the servo leaves PROD for ACQ. A seed
-/// within it is at least as close as the cold start's 0 for any oscillator the fleet runs (they
-/// are tens of ppm off), and the servo corrects the rest from there.
+/// A seed is dropped when the oscillator's mean rate against it over the first
+/// [`SEED_JUDGE_WINDOWS`] measured windows is beyond this (µs/s = ppm off the seed): the rate at
+/// which the servo leaves PROD for ACQ. A disagreement this large means the seed belongs to
+/// another oscillator (a moved disk, new hardware), not to a warmer or colder one; the servo then
+/// learns from 0 as a cold start does. A smaller error is kept and corrected by the servo from the
+/// seed.
 pub const SEED_REJECT_RATE_PPM: f64 = 20.0;
 
 /// The saved record.
@@ -144,35 +146,44 @@ pub fn save(path: &Path, record: &DriftRecord) -> std::io::Result<Option<std::io
 /// The verdict on a seed after [`SEED_JUDGE_WINDOWS`] measured windows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SeedVerdict {
-    /// The windows agree with the seed: their median rate (ppm off the seed).
-    Accepted { median_rate_ppm: f64 },
-    /// They do not: their median rate, beyond [`SEED_REJECT_RATE_PPM`].
-    Rejected { median_rate_ppm: f64 },
+    /// The windows agree with the seed: their mean rate against it (ppm).
+    Accepted { mean_rate_ppm: f64 },
+    /// They do not: their mean rate against it, beyond [`SEED_REJECT_RATE_PPM`].
+    Rejected { mean_rate_ppm: f64 },
 }
 
 /// Judges a seed on the first measured windows' rates against the seed (µs/s = ppm: what the
-/// oscillator shows with the seed alone as its word). The median of [`SEED_JUDGE_WINDOWS`] is
-/// robust to one spike either way.
+/// oscillator shows with the seed alone as its word), weighted by each window's length. Each
+/// window's rate is (its offset − the previous window's) / dt, so the weighted mean telescopes to
+/// the offset's slope over the whole span: only the first and the last window's jitter remain,
+/// divided by the span (2 s), and a spike inside the span cancels out. A per-window median of
+/// three would keep each window's own jitter (on a Windows box tens of µs/s per window).
 #[derive(Clone, Debug, Default)]
 pub struct SeedJudge {
-    rates: Vec<f64>,
+    windows: usize,
+    weighted_sum: f64,
+    span_s: f64,
 }
 
 impl SeedJudge {
-    /// A measured window's rate against the seed; `Some` once the judge has its windows (then it
-    /// is done).
-    pub fn on_measured(&mut self, rate_off_seed_ppm: f64) -> Option<SeedVerdict> {
-        self.rates.push(rate_off_seed_ppm);
-        if self.rates.len() < SEED_JUDGE_WINDOWS {
+    /// A measured window's rate against the seed and its length; `Some` once the judge has its
+    /// windows (then it is done).
+    pub fn on_measured(&mut self, rate_off_seed_ppm: f64, dt_s: f64) -> Option<SeedVerdict> {
+        self.windows += 1;
+        self.weighted_sum += rate_off_seed_ppm * dt_s;
+        self.span_s += dt_s;
+        if self.windows < SEED_JUDGE_WINDOWS {
             return None;
         }
-        let mut sorted = self.rates.clone();
-        sorted.sort_by(|a, b| a.total_cmp(b));
-        let median_rate_ppm = sorted[sorted.len() / 2];
-        Some(if median_rate_ppm.abs() > SEED_REJECT_RATE_PPM {
-            SeedVerdict::Rejected { median_rate_ppm }
+        let mean_rate_ppm = if self.span_s > 0.0 {
+            self.weighted_sum / self.span_s
         } else {
-            SeedVerdict::Accepted { median_rate_ppm }
+            0.0
+        };
+        Some(if mean_rate_ppm.abs() > SEED_REJECT_RATE_PPM {
+            SeedVerdict::Rejected { mean_rate_ppm }
+        } else {
+            SeedVerdict::Accepted { mean_rate_ppm }
         })
     }
 }

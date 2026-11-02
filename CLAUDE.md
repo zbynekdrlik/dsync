@@ -101,6 +101,11 @@ on either platform skips `publish` — no release with a missing asset).
   `.claude/rules/clock-discipline-and-testing.md` (auto-loads on
   `src/ptp_phase_lock.rs` / `src/date_offset.rs` / `src/time_server.rs` / their `tests.rs` /
   `tests/two_clock_bench.rs` / `tests/simulation_e2e.rs`)
+- Cold-boot acquisition + the drift file (#142, v1.22 — a window without a previous offset is not a
+  measurement; `drift.json` saved only while LOCKED, the seed judged against the SEED itself on the
+  first 4 measured windows; ctrlc `termination` so a systemd stop runs the shutdown save) →
+  `.claude/rules/clock-discipline-and-testing.md` (auto-loads on `src/drift_file.rs` /
+  `src/controller/freq_seed.rs`)
 - Phase-slew PI servo (#97, LEGACY discipline only since #117 — the feed-forward decoupling sign invariant, the deadbeat gain cap for
   the client's slow cadence, the I-deadband, verify-by-simulation, the canary re-tighten proof) →
   `.claude/rules/phase-slew-servo.md` (auto-loads on `src/phase_slew.rs`)

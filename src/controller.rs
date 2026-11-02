@@ -2651,15 +2651,21 @@ where
             );
         }
 
-        if measured {
-            // dantesync#142: a seeded start is judged on its first measured windows (before the
-            // integrator step below, so a dropped seed learns from 0 already in this window).
-            self.judge_freq_seed(raw_rate_ppm);
-        }
+        // dantesync#142: a seeded start is judged on its first measured windows (before the
+        // integrator step below, so a dropped seed learns from 0 already in this window; its rate
+        // is then rebased to a word of 0).
+        let raw_rate_ppm = if measured {
+            raw_rate_ppm - self.judge_freq_seed(raw_rate_ppm, dt_secs)
+        } else {
+            raw_rate_ppm
+        };
 
         let rate_ppm = if measured {
             self.measure_servo_rate(raw_rate_ppm)
         } else {
+            // Intended: the unmeasured window keeps the last smoothed rate for its P term (a
+            // reset is a step or an outage, not evidence that the rate went to 0). Once the phase
+            // lock is engaged it sets the word anyway.
             self.smoothed_rate_ppm
         };
         let abs_rate = rate_ppm.abs();

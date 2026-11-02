@@ -1,16 +1,18 @@
 //! dantesync#142 — closed-loop simulation of a cold start on iemmixer's gen3 oscillator (the
 //! servo learned +33.3 ppm at 47.8 s and +35.7 ppm at 78.3 s on v1.20.0, LOCK ~86 s after boot).
 //!
-//! The world: the window offset moves by (natural + word) µs per second, the word being whatever
-//! the controller last wrote to the clock (closed loop, `.claude/rules/clock-discipline-and-
-//! testing.md`), plus a seeded per-window jitter. A window is 4 Syncs at 8 Hz = 0.5 s; its time
-//! base is set by hand (`last_offset_time`), so the run takes no wall time. Window 1 is the first
-//! window after "Sync established" (the warmup is before it).
+//! The world: the offset moves by (natural + word) µs per second, the word being whatever the
+//! controller last wrote to the clock (closed loop, `.claude/rules/clock-discipline-and-
+//! testing.md`). A window is 4 Syncs at 8 Hz = 0.5 s, each sample with seeded jitter, the word
+//! held through the window (it changes at the window's end, as in the controller) and the
+//! window's offset the controller's median (`sorted[len / 2]`), which sits mid-window. The
+//! window's time base is set by hand (`last_offset_time`), so a run takes no wall time. Window 1
+//! is the first window after "Sync established" (the warmup is before it).
 //!
 //! Measured on this model (printed by `cargo test --lib freq_seed::sim_tests -- --nocapture`;
-//! quoted in the PR): a good seed locks within a few windows, a seed 50 ppm off is rejected at the
-//! 3rd measured window and then learns like the cold start, and the cold start is unchanged
-//! apart from the first window no longer counting.
+//! quoted in the PR). The model's cold start locks in ~33 s against ~70 s after "Sync
+//! established" on the rig (its jitter and the oscillator are idealized): read the RELATIVE
+//! numbers here, the rig's boot log for the absolute one.
 
 use super::super::*;
 use crate::clock::MockSystemClock;
@@ -23,8 +25,11 @@ type Ctl = PtpController<MockSystemClock, MockPtpNetwork, MockNtpSource>;
 const NATURAL_PPM: f64 = -35.0;
 const LEARNED_PPM: f64 = -NATURAL_PPM;
 const WINDOW_S: f64 = 0.5;
-/// Per-window jitter of the median offset (µs, 1 σ): a Linux kernel-timestamped box.
-const JITTER_US: f64 = 1.0;
+const SAMPLES: usize = 4;
+/// Per-sample timestamp jitter (µs, 1 σ): a Linux kernel-timestamped box.
+const LINUX_JITTER_US: f64 = 1.0;
+/// … and a Windows Npcap box (a pessimistic per-sample figure; never measured on the rig).
+const WINDOWS_JITTER_US: f64 = 30.0;
 const MAX_WINDOWS: usize = 600;
 
 struct Run {
@@ -34,7 +39,8 @@ struct Run {
     prod_entries: Vec<usize>,
     /// The windows at which it fell back from PROD to ACQ.
     acq_returns: Vec<usize>,
-    /// The integrator right after the seed was judged (window `SEED_JUDGE_WINDOWS + 1`).
+    /// The integrator after the seed was judged and one more window (window
+    /// `SEED_JUDGE_WINDOWS + 2`): the direction the learn went from 0.
     baseline_after_judge: f64,
     source: Option<String>,
     final_baseline: f64,
@@ -64,7 +70,7 @@ impl Noise {
 }
 
 /// Run the closed loop from a fresh controller; `seed` = the drift file's frequency (or none).
-fn run(seed: Option<f64>, noise_seed: u64) -> Run {
+fn run(seed: Option<f64>, noise_seed: u64, jitter_us: f64) -> Run {
     let word = Arc::new(std::sync::Mutex::new(0.0_f64));
     let w = word.clone();
     let mut clock = MockSystemClock::new();
@@ -104,13 +110,19 @@ fn run(seed: Option<f64>, noise_seed: u64) -> Run {
         final_baseline: 0.0,
     };
     let mut prod = false;
+    let dt_sample = WINDOW_S / SAMPLES as f64;
     for n in 1..=MAX_WINDOWS {
         let applied = *word.lock().expect("word");
-        true_offset_us += (NATURAL_PPM + applied) * WINDOW_S;
+        let mut samples = [0.0_f64; SAMPLES];
+        for sample in samples.iter_mut() {
+            true_offset_us += (NATURAL_PPM + applied) * dt_sample;
+            *sample = true_offset_us + jitter_us * noise.gauss();
+        }
+        samples.sort_by(|a, b| a.total_cmp(b));
         if c.last_offset_us.is_some() {
             c.last_offset_time = Some(Instant::now() - Duration::from_secs_f64(WINDOW_S));
         }
-        c.apply_self_tuning_servo(true_offset_us + JITTER_US * noise.gauss());
+        c.apply_self_tuning_servo(samples[SAMPLES / 2]);
         if c.in_production_mode && !prod {
             out.prod_entries.push(n);
         }
@@ -118,7 +130,7 @@ fn run(seed: Option<f64>, noise_seed: u64) -> Run {
             out.acq_returns.push(n);
         }
         prod = c.in_production_mode;
-        if n == SEED_JUDGE_WINDOWS + 1 {
+        if n == SEED_JUDGE_WINDOWS + 2 {
             out.baseline_after_judge = c.drift_baseline_ppm;
         }
         if c.is_locked && out.lock_window.is_none() {
@@ -137,23 +149,26 @@ const SEEDS: [u64; 4] = [
     0x5EED_0142_0004_2026,
 ];
 
+fn print(label: &str, r: &Run) {
+    println!(
+        "[#142 sim] {label}: LOCK at window {} = {:.1} s after Sync established; PROD at {:?}, \
+         back to ACQ at {:?}; integrator after the judge {:+.2}ppm; source {:?}",
+        r.lock_window.unwrap_or(0),
+        r.lock_window.unwrap_or(0) as f64 * WINDOW_S,
+        r.prod_entries,
+        r.acq_returns,
+        r.baseline_after_judge,
+        r.source
+    );
+}
+
 #[test]
 fn a_good_seed_locks_the_gen3_oscillator_within_ten_seconds_of_sync_established_142() {
     // A seed within 2 ppm of the oscillator (e.g. a warmer or colder box than when it was saved).
     for good in [LEARNED_PPM, LEARNED_PPM - 2.0, LEARNED_PPM + 2.0] {
         for &s in &SEEDS {
-            let r = run(Some(good), s);
-            println!(
-                "[#142 sim] seed {:+.1}ppm (oscillator needs {:+.1}): LOCK at window {} = {:.1} s \
-                 after Sync established; PROD at {:?}, back to ACQ at {:?}; source {:?}",
-                good,
-                LEARNED_PPM,
-                r.lock_window.unwrap_or(0),
-                r.lock_window.unwrap_or(0) as f64 * WINDOW_S,
-                r.prod_entries,
-                r.acq_returns,
-                r.source
-            );
+            let r = run(Some(good), s, LINUX_JITTER_US);
+            print(&format!("seed {good:+.1}ppm (needs {LEARNED_PPM:+.1})"), &r);
             assert_eq!(r.source.as_deref(), Some("file"), "the seed is kept");
             assert!(r.lock_s() <= 10.0, "LOCK at {:.1} s", r.lock_s());
             assert!(
@@ -170,32 +185,100 @@ fn a_good_seed_locks_the_gen3_oscillator_within_ten_seconds_of_sync_established_
     }
 }
 
+/// 40 fixed noise seeds for the rates below (a statistic needs more than one noise sample).
+fn many_seeds() -> impl Iterator<Item = u64> {
+    (1..=40u64).map(|k| 0x5EED_0142_0000_2026 ^ k.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+}
+
+#[test]
+fn a_good_seed_is_kept_under_windows_level_jitter_142() {
+    // At 30 µs per sample the judge's 2 s slope has ~13 µs/s of noise, so a seed 2 ppm off is
+    // occasionally dropped: the cost is the cold learn (the behaviour before 1.22), never a wrong
+    // seed. A seed from another oscillator is still dropped every time.
+    for good in [LEARNED_PPM - 2.0, LEARNED_PPM + 2.0] {
+        let runs: Vec<Run> = many_seeds()
+            .map(|s| run(Some(good), s, WINDOWS_JITTER_US))
+            .collect();
+        let kept = runs
+            .iter()
+            .filter(|r| r.source.as_deref() == Some("file"))
+            .count();
+        let mut lock_s: Vec<f64> = runs
+            .iter()
+            .filter(|r| r.source.as_deref() == Some("file"))
+            .map(Run::lock_s)
+            .collect();
+        lock_s.sort_by(|a, b| a.total_cmp(b));
+        println!(
+            "[#142 sim] seed {good:+.1}ppm, {WINDOWS_JITTER_US} us sample jitter: kept in {kept} of \
+             {} runs; LOCK (kept) median {:.1} s, max {:.1} s",
+            runs.len(),
+            lock_s[lock_s.len() / 2],
+            lock_s[lock_s.len() - 1]
+        );
+        assert!(
+            kept * 10 >= runs.len() * 8,
+            "kept in {kept} of {}",
+            runs.len()
+        );
+        let wrong = many_seeds()
+            .filter(|&s| {
+                run(Some(good + 50.0), s, WINDOWS_JITTER_US)
+                    .source
+                    .as_deref()
+                    .is_some_and(|src| src.starts_with("rejected: "))
+            })
+            .count();
+        assert_eq!(wrong, 40, "a seed 50 ppm off is dropped in every run");
+    }
+}
+
+#[test]
+fn the_judge_reads_the_error_against_the_seed_not_against_the_p_term_142() {
+    // The ACQ P term (0.8) pulls the word toward the oscillator after the first measured window,
+    // so the raw rate understates a wrong seed: 25 ppm off reads ~25, ~15, ~11, ... A judge on the
+    // raw rate accepts it; on the rate against the seed it does not. And a 15 ppm error (a seed
+    // closer than the cold start's 0) is kept: the window-average word does not inflate it.
+    for &s in &SEEDS {
+        for off in [25.0, -25.0] {
+            let r = run(Some(LEARNED_PPM + off), s, LINUX_JITTER_US);
+            print(&format!("seed {off:+.0}ppm off"), &r);
+            assert!(
+                r.source
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("rejected: ")),
+                "{off:+} ppm off: {:?}",
+                r.source
+            );
+        }
+        for off in [15.0, -15.0] {
+            let r = run(Some(LEARNED_PPM + off), s, LINUX_JITTER_US);
+            print(&format!("seed {off:+.0}ppm off"), &r);
+            assert_eq!(r.source.as_deref(), Some("file"), "{off:+} ppm off: kept");
+            assert!((r.final_baseline - LEARNED_PPM).abs() < 1.0);
+        }
+    }
+}
+
 #[test]
 fn a_seed_fifty_ppm_off_is_dropped_and_the_cold_learn_runs_142() {
     for wrong in [LEARNED_PPM + 50.0, LEARNED_PPM - 50.0] {
         for &s in &SEEDS {
-            let seeded = run(Some(wrong), s);
-            let cold = run(None, s);
+            let seeded = run(Some(wrong), s, LINUX_JITTER_US);
+            let cold = run(None, s, LINUX_JITTER_US);
+            print(&format!("seed {wrong:+.1}ppm (50 off)"), &seeded);
             println!(
-                "[#142 sim] seed {:+.1}ppm (50 off): {:?}; integrator after the judge {:+.2}ppm; \
-                 LOCK at {:.1} s (the cold start: {:.1} s)",
-                wrong,
-                seeded.source,
-                seeded.baseline_after_judge,
-                seeded.lock_s(),
+                "[#142 sim]   ... the cold start with the same noise: LOCK at {:.1} s",
                 cold.lock_s()
             );
             let source = seeded.source.clone().expect("source");
             assert!(source.starts_with("rejected: "), "{source}");
             assert!(
-                seeded.baseline_after_judge.abs() < 5.0,
-                "the integrator went back to ~0 at the verdict (one window's step since), got \
-                 {:+.2}",
+                seeded.baseline_after_judge > 0.0 && seeded.baseline_after_judge < 10.0,
+                "learned from 0 toward the oscillator's +35 (never the seed's way): {:+.2}",
                 seeded.baseline_after_judge
             );
             assert!((seeded.final_baseline - LEARNED_PPM).abs() < 1.0);
-            // Learned from 0 like the cold start: never faster by keeping part of the wrong seed,
-            // and not slower than the cold start plus the judge's windows (and a margin).
             assert!(
                 (seeded.lock_s() - cold.lock_s()).abs() <= 10.0,
                 "rejected-seed LOCK {:.1} s vs cold {:.1} s",
@@ -209,15 +292,8 @@ fn a_seed_fifty_ppm_off_is_dropped_and_the_cold_learn_runs_142() {
 #[test]
 fn the_unseeded_cold_start_still_learns_and_locks_142() {
     for &s in &SEEDS {
-        let r = run(None, s);
-        println!(
-            "[#142 sim] no seed: LOCK at {:.1} s after Sync established; PROD at {:?}, back to \
-             ACQ at {:?}; source {:?}",
-            r.lock_s(),
-            r.prod_entries,
-            r.acq_returns,
-            r.source
-        );
+        let r = run(None, s, LINUX_JITTER_US);
+        print("no seed", &r);
         assert!(r
             .source
             .as_deref()

@@ -91,51 +91,72 @@ fn a_non_finite_frequency_is_never_written_and_the_old_record_stays_142() {
     assert_eq!(load_seed(&path, NOW, MAX), Ok(rec(35.0, NOW)));
 }
 
+/// Feed `rates` (one per window, 0.5 s each) and return the verdict of the last one.
+fn judge(rates: &[f64]) -> Option<SeedVerdict> {
+    let mut j = SeedJudge::default();
+    let mut verdict = None;
+    for (n, &r) in rates.iter().enumerate() {
+        verdict = j.on_measured(r, 0.5);
+        if n + 1 < SEED_JUDGE_WINDOWS {
+            assert_eq!(
+                verdict, None,
+                "no verdict before window {}",
+                SEED_JUDGE_WINDOWS
+            );
+        }
+    }
+    verdict
+}
+
 #[test]
 fn the_judge_waits_for_its_windows_then_accepts_a_seed_the_rates_agree_with_142() {
-    let mut j = SeedJudge::default();
-    assert_eq!(j.on_measured(1.5), None);
-    assert_eq!(j.on_measured(-0.5), None);
+    assert_eq!(SEED_JUDGE_WINDOWS, 4);
     assert_eq!(
-        j.on_measured(0.8),
-        Some(SeedVerdict::Accepted {
-            median_rate_ppm: 0.8
-        })
+        judge(&[1.5, -0.5, 0.8, 0.2]),
+        Some(SeedVerdict::Accepted { mean_rate_ppm: 0.5 })
     );
 }
 
 #[test]
-fn the_judge_drops_a_seed_the_rates_disagree_with_and_one_spike_decides_nothing_142() {
-    let mut j = SeedJudge::default();
-    j.on_measured(49.0);
-    j.on_measured(51.0);
+fn the_judge_drops_a_seed_the_rates_disagree_with_142() {
     assert_eq!(
-        j.on_measured(50.0),
+        judge(&[49.0, 51.0, 50.0, 50.0]),
         Some(SeedVerdict::Rejected {
-            median_rate_ppm: 50.0
+            mean_rate_ppm: 50.0
         })
     );
-    // One spike among good windows: accepted.
-    let mut j = SeedJudge::default();
-    j.on_measured(300.0);
-    j.on_measured(0.4);
     assert!(matches!(
-        j.on_measured(-0.2),
-        Some(SeedVerdict::Accepted { .. })
-    ));
-    // The bound itself is accepted, beyond it is not (either sign).
-    let mut j = SeedJudge::default();
-    j.on_measured(-SEED_REJECT_RATE_PPM);
-    j.on_measured(-SEED_REJECT_RATE_PPM);
-    assert!(matches!(
-        j.on_measured(-SEED_REJECT_RATE_PPM),
-        Some(SeedVerdict::Accepted { .. })
-    ));
-    let mut j = SeedJudge::default();
-    j.on_measured(-20.5);
-    j.on_measured(-20.5);
-    assert!(matches!(
-        j.on_measured(-20.5),
+        judge(&[-25.0, -26.0, -24.0, -25.0]),
         Some(SeedVerdict::Rejected { .. })
     ));
+    // The bound itself is accepted, beyond it is not.
+    assert!(matches!(
+        judge(&[20.0; 4]),
+        Some(SeedVerdict::Accepted { .. })
+    ));
+    assert!(matches!(
+        judge(&[-20.5; 4]),
+        Some(SeedVerdict::Rejected { .. })
+    ));
+}
+
+#[test]
+fn the_judge_is_the_slope_over_its_span_so_a_spike_inside_it_cancels_142() {
+    // A median offset 60 µs off in window 2 reads +120 µs/s in window 2 and −120 in window 3.
+    assert_eq!(
+        judge(&[1.0, 121.0, -119.0, 1.0]),
+        Some(SeedVerdict::Accepted { mean_rate_ppm: 1.0 })
+    );
+    // Windows of different lengths weigh by their length (the offset's slope over the span).
+    let mut j = SeedJudge::default();
+    j.on_measured(50.0, 1.5);
+    j.on_measured(0.0, 0.5);
+    j.on_measured(0.0, 0.5);
+    // 50 µs/s over 1.5 s of a 3 s span: 25 µs/s (a plain mean of the four would read 12.5).
+    assert_eq!(
+        j.on_measured(0.0, 0.5),
+        Some(SeedVerdict::Rejected {
+            mean_rate_ppm: 25.0
+        })
+    );
 }

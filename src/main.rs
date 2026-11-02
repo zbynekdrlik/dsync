@@ -902,7 +902,9 @@ fn my_service_main(_arguments: Vec<OsString>) {
 
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
-            ServiceControl::Stop => {
+            // dantesync#142: a host shutdown/reboot ends the loop like a stop, so the learned
+            // frequency is saved (Windows sends SHUTDOWN, not STOP, to a service at shutdown).
+            ServiceControl::Stop | ServiceControl::Shutdown => {
                 let _ = shutdown_tx.send(());
                 ServiceControlHandlerResult::NoError
             }
@@ -920,7 +922,7 @@ fn my_service_main(_arguments: Vec<OsString>) {
     let _ = status_handle.set_service_status(ServiceStatus {
         service_type: SERVICE_TYPE,
         current_state: ServiceState::Running,
-        controls_accepted: ServiceControlAccept::STOP,
+        controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
         exit_code: ServiceExitCode::Win32(0),
         checkpoint: 0,
         wait_hint: Duration::default(),
