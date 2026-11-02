@@ -145,6 +145,10 @@ jobs:
         run: cargo test --test '*' --verbose
         timeout-minutes: 10
 
+      # dantesync#98: the Dante gate's verdict + release check (scripts/dante_gate.py).
+      - name: Run script tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
   # ============================================================================
   # Security Audit
   # ============================================================================
@@ -379,6 +383,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # dantesync#98: a release is tagged only after a successful gate.yml run (the Dante stability
+      # gate on companion) tested this exact tree. The merge commit has a new SHA but, with master an
+      # ancestor of dev, the same tree as dev's gated head. No match = no tag; gate the tree on dev
+      # (`gh workflow run gate.yml --ref dev`) and re-run this job. See docs/dante-gate.md.
+      - name: Require a green Dante gate on this tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/dante_gate.py release-check --repo "$GITHUB_REPOSITORY" --tree "$(git rev-parse 'HEAD^{tree}')"
 
       - name: Extract version and create tag
         run: |

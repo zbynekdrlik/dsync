@@ -74,6 +74,9 @@ on either platform skips `publish` — no release with a missing asset).
 
 ## Playbook router
 
+- Dante stability gate (#98): `gate.yml` on the `companion` runner, the pass rule, and the
+  tree-hash release coupling in `auto-release`. The gate must be green on dev's tree BEFORE merging
+  to master, or the release is refused → `docs/dante-gate.md`
 - Windows-only (`#[cfg(windows)]`) code — what CI actually verifies + a free local compile-check
   without the Npcap SDK → `.claude/rules/windows-only-code.md` (auto-loads on its `paths:`)
 - Editing `.github/workflows/*.yml` — local `actionlint` validation, and why a workflow being

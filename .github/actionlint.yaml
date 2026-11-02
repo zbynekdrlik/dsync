@@ -1,0 +1,6 @@
+# actionlint config (dsync #98): custom labels of the self-hosted Dante gate runner on companion
+# (airuleset, 2026-11-02: labels dante-gate + companion, no default labels).
+self-hosted-runner:
+  labels:
+    - dante-gate
+    - companion

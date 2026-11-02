@@ -890,3 +890,15 @@ canary evidence before continuing.
   also hit `simulation_e2e::test_auto_adaptive_drift_rates` once). Follow-up PR: the scenarios run
   serially in one `#[test]` at ~1/40 of the first version's CPU.
 - Rig check is dstack's (HANDOVER: no deploy from here): gen3 cold boot, byte [41] = 1 well before 86 s.
+
+## #98 part 1 — Dante stability gate (v1.23.0, 2026-11-02)
+
+- Commits: 3cd8a16 version bump; 1cd81a2 RED (`scripts/test_dante_gate.py`, 24 tests vs an empty
+  stub); 2a73a1a GREEN (`scripts/dante_gate.py`); then `gate.yml` + the `auto-release` check + docs.
+- Decision: dstack's event words map to `dante-stack-dev clock` v0.4.33's real JSON lines (read
+  from its `--help` and a live run on dev1). Ready = `ready` turning 1, ReAnchored = non-null
+  `re_anchor_ns` or `re_anchors` > 0, Holdover = `holdover` 1. A truncated log fails.
+- Decision: the release coupling matches TREE hashes. A `--no-ff` merge commit's tree equals dev's
+  gated head. A schedule run dispatches the gate on dev, so `head_sha` is always the tested commit.
+- Build and verdict run on ubuntu-latest; companion only installs, measures and restores.
+- Part 2 (receiver heartbeat records) stays open on #98 and waits on the owner.
