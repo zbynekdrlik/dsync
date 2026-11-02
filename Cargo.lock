@@ -568,7 +568,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "dantesync"
-version = "1.24.0"
+version = "1.25.0"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -679,7 +679,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "dsync-ptp"
-version = "1.24.0"
+version = "1.25.0"
 dependencies = [
  "anyhow",
  "byteorder",
