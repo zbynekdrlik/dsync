@@ -31,7 +31,7 @@ const LINUX_JITTER_US: f64 = 1.0;
 /// … and a Windows Npcap box: a moderate and a pessimistic per-sample figure (neither measured on
 /// the rig).
 const WINDOWS_JITTER_US: [f64; 2] = [10.0, 30.0];
-const MAX_WINDOWS: usize = 200;
+const MAX_WINDOWS: usize = 120;
 
 struct Run {
     /// Window (1-based) at which LOCK was reached.
@@ -170,7 +170,6 @@ fn print(label: &str, r: &Run) {
     );
 }
 
-#[test]
 fn a_good_seed_locks_the_gen3_oscillator_within_ten_seconds_of_sync_established_142() {
     // A seed within 2 ppm of the oscillator (e.g. a warmer or colder box than when it was saved).
     for good in [LEARNED_PPM, LEARNED_PPM - 2.0, LEARNED_PPM + 2.0] {
@@ -193,54 +192,59 @@ fn a_good_seed_locks_the_gen3_oscillator_within_ten_seconds_of_sync_established_
     }
 }
 
-/// 40 fixed noise seeds for the rates below (a statistic needs more than one noise sample).
+/// [`STAT_RUNS`] fixed noise seeds for the rates below (a statistic needs more than one noise sample).
+const STAT_RUNS: usize = 20;
+
 fn many_seeds() -> impl Iterator<Item = u64> {
-    (1..=40u64).map(|k| 0x5EED_0142_0000_2026 ^ k.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+    (1..=STAT_RUNS as u64).map(|k| 0x5EED_0142_0000_2026 ^ k.wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
 
-#[test]
 fn a_good_seed_is_kept_under_windows_level_jitter_142() {
     // At 30 µs per sample the judge's 2 s slope has ~13 µs/s of noise, so a seed 2 ppm off is
     // occasionally dropped: the cost is the cold learn (the behaviour before 1.22), never a wrong
     // seed. At 10 µs it is always kept. A seed from another oscillator is dropped every time.
+    // The seed alternates 2 ppm below / above the oscillator across the runs.
+    let good = |k: usize| LEARNED_PPM + if k % 2 == 0 { -2.0 } else { 2.0 };
     for jitter in WINDOWS_JITTER_US {
-        for good in [LEARNED_PPM - 2.0, LEARNED_PPM + 2.0] {
-            let runs: Vec<Run> = many_seeds()
-                .map(|s| run_for(Some(good), s, jitter, 60))
-                .collect();
-            let kept: Vec<&Run> = runs
-                .iter()
-                .filter(|r| r.source.as_deref() == Some("file"))
-                .collect();
-            let mut lock_s: Vec<f64> = kept.iter().map(|r| r.lock_s()).collect();
-            lock_s.sort_by(|a, b| a.total_cmp(b));
-            println!(
-                "[#142 sim] seed {good:+.1}ppm, {jitter} us sample jitter: kept in {} of {} \
-                 runs; LOCK (kept) median {:.1} s, max {:.1} s",
-                kept.len(),
-                runs.len(),
-                lock_s[lock_s.len() / 2],
-                lock_s[lock_s.len() - 1]
-            );
-            if jitter <= 10.0 {
-                assert_eq!(kept.len(), runs.len(), "always kept at {jitter} us");
-            } else {
-                assert!(kept.len() * 10 >= runs.len() * 8, "kept in {}", kept.len());
-            }
-            let dropped = many_seeds()
-                .filter(|&s| {
-                    run_for(Some(good + 50.0), s, jitter, SEED_JUDGE_WINDOWS + 2)
-                        .source
-                        .as_deref()
-                        .is_some_and(|src| src.starts_with("rejected: "))
-                })
-                .count();
-            assert_eq!(dropped, 40, "a seed 50 ppm off is dropped in every run");
+        let runs: Vec<Run> = many_seeds()
+            .enumerate()
+            .map(|(k, s)| run_for(Some(good(k)), s, jitter, 60))
+            .collect();
+        let kept: Vec<&Run> = runs
+            .iter()
+            .filter(|r| r.source.as_deref() == Some("file"))
+            .collect();
+        let mut lock_s: Vec<f64> = kept.iter().map(|r| r.lock_s()).collect();
+        lock_s.sort_by(|a, b| a.total_cmp(b));
+        println!(
+            "[#142 sim] seed ±2 ppm off, {jitter} us sample jitter: kept in {} of {} runs; LOCK \
+             (kept) median {:.1} s, max {:.1} s",
+            kept.len(),
+            runs.len(),
+            lock_s[lock_s.len() / 2],
+            lock_s[lock_s.len() - 1]
+        );
+        if jitter <= 10.0 {
+            assert_eq!(kept.len(), runs.len(), "always kept at {jitter} us");
+        } else {
+            assert!(kept.len() * 10 >= runs.len() * 8, "kept in {}", kept.len());
         }
+        let dropped = many_seeds()
+            .enumerate()
+            .filter(|&(k, s)| {
+                run_for(Some(good(k) + 50.0), s, jitter, SEED_JUDGE_WINDOWS + 2)
+                    .source
+                    .as_deref()
+                    .is_some_and(|src| src.starts_with("rejected: "))
+            })
+            .count();
+        assert_eq!(
+            dropped, STAT_RUNS,
+            "a seed 50 ppm off is dropped in every run"
+        );
     }
 }
 
-#[test]
 fn the_judge_reads_the_error_against_the_seed_not_against_the_p_term_142() {
     // The ACQ P term (0.8) pulls the word toward the oscillator after the first measured window,
     // so the raw rate understates a wrong seed: 25 ppm off reads ~25, ~15, ~11, ... A judge on the
@@ -268,7 +272,6 @@ fn the_judge_reads_the_error_against_the_seed_not_against_the_p_term_142() {
     }
 }
 
-#[test]
 fn a_seed_fifty_ppm_off_is_dropped_and_the_cold_learn_runs_142() {
     for wrong in [LEARNED_PPM + 50.0, LEARNED_PPM - 50.0] {
         for &s in &SEEDS {
@@ -297,7 +300,6 @@ fn a_seed_fifty_ppm_off_is_dropped_and_the_cold_learn_runs_142() {
     }
 }
 
-#[test]
 fn the_unseeded_cold_start_still_learns_and_locks_142() {
     for &s in &SEEDS {
         let r = run(None, s, LINUX_JITTER_US);
@@ -312,4 +314,16 @@ fn the_unseeded_cold_start_still_learns_and_locks_142() {
         );
         assert!((r.final_baseline - LEARNED_PPM).abs() < 1.0);
     }
+}
+
+/// The scenarios run one after another in ONE test: run in parallel they kept several cores busy
+/// under CI's coverage instrumentation, beside the timing-sensitive tests of the same binary (the
+/// NTP-burst loop-stall bound failed on PR 143's first runs).
+#[test]
+fn closed_loop_simulation_of_the_gen3_cold_boot_142() {
+    the_unseeded_cold_start_still_learns_and_locks_142();
+    a_good_seed_locks_the_gen3_oscillator_within_ten_seconds_of_sync_established_142();
+    the_judge_reads_the_error_against_the_seed_not_against_the_p_term_142();
+    a_seed_fifty_ppm_off_is_dropped_and_the_cold_learn_runs_142();
+    a_good_seed_is_kept_under_windows_level_jitter_142();
 }

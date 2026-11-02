@@ -882,7 +882,11 @@ canary evidence before continuing.
   `drift_file::tests::*` (10), `controller::freq_seed::tests::*` (10),
   `controller::freq_seed::sim_tests::*` (5), `status::tests::the_frequency_seed_fields_are_additive_142`.
 - Sim (closed loop, the servo learns +35 ppm): seed within 2 ppm → LOCK at 3.0 s after Sync
-  established (1 µs jitter), 4-5 s median at 10 µs; 25/50 ppm off → rejected, LOCK 33.0-34.5 s
+  established (1 µs jitter), 5.0 s median at 10 µs; 25/50 ppm off → rejected, LOCK 33.5-34.5 s
   vs cold 32.5-33.5 s; 15 ppm off kept, 15-20 s. LOCK criterion and ACQ gains unchanged.
 - Review: fresh-context round 1 (0🔴 5🟡 6🔵) and round 2 (0🔴 1🟡 5🔵), every finding fixed in-branch.
+- CI: the new sims, run in parallel under tarpaulin, starved the NTP-burst loop-stall timing test
+  (424 ms / 505 ms vs 300 ms; PR 143's first run and master's first run after the merge, which
+  also hit `simulation_e2e::test_auto_adaptive_drift_rates` once). Follow-up PR: the scenarios run
+  serially in one `#[test]` at ~1/40 of the first version's CPU.
 - Rig check is dstack's (HANDOVER: no deploy from here): gen3 cold boot, byte [41] = 1 well before 86 s.

@@ -1292,10 +1292,11 @@ LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was l
   the median mid-window, the servo learns +35 ppm):** a seed within 2 ppm locks at window 6 =
   3.0 s after Sync established at 1 µs per-sample jitter (LOCK still needs 5 measured windows
   after the unmeasured first); a seed 25 or 50 ppm off is rejected after the 4th measured window
-  and locks at 33.0-34.5 s, like the cold start (32.5-33.5 s); 15 ppm off is kept and locks at
-  15-20 s. Under 10 µs per-sample jitter a 2 ppm-off seed is kept in 40 of 40 runs (LOCK median
-  4-5 s); under a pessimistic 30 µs in 33-34 of 40 (a dropped one costs the cold learn, never a
-  wrong seed) and a 50 ppm-off seed is dropped in 40 of 40
+  and locks at 33.5-34.5 s, like the cold start (32.5-33.5 s); 15 ppm off is kept and locks at
+  15-20 s. Under 10 µs per-sample jitter a 2 ppm-off seed is kept in 20 of 20 runs (LOCK median
+  5.0 s, max 9.0); under a pessimistic 30 µs in 16 of 20 (an earlier 40-run version: 33-34 of 40;
+  a dropped one costs the cold learn, never a wrong seed) and a 50 ppm-off seed is dropped in 20
+  of 20
   (`a_good_seed_is_kept_under_windows_level_jitter_142`). A one-off measurement during the work
   (the 1-value-per-window model, fix 1 reverted by hand, not a test): the gen3 signature, PROD at
   window 1, back to ACQ at window 4. The model's cold LOCK (~33 s) is
@@ -1304,5 +1305,7 @@ LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was l
 - **Keep closed-loop statistics short.** The first version ran 160 loops of 600 windows per
   jitter case; under CI's coverage instrumentation that CPU starved the NTP-burst timing test
   running beside it (`the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136`: a
-  424 ms stall vs its 300 ms bound, PR 143's first run). Each statistical run now stops where its
-  assertion is decided (`run_for`: 60 windows to a lock, 6 to a verdict), ~11x fewer windows.
+  424 ms, then 505 ms on master, vs its 300 ms bound). The scenarios now run one after another
+  in ONE `#[test]` (one core, never several), each statistical run stops where its assertion is
+  decided (`run_for`: 60 windows to a lock, 6 to a verdict), full runs are 120 windows and the
+  statistics 20 runs: 0.5 s single-threaded in debug, from ~20 s.
