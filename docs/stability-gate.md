@@ -134,6 +134,11 @@ A commit on `dev` after the gate changes the tree, so the gate must run again be
 **Gate refused or failed** (the lease, the rig, a real regression): fix it, or wait for the lease
 to be free. Then gate the tree again:
 
+- A camera-box run can take the lease in the MIDDLE of the hour (2026-11-02, run 41433998635: lease
+  taken at 12:18, the gate's `--restore` exited 3 and the run ended `cancelled`, not red). A
+  `full-path` run may also drop the lease for a minute and take it again. So wait until
+  `rig-lease.json` shows `"held": false` for about 5 minutes in a row before you dispatch.
+
 - Before the merge: `gh workflow run gate.yml --ref dev`.
 - After the merge: `gh workflow run gate.yml --ref master`. That run's `head_sha` is the merge
   commit itself. Dev may have moved on already, so a dev run might test a different tree.

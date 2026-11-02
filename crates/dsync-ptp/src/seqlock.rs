@@ -6,7 +6,8 @@
 //! while it writes, even again after, Release) and then makes it the active one (Release). A
 //! reader loads the active index (Acquire), copies that slot's words between two reads of its
 //! sequence, and retries only if that slot was written meanwhile — which needs the writer to have
-//! completed a whole write AND started the next one during the copy. So a reader that preempts
+//! completed a whole write AND started the next one during the copy — or if the active index
+//! changed since the reader loaded it (a slot rewritten but not yet published is never read). So a reader that preempts
 //! the writer mid-write (an RT audio thread at SCHED_FIFO on the writer's core) never spins on
 //! it: it reads the other, complete slot. The words are atomics, so an overlapping copy is never
 //! undefined behaviour — it is only discarded. No allocation, no lock, no OS call.
@@ -71,11 +72,25 @@ impl<const N: usize> SeqLock<N> {
     pub fn read(&self) -> [u64; N] {
         loop {
             let i = self.active.load(Ordering::Acquire);
-            if let Some(words) = self.slots[i & 1].try_read() {
+            if let Some(words) = self.try_read_at(i) {
                 return words;
             }
             std::hint::spin_loop();
         }
+    }
+
+    /// One read attempt of slot `i`, the active index this reader loaded (maybe long ago).
+    ///
+    /// The copy counts only if `i` is still the active index after it. Without that check a
+    /// reader that stalled after loading `i` — while the writer published the other slot and
+    /// then completely rewrote slot `i` without publishing it yet — returns that unpublished
+    /// write, and its next read returns the published, older one: time goes back (dsync#150 CI).
+    /// Retrying here never waits for a write in progress: the index only changes when a write has
+    /// completed. Ordering: reading a word the writer stored after its Release fence, then the
+    /// Acquire fence in [`Slot::try_read`], makes every earlier publication of `active` visible.
+    fn try_read_at(&self, i: usize) -> Option<[u64; N]> {
+        let words = self.slots[i & 1].try_read()?;
+        (self.active.load(Ordering::Acquire) == i).then_some(words)
     }
 
     /// How many writes completed.
@@ -135,6 +150,32 @@ mod tests {
         lock.slots[next].seq.fetch_add(1, Ordering::Relaxed);
         lock.slots[next].words[0].store(2, Ordering::Relaxed);
         assert_eq!(lock.read(), [1, 1], "the complete slot, no spin");
+    }
+
+    /// dsync#150 CI (Coverage, run 41468401534: "a read went back in time"): a reader that
+    /// loaded the active index, then stalled while the writer published the other slot and
+    /// completely rewrote this one (not yet published), must not return that unpublished value:
+    /// its next read returns the published, older one, so the reader would go back in time.
+    #[test]
+    fn a_stale_index_never_returns_a_complete_but_unpublished_write() {
+        let (lock, mut w) = SeqLock::new([0u64; 2]);
+        w.write([1, 1]);
+        // A reader loads this active index, then stalls.
+        let loaded = lock.active.load(Ordering::Relaxed);
+        w.write([2, 2]); // the other slot, now active
+                         // The writer completes the reader's slot with 3 and is preempted before it publishes it.
+        let slot = &lock.slots[loaded];
+        let s = slot.seq.load(Ordering::Relaxed);
+        slot.seq.store(s + 2, Ordering::Relaxed);
+        for word in &slot.words {
+            word.store(3, Ordering::Relaxed);
+        }
+        assert_eq!(
+            lock.try_read_at(loaded),
+            None,
+            "the index changed since it was loaded: retry"
+        );
+        assert_eq!(lock.read(), [2, 2], "the published write");
     }
 
     /// Every write keeps all words equal; a torn read would see two different values.

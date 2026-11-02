@@ -40,3 +40,14 @@ Under `"legacy"` it is the rate servo's lock (5 windows with |rate| < 5 µs/s), 
 
 It only means that the first PTP Sync was accepted after the warmup and PTP is not stale. It says
 nothing about the frequency or the phase: read `[41]` for that.
+
+## `[42-47]` and `[112-117]` — the grandmaster and the master (dsync #150, since 1.26.0)
+
+- `[42-47]` (every reply, DSYN and DSYX, since 1.17): the grandmaster UUID, the followed Sync's
+  `grandmasterClockUuid`. All zeros: no grandmaster heard yet.
+- `[112-117]` (DSYX only, since 1.26.0): the PTP master UUID, the `sourceUuid` of the followed
+  Sync header (`/status.ptp_source_uuid`). In a flat audio network it equals the grandmaster's;
+  behind a boundary clock it is that clock. All zeros: no Sync followed yet.
+- Every DSYX reply is 120 bytes since 1.26.0. A reply shorter than 118 bytes comes from an older
+  dsync and has no master field. The date-offset slot `[64-111]` is all zeros (version `[64]` = 0)
+  when the node has no date state.

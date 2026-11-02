@@ -22,7 +22,7 @@
 //! - `[36-39]` Frequency adjustment (PPM × 1000, signed i32)
 //! - `[40]`    Mode: 0=INIT, 1=ACQ, 2=PROD, 3=LOCK, 4=NANO, 5=NTP_ONLY
 //! - `[41]`    Is locked: 0/1 — `/status.is_locked`, see "The meaning of [41] and [62]" below
-//! - `[42-47]` Grandmaster UUID (6 bytes)
+//! - `[42-47]` Grandmaster UUID (6 bytes): the followed Sync's `grandmasterClockUuid`, zeros = none
 //! - `[48-55]` Monotonic frequency (ticks per second, u64)
 //! - `[56-59]` NTP offset (microseconds, signed i32)
 //! - `[60-61]` Accumulated phase drift since last NTP step (microseconds, signed i16)
@@ -72,6 +72,20 @@
 //!   error per poll: 60 in the poller's first minute, then 2 a minute. So upgrade the fleet's
 //!   NTP master right after the canary (`docs/release-rollout.md`, step 4).
 //!
+//! # dsync#150 — the DSYX reply is a fixed 120 bytes (since 1.26)
+//!
+//! - `[0-63]`    the base reply above, unchanged;
+//! - `[64-111]`  the date-offset extension, or 48 ZERO bytes when this node has no date state
+//!   (version byte `[64]` = 0 means "no extension", as every reader since dsync#88 decodes it);
+//! - `[112-117]` the PTP MASTER UUID: the `sourceUuid` of the last followed Sync header
+//!   (`/status.ptp_source_uuid`; the grandmaster's own port in a flat audio network, a boundary
+//!   clock otherwise). Zeros = no Sync followed yet;
+//! - `[118-119]` reserved (zero).
+//!
+//! A reader detects the master UUID by a reply length ≥ 118. Before 1.26 the DSYX reply was 64
+//! or 112 bytes. The request stays 64 bytes (the reply is under 2x of it), and a DSYN reply stays
+//! the byte-identical 64 bytes.
+//!
 //! A new client reads the extension with [`parse_reply`]; [`UdpAuthorityPoller`] polls the NTP
 //! master once per second on a background thread so the sync loop never blocks on DNS or I/O.
 
@@ -106,6 +120,16 @@ const REQUEST_SIZE: usize = 8;
 
 /// Response packet size
 const RESPONSE_SIZE: usize = 64;
+
+/// dsync#150 — size of every `"DSYX"` reply: the base, the date-extension slot, the master UUID
+/// and two reserved bytes (see the module doc).
+pub const DSYX_REPLY_SIZE: usize = 120;
+
+/// dsync#150 — where the PTP master UUID sits in a `"DSYX"` reply.
+pub const MASTER_UUID_RANGE: std::ops::Range<usize> = 112..118;
+
+const _: () = assert!(RESPONSE_SIZE + crate::date_offset::EXT_SIZE_V2 == MASTER_UUID_RANGE.start);
+const _: () = assert!(MASTER_UUID_RANGE.end + 2 == DSYX_REPLY_SIZE);
 
 /// dsync#88 — size of a `"DSYX"` request: padded to the base reply's size, so the extended
 /// reply is never much larger than the request that asked for it (no amplification).
@@ -466,15 +490,20 @@ fn date_extension_from_status(status: &SyncStatus, now_wall_ns: i64) -> Option<D
 }
 
 /// dsync#88 — the reply to a `"DSYX"` request: the unchanged 64-byte base, then the
-/// extension when this node has a date-offset state (else just the base).
+/// extension when this node has a date-offset state (else 48 zero bytes, version 0 = none), then
+/// (dsync#150) the PTP master UUID. Always [`DSYX_REPLY_SIZE`] bytes.
 fn build_response_ext(request_id: u32, status: &SyncStatus) -> Vec<u8> {
-    let mut out = build_response(request_id, status).to_vec();
+    let mut out = vec![0u8; DSYX_REPLY_SIZE];
+    out[..RESPONSE_SIZE].copy_from_slice(&build_response(request_id, status));
     let now_wall = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
         .unwrap_or(0);
     if let Some(ext) = date_extension_from_status(status, now_wall) {
-        out.extend_from_slice(&encode_extension(&ext));
+        out[RESPONSE_SIZE..MASTER_UUID_RANGE.start].copy_from_slice(&encode_extension(&ext));
+    }
+    if let Some(uuid) = status.ptp_source_uuid {
+        out[MASTER_UUID_RANGE].copy_from_slice(&uuid);
     }
     out
 }
@@ -818,5 +847,7 @@ fn get_monotonic_frequency() -> u64 {
 // TESTS
 // ============================================================================
 
+#[cfg(test)]
+mod master_uuid_tests;
 #[cfg(test)]
 mod tests;

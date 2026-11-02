@@ -192,9 +192,9 @@ gh issue comment <N> -R zbynekdrlik/dsync -F body.md
 ```
 
 `-R` makes the hook use the explicit repo directly, bypassing the ambient-cwd resolution entirely.
-**The repo was renamed `zbynekdrlik/dsync` → `zbynekdrlik/dsync` (#146 cycle): the hook names
+**Use the CURRENT repo name `zbynekdrlik/dsync` (renamed in the #146 cycle): the hook names
 its markers after the `-R` repo's NAME, and the commit gate looks for `dsync` markers, so
-`-R zbynekdrlik/dsync` (GitHub still redirects it) posts the comment but records the marker
+`-R` with the OLD name (GitHub still redirects it) posts the comment but records the marker
 under the wrong name and the commit stays blocked.** The commit gate also wants, for a
 non-trivial ticket, numbered approaches (`Approach 1 (chosen)` … `Approach 3`) and an
 `Architektúra:` line that names the structure AND the framework (or why none fits); a design
