@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-sync-snapshot.py - DanteSync Audio-Grade Sync Verification
+sync-snapshot.py - dsync Audio-Grade Sync Verification
 
-Queries all DanteSync targets via UDP Time Query API (port 31900) and displays
+Queries all dsync targets via UDP Time Query API (port 31900) and displays
 audio-meaningful synchronization metrics. Reports drift rates in samples/sec
-at the configured sample rate, with verdicts calibrated to Dante audio requirements.
+at the configured sample rate, with verdicts calibrated to audio-network requirements.
 
 The KEY metric is drift_rate (smoothed_rate_ppm) — the rate of clock error in us/s.
 A drift rate < 0.5 us/s (NANO mode) means sub-sample precision at 96kHz.
@@ -65,7 +65,7 @@ DRIFT_NANO_US = 0.5     # NANO mode entry: < 0.5 us/s
 DRIFT_LOCK_US = 5.0     # LOCK threshold: < 5 us/s
 DRIFT_PROD_US = 20.0    # PROD/ACQ boundary: < 20 us/s
 
-# dantesync#129: since 1.17 `gm_uuid` (base reply bytes 42-47) is the REAL grandmaster, not the
+# dsync#129: since 1.17 `gm_uuid` (base reply bytes 42-47) is the REAL grandmaster, not the
 # constant 00:00:00:00:01:00 every node misread before. Two ports of one clock (the video and the
 # audio VLAN) carry two UUIDs, and a mixed 1.16/1.17 fleet reports both forms, so a GM difference
 # is reported, never a verdict term.
@@ -78,7 +78,7 @@ GM_REPORT_ONLY = "report-only: two ports of one clock carry two UUIDs, issue 129
 
 @dataclass
 class TimeResponse:
-    """Complete response from DanteSync UDP Time Query."""
+    """Complete response from dsync UDP Time Query."""
     host: str
     ip: str
     system_time_ns: int
@@ -315,7 +315,7 @@ def print_brief(results: List[TimeResponse], reference: str, sample_rate: int):
     offline = [r for r in results if r.error]
     sp_us = sample_period_us(sample_rate)
 
-    print(f"DanteSync Status: {len(online)}/{len(results)} hosts online  "
+    print(f"dsync Status: {len(online)}/{len(results)} hosts online  "
           f"[{sample_rate/1000:.0f}kHz, 1 sample = {sp_us:.1f}us]")
     print()
 
@@ -401,7 +401,7 @@ def print_comprehensive(results: List[TimeResponse], reference: str, sample_rate
 
     # ── Header ──────────────────────────────────────────────────────────────
     print("=" * W)
-    print("DANTESYNC AUDIO-GRADE SYNC VERIFICATION REPORT")
+    print("DSYNC AUDIO-GRADE SYNC VERIFICATION REPORT")
     print("=" * W)
     print(f"  Query Time:    {query_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Sample Rate:   {sample_rate:,} Hz (1 sample = {sp_us:.1f} us)")
@@ -458,7 +458,7 @@ def print_comprehensive(results: List[TimeResponse], reference: str, sample_rate
     print("  Internal servo state — proves frequency synchronization independently of wall clock.")
     print("  Drift Rate:  smoothed rate of clock error (us/s). Near 0 = clocks tick at same rate.")
     print("  Freq Adj:    correction applied to system clock (PPM). +ve = clock was slow.")
-    print("  PTP Offset:  phase vs Dante grandmaster (device-uptime, NOT UTC — large values normal).")
+    print("  PTP Offset:  phase vs grandmaster (device-uptime, NOT UTC — large values normal).")
     print(f"  GM DIFF*:    this host names another grandmaster UUID than the reference ({GM_REPORT_ONLY}).")
     print("-" * W)
     hdr = (f"{'Host':<15}{'Drift (us/s)':<14}{'Freq Adj PPM':<14}"
@@ -483,7 +483,7 @@ def print_comprehensive(results: List[TimeResponse], reference: str, sample_rate
     print("TABLE 3: UTC TIME ALIGNMENT")
     print("  Wall Offset:     host system_time minus reference, measured via UDP. Includes ~1ms of")
     print("                   network round-trip noise — CANNOT verify sub-sample precision.")
-    print("  NTP Offset:      measured locally on each host (accurate). Requires DanteSync with")
+    print("  NTP Offset:      measured locally on each host (accurate). Requires dsync with")
     print("                   expanded UDP protocol; shows '--' for older versions.")
     print("  Accum Phase:     estimated UTC drift since last NTP step (resets to 0 after NTP step).")
     print("-" * W)
@@ -605,7 +605,7 @@ def print_comprehensive(results: List[TimeResponse], reference: str, sample_rate
     if all_locked and max_drift < DRIFT_NANO_US:
         print(f"  VERDICT: SAMPLE-LOCKED")
         print(f"  All {len(online)} hosts in NANO/LOCK with drift < {DRIFT_NANO_US} us/s.")
-        print(f"  Sub-sample precision at {sample_rate/1000:.0f}kHz — suitable for Dante audio.")
+        print(f"  Sub-sample precision at {sample_rate/1000:.0f}kHz — suitable for audio.")
         result = 0
     elif all_locked and max_drift < DRIFT_LOCK_US:
         print(f"  VERDICT: FREQUENCY-LOCKED")
@@ -696,7 +696,7 @@ def print_json(results: List[TimeResponse], reference: str, sample_rate: int):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DanteSync Audio-Grade Sync Verification",
+        description="dsync Audio-Grade Sync Verification",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

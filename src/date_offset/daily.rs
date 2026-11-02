@@ -1,12 +1,12 @@
-//! dantesync#119 (1.12) — the fleet date corrected by ONE coordinated step per NIGHT.
+//! dsync#119 (1.12) — the fleet date corrected by ONE coordinated step per NIGHT.
 //!
 //! Owner decision (issue 119, comment 5849932587). The 1.11 micro-corrections (a coordinated step
-//! of 500 µs every 20 s) break the Dante Virtual Soundcard on the stream box: every
+//! of 500 µs every 20 s) break the virtual soundcard on the stream box: every
 //! `NtSetSystemTime` starves its ASIO input, and OBS then ratchets its audio buffering (85 → 405
 //! ms). One step per 10 min starved nothing. The grandmaster (a PCIe card with no clock input)
 //! cannot be locked to UTC, so the fleet date has to be stepped. It is now stepped ONCE A NIGHT.
 //!
-//! - All day nothing is corrected. The fleet date runs at the Dante tick and drifts from UTC at
+//! - All day nothing is corrected. The fleet date runs at the grandmaster tick and drifts from UTC at
 //!   the grandmaster's rate (+17.6 ppm on the rig: ~1.5 s a day). Every box shares that drift, so
 //!   the boxes still agree to the µs.
 //! - In a window that opens at `daily_step_utc` (02:00 by default: 04:00 CEST / 03:00 CET, with
@@ -65,7 +65,7 @@ pub const MAX_DAILY_EMERGENCY_MS: u64 = 3_600_000;
 /// night's step.
 pub const DAILY_MIN_STEP_NS: i64 = MICRO_DEAD_BAND_NS;
 
-/// dantesync#119 (1.16) — the default nightly step quantum (ms): a whole number of frames at
+/// dsync#119 (1.16) — the default nightly step quantum (ms): a whole number of frames at
 /// 25/30/50/60 fps and of samples at 48 kHz, on a per-second grid.
 pub const DEFAULT_DAILY_STEP_QUANTUM_MS: u64 = 200;
 
@@ -158,7 +158,7 @@ pub struct DailyConfig {
     pub step_tod_ns: i64,
     /// An error beyond this is stepped at once (ns).
     pub emergency_ns: i64,
-    /// dantesync#119 (1.16): the nightly step is a whole multiple of this (ns).
+    /// dsync#119 (1.16): the nightly step is a whole multiple of this (ns).
     pub step_quantum_ns: i64,
 }
 
@@ -174,7 +174,7 @@ impl DailyConfig {
         }
     }
 
-    /// dantesync#119 (1.16) — the step quantum from a configured value (ms), by
+    /// dsync#119 (1.16) — the step quantum from a configured value (ms), by
     /// [`daily_step_quantum_ms`]: a value it refuses means the default.
     pub fn with_step_quantum_ms(mut self, ms: u64) -> Self {
         let ms = daily_step_quantum_ms(ms).unwrap_or(DEFAULT_DAILY_STEP_QUANTUM_MS);
@@ -223,7 +223,7 @@ pub enum DailyDecision {
     /// Nothing to do now.
     Idle,
     /// Inside the window with a fresh estimate: step `amount_ns`, the estimated error `error_ns`
-    /// rounded to the step quantum (dantesync#119, 1.16). The remainder stays in the fleet date.
+    /// rounded to the step quantum (dsync#119, 1.16). The remainder stays in the fleet date.
     Step { amount_ns: i64, error_ns: i64 },
     /// Inside the window, but the error is within the minimum, or rounds to no quantum at all:
     /// nothing to step tonight.
@@ -329,7 +329,7 @@ impl DailyScheduler {
                 error_ns: est.error_ns,
             };
         }
-        // dantesync#119 (1.16): a whole number of quanta, so no per-second grid changes phase.
+        // dsync#119 (1.16): a whole number of quanta, so no per-second grid changes phase.
         // The remainder stays in the fleet date and is measured again the next night.
         let amount_ns = round_to_quantum(est.error_ns, self.cfg.step_quantum_ns);
         if amount_ns == 0 {
@@ -370,7 +370,7 @@ impl DailyScheduler {
         self.last_step
     }
 
-    /// dantesync#126 — a restarted master restores the last nightly step it had announced: it is
+    /// dsync#126 — a restarted master restores the last nightly step it had announced: it is
     /// reported again, and the night it belongs to is handled (a restart inside that night's
     /// window must not decide the night a second time).
     pub fn restore_last_step(&mut self, landing_wall_ns: i64, amount_ns: i64) {

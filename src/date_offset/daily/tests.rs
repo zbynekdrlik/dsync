@@ -144,7 +144,7 @@ fn a_small_error_is_left_alone_119() {
 
 #[test]
 fn the_nightly_step_is_rounded_to_the_nearest_200_ms_ties_away_from_zero_119() {
-    // dantesync#119 follow-up (design 6028569753): the step is a whole number of 200 ms — whole
+    // dsync#119 follow-up (design 6028569753): the step is a whole number of 200 ms — whole
     // frames at 25/30/50/60 fps and whole 48 kHz samples on every per-second grid. The first two
     // are the live 6.10.2026 step (+1543.16 ms = 92.59 frames at 60 fps) and the 7.10.2026 error.
     for (error, amount) in [

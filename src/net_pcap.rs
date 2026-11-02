@@ -1,4 +1,4 @@
-//! The Windows Npcap NTP transport (dantesync#53). The PTP capture and the shared pcap helpers
+//! The Windows Npcap NTP transport (dsync#53). The PTP capture and the shared pcap helpers
 //! (device lookup, the #58 runtime guard, HostHighPrec captures) moved to the `dsync-ptp` crate
 //! (dsync#136) and are re-exported here, so `crate::net_pcap::…` paths are unchanged.
 
@@ -11,11 +11,11 @@ use std::net::{Ipv4Addr, UdpSocket};
 use std::time::{Duration, SystemTime};
 
 /// Select the Npcap device whose IPv4 subnet can actually reach
-/// `server_ip` — NOT the PTP capture interface (dantesync#53 continuation).
+/// `server_ip` — NOT the PTP capture interface (dsync#53 continuation).
 ///
 /// Confirmed live on the stream box: `PcapNtpTransport` used to inherit the
 /// PTP capture device (`find_device(interface_name)`), which fails outright
-/// on a dual-homed host where PTP (Dante) and NTP (LAN) live on different
+/// on a dual-homed host where PTP (the grandmaster) and NTP (LAN) live on different
 /// subnets — the NTP server is genuinely unreachable from that device
 /// (WSAENETUNREACH / os error 10051). This instead enumerates EVERY Npcap
 /// device's IPv4 addresses and picks the one whose subnet contains the
@@ -53,7 +53,7 @@ pub fn find_device_for_ntp_server(server_ip: Ipv4Addr) -> Result<Device> {
                 .collect();
             Err(anyhow!(
                 "No Npcap-capturable interface can reach NTP server {} -- considered: [{}] \
-                 (dantesync#53: this host may be dual-homed with PTP and NTP on separate \
+                 (dsync#53: this host may be dual-homed with PTP and NTP on separate \
                  networks)",
                 server_ip,
                 considered.join(", ")
@@ -86,7 +86,7 @@ const NTP_PORT: u16 = 123;
 /// Upper bound on one pcap-based NTP round trip. NTP checks run every
 /// 10-30s in production (`controller.rs`'s adaptive interval) — this bounds
 /// the cost of a single check so a lost request or reply can never hang the
-/// sync loop (dantesync#53's "bound the cost" requirement).
+/// sync loop (dsync#53's "bound the cost" requirement).
 const NTP_PCAP_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Kernel-timestamped NTP transport for Windows: captures t1 (our own
@@ -103,7 +103,7 @@ impl PcapNtpTransport {
     /// `server_ip` is the already-resolved NTP server address (the BPF
     /// filter needs a concrete IP, not a hostname). The capture device is
     /// selected by which interface can actually REACH `server_ip`
-    /// (`find_device_for_ntp_server`, dantesync#53 continuation) — NOT by
+    /// (`find_device_for_ntp_server`, dsync#53 continuation) — NOT by
     /// inheriting the PTP capture interface, which fails outright on a
     /// dual-homed host where PTP and NTP live on different subnets.
     pub fn new(server_ip: Ipv4Addr, dscp: &crate::dscp::DscpConfig) -> Result<Self> {
@@ -120,7 +120,7 @@ impl PcapNtpTransport {
         let socket = UdpSocket::bind((local_ip, 0))?;
         socket.connect((server_ip, NTP_PORT))?;
 
-        // dantesync#52: mark the NTP client request egress with DSCP. On Windows
+        // dsync#52: mark the NTP client request egress with DSCP. On Windows
         // the OS filters a socket-set IP_TOS (needs a QoS policy at provisioning),
         // so `crate::dscp::apply` is a logged no-op here — wired for completeness
         // and to surface the QoS guidance in the log. See `crate::dscp`.
@@ -217,7 +217,7 @@ impl PcapNtpTransport {
                                     );
                                 }
                             }
-                            // dantesync#134 re-review: the server says its clock is unsynchronized
+                            // dsync#134 re-review: the server says its clock is unsynchronized
                             // (LI = 3) — no reply will be usable; stop now instead of waiting out
                             // the timeout (5 samples would block the loop ~2.5 s).
                             Err(e) if is_unsynchronized_server_reply(payload) => {

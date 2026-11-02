@@ -1,4 +1,4 @@
-//! dantesync#146 — a closed-loop simulation of the WHOLE controller under the phase lock: the rate
+//! dsync#146 — a closed-loop simulation of the WHOLE controller under the phase lock: the rate
 //! servo's acquisition, the phase lock's engagement, the reported lock (`/status.is_locked`, DSYX
 //! [41]) and its phase error `e`, through a cold or seeded boot, a coordinated date step and a
 //! grandmaster frequency step.
@@ -10,7 +10,7 @@
 //! `t2 − t1` (ns), exactly the pair `process_settled_sync` hands over. A wall step moves the
 //! offset by the step and runs the controller's real step path (`apply_date_step`); its 2 s grace
 //! is modelled by not feeding the next 4 windows. The window's time base is set by hand
-//! (`last_offset_time`, `pending_t1_ns`), so a run takes no wall time.
+//! (`servo_window_after`, `pending_t1_ns`), so a run takes no wall time.
 
 use super::super::*;
 use crate::clock::MockSystemClock;
@@ -148,12 +148,9 @@ impl Sim {
     pub(super) fn window(&mut self) -> Obs {
         self.n += 1;
         let median_us = self.advance();
-        if self.c.rate.last_offset_us.is_some() {
-            self.c.rate.last_offset_time = Some(Instant::now() - Duration::from_secs_f64(WINDOW_S));
-        }
         self.c.date_sync.pending_median_ns = Some(BASE_NS + (median_us * 1_000.0).round() as i64);
         self.c.date_sync.pending_t1_ns = self.t1_ns;
-        self.c.apply_self_tuning_servo(median_us);
+        self.c.servo_window_after(median_us, WINDOW_S);
         let obs = self.observe();
         self.log.push(obs);
         obs

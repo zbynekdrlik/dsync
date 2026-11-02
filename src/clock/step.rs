@@ -1,4 +1,4 @@
-//! dantesync#119 (1.11.1) — the STEP LAW: move the wall by exactly the amount asked for.
+//! dsync#119 (1.11.1) — the STEP LAW: move the wall by exactly the amount asked for.
 //!
 //! # Why a step must be exact
 //!
@@ -6,9 +6,9 @@
 //! moves the wall AND `D` by the requested amount (`PhaseLockCore::note_step`), so an exact step
 //! is invisible to the loop. A step that lands SHORT by `s` leaves `e = −s` behind, and the phase
 //! lock pays it back through the frequency word — at `K_P = 0.02 ppm/µs`, 250 µs is 5 ppm of rate
-//! away from the Dante tick. With the fleet date moved in micro-corrections every 20 s (1.11.0)
+//! away from the grandmaster tick. With the fleet date moved in micro-corrections every 20 s (1.11.0)
 //! that rate is never clean: the Windows media clocks that follow the adjustment rate leave the
-//! Dante tick (camera-box#1372, measured on stream: `e` −170 … −860 µs after every +500 µs step,
+//! grandmaster tick (camera-box#1372, measured on stream: `e` −170 … −860 µs after every +500 µs step,
 //! the word +8 … +13 ppm off its −4.6 ppm baseline).
 //!
 //! # Why a read-modify-write step was not exact

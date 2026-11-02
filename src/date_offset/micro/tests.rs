@@ -1,4 +1,4 @@
-//! dantesync#119 follow-up — the micro-correction decision, driven CLOSED-LOOP: a simulated fleet
+//! dsync#119 follow-up — the micro-correction decision, driven CLOSED-LOOP: a simulated fleet
 //! line whose UTC error drifts, is read every 10 s with noise, and moves by exactly the increments
 //! the scheduler decides (at their instant: a step 10 s after the decision, a slew from there at
 //! 100 ppm). A constant input would never exercise the estimate's memory (see the rule

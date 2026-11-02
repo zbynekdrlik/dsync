@@ -1,4 +1,4 @@
-//! dantesync#119 — the controller wiring of the coordinated date slew: no backward step, the rate
+//! dsync#119 — the controller wiring of the coordinated date slew: no backward step, the rate
 //! term inside the one frequency word and switched from the loop, every PTP sample de-slewed, the
 //! fold, the master's catch-up and what `/status` publishes. Reuses the `date_sync` test helpers.
 
@@ -12,7 +12,7 @@ use crate::date_offset::{DateSlew, SlewSpec};
 use crate::traits::{MockNtpSource, MockPtpNetwork};
 
 // ========================================================================
-// dantesync#119 — A BACKWARD CORRECTION IS A COORDINATED SLEW
+// dsync#119 — A BACKWARD CORRECTION IS A COORDINATED SLEW
 // ========================================================================
 //
 // The slew's law (the direction decision, the schedule, the follower's hold / join / fold) is
@@ -51,7 +51,7 @@ fn capturing_anchored_controller(
     let d = wall_now_ns() - PL_PTP_NOW_NS;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     assert_eq!(c.date_sync.core.anchor_ns(), Some(d));
     (c, d, captured)
 }
@@ -197,7 +197,7 @@ fn a_running_slew_is_one_rate_term_in_the_one_frequency_word_and_is_deslewed_119
     // lock's own word plus the −100 ppm rate term — composed, one write.
     c.date_sync.pending_median_ns = Some(anchor);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + 500_000_000;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     let pi = c.date_sync.core.last_freq_ppm();
     let applied = *words.lock().unwrap().last().unwrap();
     assert!(
@@ -390,7 +390,7 @@ fn failing_clock_controller() -> (
     let d = wall_now_ns() - PL_PTP_NOW_NS;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     let pi = c.applied_freq_ppm;
     (c, d, pi, captured, fail_next)
 }

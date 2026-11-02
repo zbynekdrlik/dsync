@@ -7,7 +7,7 @@ contract (`docs/HANDOVER.md`). The same values are `/status.is_locked` and `/sta
 
 ## `[41]` — locked (dsync #146, since 1.23.0)
 
-`[41]` = 1 means the clock is safe for a 250 µs Dante flow. dstack gates its media-clock ready on
+`[41]` = 1 means the clock is safe for a 250 µs audio flow. dstack gates its media-clock ready on
 this byte alone; while the stack runs, `[41]` = 0 is a holdover (not a mute), and before its first
 ready the stack holds its TX back.
 

@@ -1,4 +1,4 @@
-//! dantesync#116 — loading `config.json` never destroys it (the 13.9.2026 strih incident: a BOM
+//! dsync#116 — loading `config.json` never destroys it (the 13.9.2026 strih incident: a BOM
 //! write made the parse fail and the daemon overwrote the master's config with the defaults).
 
 use super::*;
@@ -47,8 +47,8 @@ fn assert_is_master(cfg: &Config) {
 #[test]
 fn the_last_good_copy_sits_beside_the_config_116() {
     assert_eq!(
-        last_good_path(Path::new("/etc/dantesync/config.json")),
-        PathBuf::from("/etc/dantesync/config.json.last-good")
+        last_good_path(Path::new("/etc/dsync/config.json")),
+        PathBuf::from("/etc/dsync/config.json.last-good")
     );
 }
 

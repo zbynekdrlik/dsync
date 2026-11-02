@@ -25,10 +25,13 @@
 //!
 //! # Time
 //!
-//! The servo is generic over its time stamp ([`ServoTime`]): the service passes `Instant`s (its
-//! arithmetic is exactly what it was inside the controller), the in-process follower passes the
-//! raw monotonic receive stamp of the window ([`MonoNs`]), so a simulation drives it
-//! deterministically.
+//! The servo is generic over its time stamp ([`ServoTime`]). The window's span divides an offset
+//! delta measured in PTP time, so it is measured from the window's own packets, never from when
+//! the window happens to be processed: the service passes the grandmaster time of the window's
+//! last Sync ([`GmNs`], since 1.25: before, `Instant::now()` at processing, which made the
+//! simulations' rate depend on wall time — every simulated span was under 0.1 s, and a pause put a
+//! simulated offset over a real second), the in-process follower passes the raw monotonic receive
+//! stamp of the window ([`MonoNs`]). Either way a simulation drives it deterministically.
 
 use crate::spike_filter::{FilterMode, JitterEstimator, SpikeFilter};
 use log::{debug, info};
@@ -79,6 +82,18 @@ pub trait ServoTime: Copy {
 impl ServoTime for Instant {
     fn secs_since(self, earlier: Self) -> f64 {
         self.duration_since(earlier).as_secs_f64()
+    }
+}
+
+/// The grandmaster's time of a window's last Sync in ns (t1, the service's time base): the time
+/// the window's offsets are in. A grandmaster whose time goes backwards (a restart, another GM)
+/// gives a span of 0, which carries no measurement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GmNs(pub i64);
+
+impl ServoTime for GmNs {
+    fn secs_since(self, earlier: Self) -> f64 {
+        (self.0.saturating_sub(earlier.0)).max(0) as f64 / 1e9
     }
 }
 

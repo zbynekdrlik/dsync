@@ -1,5 +1,5 @@
-//! dantesync#119 (1.11.1) — the bench's WINDOWS boxes: the production step law
-//! (`dantesync::clock::step::step_wall`) against a model of the Windows clock, PTP samples stamped
+//! dsync#119 (1.11.1) — the bench's WINDOWS boxes: the production step law
+//! (`dsync::clock::step::step_wall`) against a model of the Windows clock, PTP samples stamped
 //! by that stepped clock, and the scenario that proves a date micro-step every 20 s never moves the
 //! rate servo.
 //!
@@ -19,7 +19,7 @@
 //!   2 s post-step grace drops such windows, and the no-grace scenario proves the law without it).
 
 use super::*;
-use dantesync::clock::step::{step_wall, ClockReading, StepLead, StepOps, STEP_TOLERANCE_NS};
+use dsync::clock::step::{step_wall, ClockReading, StepLead, StepOps, STEP_TOLERANCE_NS};
 
 /// The Windows clock interrupt with a raised timer resolution (the rig's media PCs).
 pub(super) const TICK_NS: i64 = 500 * US;

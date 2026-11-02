@@ -1,11 +1,11 @@
-# DanteSync
+# dsync
 
-A high-precision PTP (Precision Time Protocol) synchronization tool optimized for Dante Audio networks, written in Rust.
+A high-precision PTP (Precision Time Protocol) synchronization tool optimized for audio networks, written in Rust.
 
 ## Features
 
 ### Core Sync
-- **PTPv1 Support:** Syncs with Dante Grandmasters (PTPv1/UDP 319/320)
+- **PTPv1 Support:** Syncs with grandmasters (PTPv1/UDP 319/320)
 - **Hybrid Mode:** Uses NTP for UTC alignment + PTP for microsecond-precision frequency adjustment
 - **Cross-Platform:** Runs on Linux and Windows as a system service
 - **Rate-Based Servo:** Adaptive frequency control targeting <5µs/s drift rate
@@ -22,11 +22,11 @@ A high-precision PTP (Precision Time Protocol) synchronization tool optimized fo
   (PTP lost), red = the service does not answer (never a stale green)
 - **Menu:** status, mode and PTP master lines (read-only) plus Quit
 - **Source:** polls the daemon's `http://127.0.0.1:8898/status` once a second (the port from
-  `http_status.port` in `/etc/dantesync/config.json`; `http_status.enabled` must stay on, the
+  `http_status.port` in `/etc/dsync/config.json`; `http_status.enabled` must stay on, the
   default); one instance per user
-- **Run:** `dantesync-tray` (release asset `dantesync-tray-linux-amd64`) inside an X session whose
+- **Run:** `dsync-tray` (release asset `dsync-tray-linux-amd64`) inside an X session whose
   panel has a system tray (e.g. tint2). Runtime packages: `libgtk-3-0`,
-  `libayatana-appindicator3-1`, `libxdo3`. The NO DANTE CLOCK alarm is notified by the daemon
+  `libayatana-appindicator3-1`, `libxdo3`. The NO PTP CLOCK alarm is notified by the daemon
   itself (`notify-send`), so the Linux tray shows no notifications.
 
 ## Library: an in-process PTPv1 follower (`dsync-ptp`)
@@ -60,7 +60,7 @@ let state = clock.state(); // locked (DSYX [41]), holdover, gm_uuid, date_offset
 
 ### Linux
 ```bash
-curl -sSL https://raw.githubusercontent.com/zbynekdrlik/dantesync/master/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/zbynekdrlik/dsync/master/install.sh | sudo bash
 ```
 
 ### Windows
@@ -68,19 +68,19 @@ curl -sSL https://raw.githubusercontent.com/zbynekdrlik/dantesync/master/install
 2. Open PowerShell as **Administrator**
 3. Run:
 ```powershell
-irm https://raw.githubusercontent.com/zbynekdrlik/dantesync/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/zbynekdrlik/dsync/master/install.ps1 | iex
 ```
 
 ## Uninstall
 
 ### Windows
 ```powershell
-irm https://raw.githubusercontent.com/zbynekdrlik/dantesync/master/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/zbynekdrlik/dsync/master/uninstall.ps1 | iex
 ```
 
 ## Usage (Manual)
 ```bash
-dantesync [OPTIONS]
+dsync [OPTIONS]
 ```
 - `--interface <NAME>`: Bind to specific interface (e.g., `eth0`)
 - `--ntp-server <IP>`: NTP server for initial sync (default: `10.77.8.2`)
@@ -92,7 +92,7 @@ dantesync [OPTIONS]
 cargo build --release
 ```
 
-The tray needs the `tray` feature: `cargo build --release --features tray --bin dantesync-tray`
+The tray needs the `tray` feature: `cargo build --release --features tray --bin dsync-tray`
 (on Linux with `libgtk-3-dev libayatana-appindicator3-dev libxdo-dev` installed). The daemon is
 built without it and never links gtk.
 
@@ -103,12 +103,16 @@ built without it and never links gtk.
 ## Configuration
 
 Config files:
-- Linux: `/etc/dantesync/config.json`
-- Windows: `C:\ProgramData\DanteSync\config.json`
+- Linux: `/etc/dsync/config.json`
+- Windows: `C:\ProgramData\dsync\config.json`
+
+Since 1.25 (#147) the state dir is `/etc/dsync` (`C:\ProgramData\dsync`). A box installed before
+1.25 keeps its old state dir in place until a deployer renames it; `/status.state_dir` names the one
+in use (`src/state_dir.rs`).
 
 Log files:
-- Linux: `/var/log/dantesync/dantesync.log`
-- Windows: `C:\ProgramData\DanteSync\dantesync.log`
+- Linux: `/var/log/dsync/dsync.log`
+- Windows: `C:\ProgramData\dsync\dsync.log`
 
 ## License
 MIT

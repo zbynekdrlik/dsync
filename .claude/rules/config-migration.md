@@ -4,6 +4,8 @@ paths:
   - "src/config.rs"
   - "src/config/file.rs"
   - "src/config/file/tests.rs"
+  - "src/state_dir.rs"
+  - "src/state_dir/tests.rs"
 ---
 
 # Adding a config key — migration safety
@@ -84,3 +86,17 @@ that feeds the migration a bool, a string, a number and an array.
   (`system.interface`, #131) a non-string must FAIL the parse instead: the last-good config then
   runs with the alarm, where a lenient "unset" would silently bring back the incident the key
   exists for.
+
+## The state dir is resolved, never hard-coded (#147, 1.25)
+
+`src/state_dir.rs` picks the directory once per process (`main.rs`'s `OnceLock`): `/etc/dsync`
+(`C:\ProgramData\dsync`) when it exists, else the pre-1.25 dir IN PLACE, else it creates the new
+one. `config.json` (+ `last-good`), `date-offset.json`, `drift.json` and the Windows log all derive
+from it; `/status.state_dir` and the `[State] state dir …` line say which one runs.
+
+- Never copy state between the two dirs: a second `drift.json` would seed the stability gate's
+  `--cold` run, which moves aside only the legacy one (ROZHODNUTÉ #147).
+- A new state file goes through `StateDir` (a new path method), never a fresh `const` path.
+- The tray only LOOKS UP the dir (`state_dir::existing_platform`); it never creates `/etc`.
+- An installer must not create an empty new dir beside a legacy one: the daemon would then pick
+  the empty new dir and lose the config (install.sh / install.ps1 follow the same rule).

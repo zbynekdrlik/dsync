@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-analyze-sync.py - Analyze DanteSync monitoring data
+analyze-sync.py - Analyze dsync monitoring data
 Usage: python analyze-sync.py sync_monitor_*.csv
 
 Generates reports showing:
@@ -40,7 +40,7 @@ def percentile(data: list, p: float) -> float:
 def analyze_sync_data(csv_file: str) -> None:
     """Analyze a sync monitoring CSV file and print report."""
     print(f"\n{'='*60}")
-    print(f"DanteSync Analysis Report: {csv_file}")
+    print(f"dsync Analysis Report: {csv_file}")
     print(f"{'='*60}\n")
 
     # Read CSV data
@@ -163,7 +163,7 @@ def analyze_sync_data(csv_file: str) -> None:
 def main():
     if len(sys.argv) < 2:
         print("Usage: python analyze-sync.py <csv_file>")
-        print("\nAnalyzes DanteSync monitoring CSV data and generates a report.")
+        print("\nAnalyzes dsync monitoring CSV data and generates a report.")
         sys.exit(1)
 
     analyze_sync_data(sys.argv[1])

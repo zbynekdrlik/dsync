@@ -1,19 +1,19 @@
-//! DSCP (DiffServ) marking for dantesync's timesync UDP sockets (#52).
+//! DSCP (DiffServ) marking for dsync's timesync UDP sockets (#52).
 //!
 //! # Why
 //!
 //! On a loaded venue LAN the switches queue best-effort UDP behind bulk
-//! traffic, so dantesync's timesync packets pick up a variable, one-sided
+//! traffic, so dsync's timesync packets pick up a variable, one-sided
 //! queue delay — the measurement-path asymmetry the 2026-07-17/18 event
 //! exhibited (masked in production by the step-agreement gate, but not
 //! removed at the source). The venue MikroTik CRS switches honour DSCP in
-//! hardware (TRUST-L3), and Dante already marks its own PTP clock traffic, so
-//! stamping dantesync's timesync UDP with a high DiffServ code point lets the
+//! hardware (TRUST-L3), and the audio devices already mark their own PTP clock traffic, so
+//! stamping dsync's timesync UDP with a high DiffServ code point lets the
 //! switches prioritise it and removes the queue-delay bias at the source.
 //!
 //! # Coverage (honest split — see the module's tests + the ticket)
 //!
-//! setsockopt(IP_TOS) can only mark a socket dantesync owns a HANDLE to:
+//! setsockopt(IP_TOS) can only mark a socket dsync owns a HANDLE to:
 //!
 //! | Path                                   | Platform | Marked?                                             |
 //! |----------------------------------------|----------|-----------------------------------------------------|
@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 
 /// Default DSCP code point for timesync traffic: **EF (46)** — the DiffServ
 /// "Expedited Forwarding" low-latency class. The ticket also proposes CS7 (56)
-/// to co-locate timesync with Dante's own PTP clock queue; the value is a
+/// to co-locate timesync with the audio network's own PTP clock queue; the value is a
 /// config key (`dscp`) so a fleet can pick either without a code change.
 pub const DEFAULT_DSCP: u8 = 46;
 

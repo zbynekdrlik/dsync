@@ -1,6 +1,6 @@
-//! Loud, repeating "NO DANTE CLOCK" alarm decision (dantesync#114).
+//! Loud, repeating "NO PTP CLOCK" alarm decision (dsync#114).
 //!
-//! The loss of the Dante PTP clock used to be SILENT and non-repeating: when the
+//! The loss of the PTPv1 clock used to be SILENT and non-repeating: when the
 //! grandmaster stopped matching the allowlist, the controller logged the NTP-only
 //! fallback exactly once and went quiet, and the tray only toasted on state
 //! transitions. A whole-fleet fall to NTP-only ran for hours unnoticed until a
@@ -8,7 +8,7 @@
 //!
 //! This is the pure, unit-testable decision layer for a loud, REPEATING alarm.
 //! While the node is genuinely PTP-locked to an allowed grandmaster it is
-//! completely silent; while the Dante clock is lost it asks for exactly one
+//! completely silent; while the grandmaster clock is lost it asks for exactly one
 //! notification per cadence (default 60 s) until re-lock, and reports LOST /
 //! REGAINED edge events so the incident window is reconstructible. The alarm
 //! itself is ALWAYS ON — the only knob is the cadence (the rig's
@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 /// `config-migration.md`.
 pub const CLOCK_ALARM_INTERVAL_FLOOR_S: u64 = 10;
 
-/// Health of the Dante PTP clock, sampled by the controller each tick.
+/// Health of the PTPv1 clock, sampled by the controller each tick.
 #[derive(Debug, Clone)]
 pub struct ClockHealth {
     /// The frequency servo is locked (`SyncStatus.is_locked`).
@@ -47,11 +47,11 @@ pub struct ClockHealth {
     pub gm_allowed: bool,
     /// No allowed PTP packet has been seen within the offline timeout.
     pub ptp_stale: bool,
-    /// dantesync#113: a configured grandmaster hostname could not be resolved.
+    /// dsync#113: a configured grandmaster hostname could not be resolved.
     /// `Some(name)` names the first unresolvable hostname; drives the alarm ACTIVE
     /// with a specific reason even before any PTP packet is seen.
     pub allowlist_unresolvable: Option<String>,
-    /// dantesync#114 review: the node is still in its INITIAL acquisition window
+    /// dsync#114 review: the node is still in its INITIAL acquisition window
     /// (never locked yet, within a grace period from start) AND packets are
     /// arriving. A not-yet-locked clock during normal boot acquisition is NOT a
     /// loss — this suppresses the "not-locked" reason so a service restart / rig
@@ -59,17 +59,17 @@ pub struct ClockHealth {
     /// (PTP stale = no packets at all, or an unresolvable hostname) still fires
     /// immediately, even during the grace, because those are real clock loss.
     pub in_acquisition: bool,
-    /// dantesync#131: the pinned PTP interface cannot be joined (`Some(reason)` names the NIC:
+    /// dsync#131: the pinned PTP interface cannot be joined (`Some(reason)` names the NIC:
     /// missing, or no IPv4). The most actionable reason there is: it comes first.
     pub interface_problem: Option<String>,
-    /// dantesync#116: the node does not run its own `config.json` (the last-good copy or the
+    /// dsync#116: the node does not run its own `config.json` (the last-good copy or the
     /// defaults run): `Some(reason)` keeps the alarm active until the file parses again, even
     /// while the clock itself is locked — the master role or the allowlist may be gone.
     pub config_problem: Option<String>,
 }
 
 impl ClockHealth {
-    /// The single most-actionable reason the Dante clock is considered LOST, or
+    /// The single most-actionable reason the grandmaster clock is considered LOST, or
     /// `None` when the node is genuinely PTP-locked to an allowed grandmaster.
     ///
     /// Precedence, most specific / actionable first: the pinned PTP interface
@@ -113,12 +113,12 @@ impl ClockHealth {
     }
 }
 
-/// A serializable snapshot of the alarm for `/status` (dantesync#114) — the
+/// A serializable snapshot of the alarm for `/status` (dsync#114) — the
 /// cross-repo contract external gates read. Additive; `active=false` / `since=None`
 /// / `reason=""` is the healthy default so an old JSON blob deserializes cleanly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ClockAlarmStatus {
-    /// True while the Dante clock is considered lost.
+    /// True while the grandmaster clock is considered lost.
     pub active: bool,
     /// Unix epoch second the current alarm episode began; `None` when inactive
     /// (an explicit `null`, never a misleading `0`).
@@ -172,7 +172,7 @@ impl ClockAlarm {
         ))
     }
 
-    /// True while the Dante clock is considered lost.
+    /// True while the grandmaster clock is considered lost.
     pub fn is_active(&self) -> bool {
         self.active
     }
@@ -233,7 +233,7 @@ impl ClockAlarm {
     }
 }
 
-/// Platform sink for the loud desktop notification (dantesync#114).
+/// Platform sink for the loud desktop notification (dsync#114).
 ///
 /// The WARN log line is emitted by [`drive`] on EVERY platform regardless of this
 /// trait; this is the ADDITIONAL desktop popup. Behind a trait so tests inject a
@@ -273,7 +273,7 @@ impl ClockAlarmNotifier for DesktopNotifier {
 }
 
 /// The title used for every clock-alarm surface.
-pub const CLOCK_ALARM_TITLE: &str = "DanteSync — NO DANTE CLOCK";
+pub const CLOCK_ALARM_TITLE: &str = "dsync — NO PTP CLOCK";
 
 /// Compose the operator-facing message. `since_epoch` is rendered to local HH:MM
 /// (via the crate's existing `chrono` dependency); an absent/unformattable epoch
@@ -282,7 +282,7 @@ pub fn compose_message(reason: &str, since_epoch: Option<u64>) -> String {
     let since_str = since_epoch
         .and_then(format_hhmm_local)
         .unwrap_or_else(|| "just now".to_string());
-    format!("NO DANTE CLOCK — {reason}, running on NTP fallback since {since_str}")
+    format!("NO PTP CLOCK — {reason}, running on NTP fallback since {since_str}")
 }
 
 fn format_hhmm_local(epoch: u64) -> Option<String> {
@@ -308,12 +308,12 @@ pub fn drive<N: ClockAlarmNotifier + ?Sized>(
     let tick = alarm.evaluate(health, now, now_epoch);
     if tick.log_lost {
         log::info!(
-            "[CLOCK-ALARM] LOST — {} (Dante clock lost; running on NTP fallback)",
+            "[CLOCK-ALARM] LOST — {} (grandmaster clock lost; running on NTP fallback)",
             tick.snapshot.reason
         );
     }
     if tick.log_regained {
-        log::info!("[CLOCK-ALARM] REGAINED — Dante clock re-locked");
+        log::info!("[CLOCK-ALARM] REGAINED — grandmaster clock re-locked");
     }
     if tick.emit_notification {
         let msg = compose_message(&tick.snapshot.reason, tick.snapshot.since);
@@ -623,7 +623,7 @@ mod tests {
     fn compose_message_formats_or_degrades() {
         let with_epoch = compose_message("not PTP-locked to the grandmaster", Some(1_700_000_000));
         assert!(with_epoch.starts_with(
-            "NO DANTE CLOCK — not PTP-locked to the grandmaster, running on NTP fallback since "
+            "NO PTP CLOCK — not PTP-locked to the grandmaster, running on NTP fallback since "
         ));
         // HH:MM shape at the end.
         let tail = with_epoch.rsplit(" since ").next().unwrap();

@@ -120,11 +120,11 @@ exists to stop a loaded LAN provoking constant stepping.
 **It is correct for a CLIENT and wrong for the MASTER**, and the discriminator is what the node
 measures against:
 
-- A client measures against the master. Both are frequency-locked to the same Dante grandmaster, so
+- A client measures against the master. Both are frequency-locked to the same grandmaster, so
   their relative rate is ~0 and the samples really are jitter around a stable offset. MAD is the
   right statistic.
 - The master measures against an external UTC source it does **not** frequency-track. Its samples
-  are a deterministic monotonic ramp at the Dante-vs-UTC error (6-19 ppm measured on strih). The MAD
+  are a deterministic monotonic ramp at the PTP-vs-UTC error (6-19 ppm measured on strih). The MAD
   of a 7-point ramp with per-interval step `s` is exactly `2s`, so the threshold self-inflates to
   `500 + 10s` — **ten times the accrual it is meant to catch** — and the node sawtooths 2.5-6.8 ms.
 
@@ -136,7 +136,7 @@ variance-derived threshold on a new signal, ask whether that signal is noise or 
 
 > LEGACY discipline only since #117 — see "#117 — the old PTP servo was RATE-ONLY" below.
 
-PTP owns frequency (`adjust_frequency`) and re-measures phase against the Dante GM every 125 ms. Any
+PTP owns frequency (`adjust_frequency`) and re-measures phase against the GM every 125 ms. Any
 frequency offset injected to correct UTC phase is read back by the PTP servo as drift and cancelled
 within seconds — the two loops fight and the casualty is the <50 µs precision target. A UTC
 correction is therefore always `step_clock`, and the only lever on its aggressiveness is the
@@ -174,8 +174,8 @@ nothing held the absolute offset between the box and the grandmaster, and NANO m
 ignored any rate below `NANO_DEADBAND_US` (0.1 µs/s, i.e. up to 360 µs/h of free drift). Two boxes
 "locked to the same rate" therefore random-walked apart, and all cross-box wall agreement was
 really held by NTP: first by steps (the #67/#83/#88 step storms and chases), then by #97's
-`phase_slew`, which did it by steering the RATE up to ±5-19 ppm away from the Dante tick. That
-last part is the contract violation #117 removes (owner: RATE = the Dante PTP tick only, NTP =
+`phase_slew`, which did it by steering the RATE up to ±5-19 ppm away from the grandmaster tick. That
+last part is the contract violation #117 removes (owner: RATE = the PTPv1 tick only, NTP =
 date stepping only).
 
 **What replaced it (`system.clock_discipline = "ptp_phase_lock"`, the default):**
@@ -327,7 +327,7 @@ There is no per-box latency calibration; add one only if the canary shows the sp
 > increment and the interval).
 
 A backward step runs wall time back on every box at once; the camera-box stream OBS lost 43.7 ms
-of Dante audio at a −51 ms fleet step, and nothing at the forward ones (camera-box#1372). So:
+of audio at a −51 ms fleet step, and nothing at the forward ones (camera-box#1372). So:
 
 - **The direction decision is `date_offset::correction_kind`**: `≥ 0` → coordinated step,
   `< 0` → coordinated slew (`DateSlew`: `from → to` at `ppm` from `start`, a pure function of PTP
@@ -471,7 +471,7 @@ large correction left is an abnormal error beyond `slew_cap_ns` (2 × the bound)
 The phase lock moves `D` by the REQUESTED step (`note_step`), so any shortfall between the
 requested and the realized wall move is a phase error. `K_P` then turns it into rate: 250 µs is
 5 ppm. At the 1.11.0 micro cadence (a step every 20 s) that rate is never clean, and the Windows
-media clocks that follow the adjustment rate leave the Dante tick (camera-box#1372, the stream
+media clocks that follow the adjustment rate leave the grandmaster tick (camera-box#1372, the stream
 `mbc` ASRC).
 
 **The root cause.** Windows stepped by read-modify-write with `GetSystemTimeAsFileTime`, which is
@@ -530,7 +530,7 @@ The bench's Windows day showed two gotchas:
 ## #119 (1.12) — the fleet date is corrected ONCE A NIGHT (`correction = "daily"`, the default)
 
 The owner ruled one coordinated step per night (issue comment 5849932587). Each 1.11 micro-step
-(`NtSetSystemTime` every 20 s) starved the Dante Virtual Soundcard's ASIO input on the stream box,
+(`NtSetSystemTime` every 20 s) starved the virtual soundcard's ASIO input on the stream box,
 and OBS ratcheted its audio buffering from 85 to 405 ms. Rare steps starve nothing. The
 grandmaster (a PCIe card, no clock input) cannot follow UTC, so the date must still be stepped.
 
@@ -681,9 +681,18 @@ reading is wrong by the whole correction, and that same epoch is served as the N
 Timestamp, where a node running ahead of UTC would advertise a reftime in the FUTURE (RFC 5905 has
 conforming clients discard such a reply outright).
 
+One exception, and it is not a wall time either: the rate servo's window SPAN is the grandmaster's
+time (`rate_servo::GmNs`, the window's t1), since 1.25. The offset it differentiates is in PTP
+time, so dividing it by `Instant::now()` at processing mixed two time bases. In the e2e sims every
+span was under 0.1 s of wall time (no measurement at all), and a 110 ms pause during convergence
+divided a simulated offset by a real span: the word hit the ±500 ppm clamp
+(`test_auto_adaptive_drift_rates`, AvgRate 249.95 µs/s, reproduced by injecting a sleep every 97th
+iteration). A hand-driven test sets the span with `servo_window_after(offset_us, span_s)`, never
+`last_offset_time = Instant::now() - d`.
+
 ## `/status` is a cross-repo contract — additive only
 
-camera-box's DanteSync gate and `src/bin/tray.rs`'s own duplicate struct both parse this JSON. Add
+camera-box's dsync gate and `src/bin/tray.rs`'s own duplicate struct both parse this JSON. Add
 fields with `#[serde(default)]`, never rename or remove, and pin a
 `test_sync_status_pre_68_json_still_deserializes`-style test with a literal old blob.
 
@@ -904,31 +913,31 @@ than a synthetic repro. This generalizes past clock work too: `spread_us` (issue
 signal) sat unconsulted by the step-decision logic for two full cycles (issues 71 and 76) before
 issue 76 finally used it -- the same "an existing signal was already telling you something" shape.
 
-## Working dantesync from a camera-box Claude session
+## Working dsync from a camera-box Claude session
 
-dantesync has no session of its own; the fleet dispatch works it from a **camera-box** session, so
+dsync has no session of its own; the fleet dispatch works it from a **camera-box** session, so
 global PreToolUse hooks key on the **session cwd** (the camera-box checkout), NOT on the
-`cd dantesync &&` inside your command.
+`cd dsync &&` inside your command.
 
 **Two gotchas from a worktree-isolated camera-box lane (#119 1.12):**
 - The lane's isolation guard refuses a Bash call it cannot prove stays inside the camera-box
   worktree. That includes heredocs, `$VAR` in a command position, and compound `gh ... -q`
   expressions. Put each edit and each runner in a script file in the scratchpad and run
-  `python3 /abs/script.py` or `bash /abs/run.sh`. Simple `cd <dantesync worktree> && git …`
+  `python3 /abs/script.py` or `bash /abs/run.sh`. Simple `cd <dsync worktree> && git …`
   chains pass.
 - In such a Python edit script, a Rust string continuation (`\` + newline) inside a NON-raw
   Python string is itself a Python line continuation. Python eats it, and the Rust literal gains
   a run of spaces. CI caught one in a config warning. Write `\\` or use a raw string, then grep
   the result for 8+ spaces inside a string literal.
 
-**Two more from a camera-box session working a dantesync worktree (camera-box issue 1372, v1.14):**
+**Two more from a camera-box session working a dsync worktree (camera-box issue 1372, v1.14):**
 - Stage with explicit paths, never the all-files flag. The global staging guard reads the
-  SESSION's checkout (camera-box), not the `cd` target: an all-files stage in the dantesync
+  SESSION's checkout (camera-box), not the `cd` target: an all-files stage in the dsync
   worktree was refused for a camera-box untracked file, and the whole Bash call (its heredoc
   writes included) did not run. The guard also matches words in a heredoc body, so write rule text
   that names staging commands with the `Edit`/`Write` tool, not a Bash heredoc.
 - A slice tracked on a CAMERA-BOX issue: write "camera-box issue N" in commit messages and PR
-  bodies, never `#N`. In this repo the commit gate would look for a dantesync design marker for
+  bodies, never `#N`. In this repo the commit gate would look for a dsync design marker for
   `#N`, and a PR body's `#N` points at the wrong repo. A scope like `feat(freq-step):` passes.
 
 **CI** (`ci.yml`) triggers ONLY on `push`/`pull_request` to `master`/`main` — NOT on a
@@ -944,9 +953,9 @@ turns Lint red (`clippy::incompatible_msrv`).
 ## A master's NTP step RATE is a bounded health signal — a storm means the FREQUENCY reference is degraded (#91)
 
 The master cannot slew (see the top of this file) — every UTC correction is a `step_clock` — so the
-step RATE is a direct readout of the Dante-clock-vs-UTC frequency error, and it is BOUNDED ABOVE
+step RATE is a direct readout of the grandmaster-clock-vs-UTC frequency error, and it is BOUNDED ABOVE
 while genuinely PTP-locked: at the 2500us `NTP_SERVER_LOCKED_DEADBAND_US` and the worst-ever measured
-Dante-GM rate error (66ppm, #83) a healthy locked master tops out near ~72 steps/h (measured by the repo's own 66ppm locked-hour test; ~84/h by a looser hand figure). So a
+GM rate error (66ppm, #83) a healthy locked master tops out near ~72 steps/h (measured by the repo's own 66ppm locked-hour test; ~84/h by a looser hand figure). So a
 *sustained* rate above that ceiling can ONLY mean the PTP frequency reference is degraded — a GM
 outage makes `server_step_threshold_us` fall to the tight 200us threshold, which then step-corrects
 UTC almost every 10s check → the 129-180 steps/h storm observed live on strih (#91). Two consequences:
@@ -970,7 +979,7 @@ one a reported step size represents.
 
 ## camera-box issue 1372 (v1.14) — a grandmaster FREQUENCY step is a detector + a re-seed, never faster gains
 
-A Dante leader re-election steps the grandmaster's frequency (~25 ppm on the rig, 29.9.2026) under
+A PTP leader re-election steps the grandmaster's frequency (~25 ppm on the rig, 29.9.2026) under
 the same identity on the video VLAN, so no re-anchor path sees it, and the ~100 s PI took 8-12
 minutes to follow. `crates/dsync-ptp/src/ptp_phase_lock/freq_step.rs` detects it and the core re-seeds the integrator.
 What was learned building it:
@@ -1067,9 +1076,9 @@ What was learned building it:
 - **Replica:** the pure module is a directory now; symlink `crates/dsync-ptp/src/ptp_phase_lock/` beside
   `crates/dsync-ptp/src/ptp_phase_lock.rs` in the scratch crate, or `mod freq_step;` does not resolve.
 
-## dantesync#126 (v1.15) — a master restart keeps the fleet date
+## dsync#126 (v1.15) — a master restart keeps the fleet date
 
-A `systemctl restart dantesync` on the master (strih-lx, 30.9.2026) stepped the whole rig at
+A `systemctl restart dsync` on the master (strih-lx, 30.9.2026) stepped the whole rig at
 scattered instants: its boot step moved its own wall +247 ms to UTC, a fresh anchor started a new
 session at seq 1, and each follower dropped the silent authority after 30 s and stepped on its own
 next NTP samples. What was learned building the fix:
@@ -1100,7 +1109,7 @@ next NTP samples. What was learned building the fix:
   loop `take()`s it before acting, the HTTP side `abandon()`s it after 3 s (a deadline alone was
   not enough: a loop stall between its check and its answer gave a step AND a 503; review round
   2) — so a 503 means nothing was announced. Loopback peer, loopback `Host` (DNS rebinding) and
-  the `X-DanteSync-Step` header (cross-origin pages): the server binds 0.0.0.0. `202` only when
+  the `X-Dsync-Step` header (cross-origin pages): the server binds 0.0.0.0. `202` only when
   announced; a pre-1.15 build answers 200 with the status JSON, so callers key on `"accepted"`.
 - **Review round 1 (fresh context, 0 🔴 7 🟡 9 🔵), each a test now:**
   - *A restore inside a step's lead must align the master's own scheduler with the session first*
@@ -1112,7 +1121,7 @@ next NTP samples. What was learned building the fix:
     step (`abandon_date_state`); the 300 s give-up runs without server mode too. Otherwise the
     pending state kept it off every NTP step for ever.
   - *A 503 must mean "nothing announced"* (made airtight in round 2 by the claim above). A POST
-    needs `X-DanteSync-Step`, which no web page can send cross-origin.
+    needs `X-Dsync-Step`, which no web page can send cross-origin.
   - *A boot offset beyond twice the restore cap* cannot be on the fleet line (kept within the cap
     of UTC): the boot step runs at start instead of serving a wall seconds off until the lock.
   - *A stale record* (the node was not the master meanwhile): a record over a day old is refused,
@@ -1148,9 +1157,9 @@ next NTP samples. What was learned building the fix:
   double fault's settling. Give the session a seq above 1 before the restart (a step on request):
   with seq 1 on both sides "the same session" and "a new session" read the same.
 
-## dantesync#134 (v1.19) — the fleet date at the FIRST PTP window, one step, none at the lock
+## dsync#134 (v1.19) — the fleet date at the FIRST PTP window, one step, none at the lock
 
-The owner (26.10.2026): a boot must sync fast, nothing on a Dante/Blackmagic network waits for a
+The owner (26.10.2026): a boot must sync fast, nothing on an audio/Blackmagic network waits for a
 settle. strih-pp's boot (25.10.2026) spent 12 s in the blocking boot NTP burst before the PTP loop
 started, then 31 s from the first Sync to the rate servo's `=== LOCKED ===`, and only then
 anchored `D`, restored the saved fleet D and stepped its wall by +3.75 s — under a running OBS.
@@ -1204,7 +1213,7 @@ What was learned:
   `boot.rs` (−21 / +70 ppm boxes, one step each, both on the line). Negative control:
   `BOOT_HOLD_NS = 0` fails the bench, the acquisition test and two controller tests.
 
-## dantesync#136 — the time server and the NTP burst off the sync loop (v1.20)
+## dsync#136 — the time server and the NTP burst off the sync loop (v1.20)
 
 A DSYX query was answered only when the loop came round, and the periodic NTP burst ran inline:
 every query waited behind PTP processing and the burst (200 ms replies missed under load). Now the
@@ -1250,7 +1259,7 @@ burst runs on the `ntp-burst` thread (`ntp_burst::NtpBurstThread`, `controller/n
   — red on 1.19 at 1.0 s; failed bursts across a step / beside a pending boot reading count),
   `ntp_burst/tests.rs`.
 
-## dantesync#142 (v1.22) — a cold boot locks in seconds: no false first sample, a drift file
+## dsync#142 (v1.22) — a cold boot locks in seconds: no false first sample, a drift file
 
 iemmixer's gen3 box (v1.20.0, 1.11.2026): "Sync established" at 15 s, a PROD at 15.6 s, back to ACQ,
 LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was learned:
@@ -1315,7 +1324,7 @@ LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was l
   decided (`run_for`: 60 windows to a lock, 6 to a verdict), full runs are 120 windows and the
   statistics 20 runs: 0.5 s single-threaded in debug, from ~20 s.
 
-## dantesync#146 (v1.23) — DSYX [41] is the PHASE lock, and the boot pull is never dropped
+## dsync#146 (v1.23) — DSYX [41] is the PHASE lock, and the boot pull is never dropped
 
 dstack gates its media-clock ready on byte [41] alone; gen3 reported LOCK at e ≈ −700 µs and its
 250 µs flow ran late for 3-6 minutes; gate run 41372498483 caught LOCK → PROD → LOCK on a cold

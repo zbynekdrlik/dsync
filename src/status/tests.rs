@@ -26,7 +26,7 @@ fn test_sync_status_serde_roundtrip() {
     assert_eq!(restored.ntp_offset_us, 150);
 }
 
-/// dantesync#53: the two new quality fields round-trip like any other
+/// dsync#53: the two new quality fields round-trip like any other
 /// field, and an OLD JSON blob missing them entirely (pre-#53) still
 /// deserializes cleanly via `#[serde(default)]` — existing consumers
 /// (e.g. the tray app's own status struct) must not break.
@@ -53,7 +53,7 @@ fn test_sync_status_ntp_quality_fields_roundtrip_and_default_on_missing() {
     assert_eq!(restored_old.ntp_sample_count, 0);
 }
 
-/// dantesync#53 continuation: `pcap_ntp_active` round-trips like any
+/// dsync#53 continuation: `pcap_ntp_active` round-trips like any
 /// other field, AND an old JSON blob missing it entirely (pre-this-fix)
 /// still deserializes cleanly, defaulting to `false` — the honest
 /// default (no evidence the pcap transport was ever active).
@@ -147,7 +147,7 @@ fn test_sync_status_ntp_deadband_us_roundtrips_and_defaults_none_83() {
     );
 }
 
-/// Additive only: today's JSON (camera-box's DanteSync gate parses it) must
+/// Additive only: today's JSON (camera-box's dsync gate parses it) must
 /// keep deserializing unchanged.
 #[test]
 fn test_sync_status_pre_68_json_still_deserializes() {
@@ -163,7 +163,7 @@ fn test_sync_status_pre_68_json_still_deserializes() {
     assert_eq!(restored.mode, "LOCK");
 }
 
-/// dantesync#91: the two new step-storm fields are additive. Pre-#91 JSON
+/// dsync#91: the two new step-storm fields are additive. Pre-#91 JSON
 /// (which has ntp_deadband_us but neither step field) must still deserialize,
 /// defaulting to "no steps counted / not storming"; and a storming master
 /// round-trips both fields.
@@ -196,7 +196,7 @@ fn test_sync_status_step_storm_fields_are_additive_91() {
     assert!(back.ntp_step_storm);
 }
 
-/// dantesync#97: the phase-slew telemetry fields are additive. A pre-#97 JSON blob (which has
+/// dsync#97: the phase-slew telemetry fields are additive. A pre-#97 JSON blob (which has
 /// the #91 step-storm fields but none of the phase-slew ones) must still deserialize,
 /// defaulting to "feature off / idle"; and an enabled, slewing node round-trips all fields.
 #[test]
@@ -235,10 +235,10 @@ fn test_sync_status_phase_slew_fields_are_additive_97() {
     assert!((back.f_ptp_ppm - 33.4).abs() < f64::EPSILON);
 }
 
-/// dantesync#101: `ntp_step_threshold_us` is additive. A pre-#101 JSON blob (which has the #97
+/// dsync#101: `ntp_step_threshold_us` is additive. A pre-#101 JSON blob (which has the #97
 /// phase-slew fields but not this one) must still deserialize, defaulting to None; and a node
 /// carrying a client-mode adaptive threshold round-trips it. This is the field camera-box's
-/// step-aware DanteSync gate reads for a Windows client that has no journald (camera-box #1129).
+/// step-aware dsync gate reads for a Windows client that has no journald (camera-box #1129).
 #[test]
 fn test_sync_status_ntp_step_threshold_us_is_additive_101() {
     let pre_101 = r#"{"offset_ns":0,"drift_ppm":0.0,"gm_uuid":null,"gm_source_ip":null,
@@ -282,7 +282,7 @@ fn test_sync_status_ntp_step_threshold_us_is_additive_101() {
     );
 }
 
-/// dantesync#114: the clock-alarm fields are additive. A pre-#114 JSON blob
+/// dsync#114: the clock-alarm fields are additive. A pre-#114 JSON blob
 /// (which has the #101 step-threshold field but neither clock-alarm field)
 /// must still deserialize, defaulting to "no alarm / 60 s cadence"; and a
 /// node in alarm round-trips the snapshot + cadence.
@@ -330,7 +330,7 @@ fn test_sync_status_clock_alarm_fields_are_additive_114() {
     );
 }
 
-/// dantesync#113: the hostname-allowlist resolution fields are additive. A
+/// dsync#113: the hostname-allowlist resolution fields are additive. A
 /// pre-#113 JSON blob (with the #114 clock-alarm fields but neither resolution
 /// field) must still deserialize, defaulting both to empty; and a node with a
 /// resolved + an unresolved hostname round-trips them.
@@ -366,7 +366,7 @@ fn test_sync_status_gm_allowlist_resolution_fields_are_additive_113() {
     );
 }
 
-/// dantesync#88: the date-offset fields are additive. A pre-#88 blob (today's live shape,
+/// dsync#88: the date-offset fields are additive. A pre-#88 blob (today's live shape,
 /// with the #113 fields) must still deserialize to "no authority known", and a master's
 /// published state round-trips.
 #[test]
@@ -416,7 +416,7 @@ fn test_sync_status_date_offset_fields_are_additive_88() {
     assert_eq!(back.last_date_step_kind, "coordinated");
 }
 
-/// dantesync#119: the slew fields are additive. A v1.9.0 blob (the #88/#117 fields, no slew)
+/// dsync#119: the slew fields are additive. A v1.9.0 blob (the #88/#117 fields, no slew)
 /// must deserialize to "not slewing", and a slewing node's state round-trips.
 #[test]
 fn test_sync_status_date_slew_fields_are_additive_119() {
@@ -452,7 +452,7 @@ fn test_sync_status_date_slew_fields_are_additive_119() {
     assert_eq!(back.date_slew_to_ns, Some(1_789_999_999_949_000_000));
 }
 
-/// dantesync#119 follow-up: the micro-correction fields are additive. A v1.10.0 blob (with the
+/// dsync#119 follow-up: the micro-correction fields are additive. A v1.10.0 blob (with the
 /// slew fields) must deserialize to "no micro-correction", and a master's state round-trips.
 #[test]
 fn test_sync_status_date_micro_fields_are_additive_119() {
@@ -498,7 +498,7 @@ fn test_sync_status_date_micro_fields_are_additive_119() {
     assert!(back.date_correction_falling_behind);
 }
 
-/// dantesync#119 (1.11.1): the step's phase jump is additive — a 1.11.0 blob reads `null`, and
+/// dsync#119 (1.11.1): the step's phase jump is additive — a 1.11.0 blob reads `null`, and
 /// a value round-trips.
 #[test]
 fn test_sync_status_date_step_phase_jump_is_additive_119() {
@@ -520,7 +520,7 @@ fn test_sync_status_date_step_phase_jump_is_additive_119() {
     assert_eq!(back.date_step_phase_jump_us, Some(-3.5));
 }
 
-/// dantesync#119 (1.12): the daily-mode fields are additive — a 1.11.1 blob reads empty / `null`,
+/// dsync#119 (1.12): the daily-mode fields are additive — a 1.11.1 blob reads empty / `null`,
 /// and every value round-trips under its documented name.
 #[test]
 fn test_sync_status_date_daily_fields_are_additive_119() {
@@ -556,7 +556,7 @@ fn test_sync_status_date_daily_fields_are_additive_119() {
     assert_eq!(back.date_daily_last_step_ms, Some(-1_295.25));
 }
 
-/// dantesync#119 (1.16): the nightly step's quantum is additive — a literal 1.15.0 blob reads
+/// dsync#119 (1.16): the nightly step's quantum is additive — a literal 1.15.0 blob reads
 /// `null`, a value round-trips under its documented name, and a node that reports none says so
 /// with an explicit `null`.
 #[test]
@@ -592,7 +592,7 @@ fn test_sync_status_date_daily_step_quantum_is_additive_119() {
     );
 }
 
-/// dantesync#129 (1.17): the PTP sender's identity is additive and report-only — a literal 1.16.0
+/// dsync#129 (1.17): the PTP sender's identity is additive and report-only — a literal 1.16.0
 /// blob reads `null`, the values round-trip under their documented names, and a node that has
 /// heard no Sync says so with an explicit `null`.
 #[test]
@@ -639,7 +639,7 @@ fn test_sync_status_ptp_sender_identity_is_additive_129() {
     }
 }
 
-/// dantesync#112: the PTP liveness fields are additive. A 1.12.0 blob reads `null` / 0 / the empty
+/// dsync#112: the PTP liveness fields are additive. A 1.12.0 blob reads `null` / 0 / the empty
 /// re-join object, and every value round-trips under its documented name.
 #[test]
 fn test_sync_status_ptp_liveness_fields_are_additive_112() {
@@ -743,7 +743,7 @@ fn test_to_json_bytes_matches_serde_json_to_vec() {
     assert_eq!(via_helper, via_direct);
 }
 
-/// dantesync#126: the restart / hold / step-on-request fields are additive. A literal 1.14.0 blob
+/// dsync#126: the restart / hold / step-on-request fields are additive. A literal 1.14.0 blob
 /// reads `false` / `null` / empty, and every value round-trips under its documented name.
 #[test]
 fn test_sync_status_restart_hold_and_trigger_fields_are_additive_126() {
@@ -787,7 +787,7 @@ fn test_sync_status_restart_hold_and_trigger_fields_are_additive_126() {
     );
 }
 
-/// dantesync#131 / #116: the interface and config-source fields are additive — a 1.20 blob
+/// dsync#131 / #116: the interface and config-source fields are additive — a 1.20 blob
 /// deserializes with them `null`, and they round-trip.
 #[test]
 fn the_interface_and_config_state_fields_are_additive_131_116() {
@@ -821,7 +821,7 @@ fn the_interface_and_config_state_fields_are_additive_131_116() {
     assert_eq!(back.config_state, st.config_state);
 }
 
-/// dantesync#142: the frequency-seed fields are additive — a 1.21 blob deserializes with them
+/// dsync#142: the frequency-seed fields are additive — a 1.21 blob deserializes with them
 /// `null`, and they round-trip.
 #[test]
 fn the_frequency_seed_fields_are_additive_142() {
@@ -847,4 +847,27 @@ fn the_frequency_seed_fields_are_additive_142() {
     assert_eq!(back.freq_seed_source.as_deref(), Some("file"));
     let fresh = serde_json::to_string(&SyncStatus::default()).expect("json");
     assert!(fresh.contains(r#""freq_seed_source":null"#), "{fresh}");
+}
+
+/// dsync#147: `state_dir` is additive — a 1.24 blob deserializes with it `null`, and it
+/// round-trips.
+#[test]
+fn the_state_dir_field_is_additive_147() {
+    let pre = r#"{"offset_ns":0,"drift_ppm":0.0,"gm_uuid":null,"gm_source_ip":null,
+        "settled":true,"updated_ts":1793577600,"is_locked":true,"smoothed_rate_ppm":0.1,
+        "ntp_offset_us":0,"mode":"LOCK","ntp_failed":false,"accumulated_phase_us":0.0,
+        "ntp_spread_us":0,"ntp_sample_count":0,"pcap_ntp_active":false}"#;
+    let old: SyncStatus = serde_json::from_str(pre).expect("a 1.24 blob still deserializes");
+    assert_eq!(old.state_dir, None);
+
+    let st = SyncStatus {
+        state_dir: Some("/etc/dsync".to_string()),
+        ..SyncStatus::default()
+    };
+    let v = serde_json::to_value(&st).expect("json");
+    assert_eq!(v["state_dir"], "/etc/dsync");
+    let back: SyncStatus = serde_json::from_value(v).expect("round-trip");
+    assert_eq!(back.state_dir, st.state_dir);
+    let fresh = serde_json::to_string(&SyncStatus::default()).expect("json");
+    assert!(fresh.contains(r#""state_dir":null"#), "{fresh}");
 }

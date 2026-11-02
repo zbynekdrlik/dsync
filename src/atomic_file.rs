@@ -2,8 +2,8 @@
 //! over the target, then the directory synced (Unix) so a power cut cannot bring the old file
 //! back.
 //!
-//! Extracted from the master's fleet-date record (dantesync#126, `controller/date_sync/
-//! restart_file.rs`) for `config.json` and its last-good copy (dantesync#116): one
+//! Extracted from the master's fleet-date record (dsync#126, `controller/date_sync/
+//! restart_file.rs`) for `config.json` and its last-good copy (dsync#116): one
 //! implementation for every file this daemon rewrites.
 
 use std::io::Write;

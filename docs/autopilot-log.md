@@ -13,15 +13,15 @@ Terse per-issue log of autonomous work on this repo (commits, RED->GREEN test na
   - `eeee35e` — `InFlightGuard` RAII fix so a future panic in `handle_connection` can't leak a connection-cap slot (deep-review finding)
 - PR: #48 (dev->master), merged `fb76f82`, tagged+released as `v1.8.18` (auto-release)
 - Decision: `HttpStatusConfig.enabled` defaults to `true` (unlike `NtpServerConfig`'s opt-in `false`) — read-only, LAN-bound, the whole point is unattended reads working out of the box (documented in config.rs doc comment + PR body)
-- Fleet rollout (canary cam4 first, then rest): cam1-6, imag-nb, strih, stream — all confirmed v1.8.18, `mode: LOCK`, endpoint live. cam3 needed `mount -o remount,rw /` (its root fs is read-only, unlike cam1/2/4). imag-nb needed `sudo -S` with the standard box password (interactive-sudo box). See dantesync#47 comment for the full table + live curl proof.
-- Follow-up (dantesync side): none filed — the two Minor review findings (request-line parsing for a cleaner 404; config.json.bak before an overwrite) were explicitly optional per the reviewer's own calibration, left as documented in the `eeee35e` commit message.
+- Fleet rollout (canary cam4 first, then rest): cam1-6, imag-nb, strih, stream — all confirmed v1.8.18, `mode: LOCK`, endpoint live. cam3 needed `mount -o remount,rw /` (its root fs is read-only, unlike cam1/2/4). imag-nb needed `sudo -S` with the standard box password (interactive-sudo box). See dsync#47 comment for the full table + live curl proof.
+- Follow-up (dsync side): none filed — the two Minor review findings (request-line parsing for a cleaner 404; config.json.bak before an overwrite) were explicitly optional per the reviewer's own calibration, left as documented in the `eeee35e` commit message.
 - Follow-up (camera-box side): camera-box#648 (wire `recording-e2e.sh`'s `[0/8]` gate to the new endpoint) — commented that its prerequisite is live, ready to work as its own ticket.
 
 ## #53 — NTP measurement burst-filtering + honest quality spread
 
 - Version bump: `6684bc2` (1.8.20 -> 1.8.21)
 - Design comment (root cause + approach + rejected alternative), posted BEFORE any code:
-  https://github.com/zbynekdrlik/dantesync/issues/53#issuecomment-5099987990
+  https://github.com/zbynekdrlik/dsync/issues/53#issuecomment-5099987990
 - RED: `39e414f` — `ntp::tests::select_lowest_rtt_picks_the_n_lowest_rtt_samples`,
   `summarize_offsets_returns_true_median_and_honest_spread`,
   `summarize_offsets_pathological_scatter_from_53_stays_honest` (the issue's own 22-sample fixture,
@@ -56,7 +56,7 @@ canary evidence before continuing.
 
 - Version bump: `cd7f8c0` (1.8.21 -> 1.8.22)
 - Design comment (root cause + approach + rejected alternative), posted BEFORE any code:
-  https://github.com/zbynekdrlik/dantesync/issues/53#issuecomment-5100359554
+  https://github.com/zbynekdrlik/dsync/issues/53#issuecomment-5100359554
 - RED: `ac52dbd` — new `src/ntp_packet.rs` (NTP<->Unix epoch conversion, client request build,
   server reply parse, RFC 5905 offset/RTT formula, Ethernet+IPv4+UDP frame parsing) — 13 of 15
   fixture tests fail against naive stubs (return 0 / all-zero buffer / accept-anything).
@@ -84,7 +84,7 @@ canary evidence before continuing.
   clean, `cargo clippy -- -D warnings -A dead_code` (CI's exact Linux invocation) clean. The
   Windows-only code (`net_pcap.rs` additions, `ntp.rs` cfg(windows) blocks) additionally
   compile-checked clean (zero new warnings) against `--target x86_64-pc-windows-gnu` and the exact
-  CI Windows build-job invocation (`--bin dantesync --bin dantesync-tray`) — the real MSVC target +
+  CI Windows build-job invocation (`--bin dsync --bin dsync-tray`) — the real MSVC target +
   Npcap SDK link, and any test EXECUTION on Windows, only happen in CI's own jobs (`build` job
   compile-checks on every PR; `release.yml` runs `cargo test` on Windows but only on a tag push,
   i.e. after merge — this worker never touched a live machine per its dispatch constraints).
@@ -105,7 +105,7 @@ canary evidence before continuing.
   the Linux asset already uploaded in parallel. Release v1.8.22 published a Linux asset with no
   Windows asset at all (run 30333447928) — hit live canarying the camera-box rig's stream box.
 - Design comment posted BEFORE any code commit:
-  https://github.com/zbynekdrlik/dantesync/issues/56#issuecomment-5100617962
+  https://github.com/zbynekdrlik/dsync/issues/56#issuecomment-5100617962
 - Version bump: `5833a70` — 1.8.22 (== master's tag) → 1.8.23 (mandatory first commit).
 - Fix: `0a2d9c2` — dropped the stale `NpcapPtpNetwork::` prefix at all 5 call sites (net_pcap.rs
   lines 412/416/420/424/432); mechanical reference fix, no behavior change. RED reproduced locally
@@ -149,7 +149,7 @@ canary evidence before continuing.
 ## #58: Windows tests execute nowhere -- delay-load wpcap.dll (2026-07-28)
 
 - Root cause + approach posted BEFORE code: gh issue comment
-  https://github.com/zbynekdrlik/dantesync/issues/58#issuecomment-5101073379 (predates commit
+  https://github.com/zbynekdrlik/dsync/issues/58#issuecomment-5101073379 (predates commit
   f1650e3, the first code commit).
 - Version bump: f1650e3 `chore: bump version to 1.8.24` — 1.8.23 already exists as a bare,
   release-less tag on the remote; CI's own version-check job blocks reusing it.
@@ -185,7 +185,7 @@ canary evidence before continuing.
   installer has no silent-install switch at all; even rust-pcap/pcap's own official CI needs a
   paid Npcap OEM subscription (`NPCAP_OEM_USERNAME`/`PASSWORD` secrets) for exactly this — not
   viable here without a purchase.
-- PR #59: https://github.com/zbynekdrlik/dantesync/pull/59 — green, `mergeable: MERGEABLE`,
+- PR #59: https://github.com/zbynekdrlik/dsync/pull/59 — green, `mergeable: MERGEABLE`,
   `mergeStateStatus: CLEAN`, all 7 required checks pass. NOT merged per this session's explicit
   instruction — supervisor merges, releases fresh tag v1.8.24, canaries to the fleet.
 
@@ -193,7 +193,7 @@ canary evidence before continuing.
 
 - Version bump: `fe7f8a6` (1.8.25 -> 1.8.26)
 - Design comment (root cause + approach + rejected alternative), posted BEFORE any code:
-  https://github.com/zbynekdrlik/dantesync/issues/61#issuecomment-5128859083
+  https://github.com/zbynekdrlik/dsync/issues/61#issuecomment-5128859083
 - RED: `14f0be3` — `tests/purge_target.rs`, 18 tests, 17 fail (scripts don't exist yet, no
   `## Local Build Policy` in CLAUDE.md); only `claude_md_keeps_the_npcap_cross_compilation_note`
   passes (pre-existing).
@@ -201,7 +201,7 @@ canary evidence before continuing.
   `purge_target_daemon_live`, unit-tested directly, unlike camera-box's own untested
   purge-target.sh) + `scripts/purge-target.sh` (`purge_target_main`, executed-not-sourced guard
   mirroring cam-disk-guard.sh's #403 convention) + `scripts/install-git-hooks.sh` (pre-push hook).
-  Daemon-live check matches by process NAME (`pgrep -x dantesync|dantesync-tray`), an ABSOLUTE
+  Daemon-live check matches by process NAME (`pgrep -x dsync|dsync-tray`), an ABSOLUTE
   gate never overridden by `--force`.
 - GREEN: `85ef6dd` — CLAUDE.md: replaced the contradictory `Local Verification` bullet + old
   `## Build Commands` (`cargo build --release`) with an explicit `## Local Build Policy` (Tier 0)
@@ -219,7 +219,7 @@ canary evidence before continuing.
   auto-invoke a function gated behind an executed-not-sourced guard — the guard sees it as
   sourced either way and the args are silently unused. Fixed by explicitly calling
   `purge_target_main --check` after sourcing in the affected tests.
-- Real-world proof: on this box (whose live `dantesync` daemon PID was confirmed via `pgrep`),
+- Real-world proof: on this box (whose live `dsync` daemon PID was confirmed via `pgrep`),
   `THRESHOLD_MB=1 scripts/purge-target.sh` correctly REFUSED to purge a real 775 MB `target/`,
   printing the live-daemon skip message.
 - Local verification: `cargo test --test purge_target` 18/18 pass; `cargo fmt --all --check`,
@@ -227,7 +227,7 @@ canary evidence before continuing.
   broader `--all-targets` clippy run surfaces 10 pre-existing `field_reassign_with_default`
   findings in `src/time_server.rs` test code — confirmed identical on `origin/master` via a
   throwaway `git worktree`, unrelated, not touched.
-- PR #63: https://github.com/zbynekdrlik/dantesync/pull/63 — green (7/7 checks), `mergeable:
+- PR #63: https://github.com/zbynekdrlik/dsync/pull/63 — green (7/7 checks), `mergeable:
   MERGEABLE`, `mergeStateStatus: CLEAN`. Merged `1fb8d403` (direct REST PUT — `gh pr merge`'s
   "not up to date" false refusal, same repo GOTCHA as PR #697). Auto-closed #61. Tagged +
   released `v1.8.26` (CI run 30532236993, both linux-amd64 + windows-amd64 + tray assets
@@ -236,7 +236,7 @@ canary evidence before continuing.
   stale session cwd (this dispatch's declared root was a sibling repo, camera-box) instead of the
   `git commit`'s actual cwd (reached via an inline `cd &&`), so it reported "no design comment
   posted for #61 (repo camera-box)" even though the real design comment was posted and verified
-  on `dantesync`#61. Bypassed with `[no-design: ...]` on every #61 commit, citing the marker +
+  on `dsync`#61. Bypassed with `[no-design: ...]` on every #61 commit, citing the marker +
   filed issue.
 - No fleet deploy: zero functional daemon change (Cargo.toml version + CLAUDE.md + new dev-only
   shell scripts only) — nothing to redeploy or verify on the live cam/imag/strih/stream fleet.
@@ -245,7 +245,7 @@ canary evidence before continuing.
 
 - Root cause was by design, not a crash: `ntp_server_mode` called
   `controller.disable_ntp_tracking()`, so a healthy master's only UTC measurement in its whole
-  lifetime was the boot-time one-shot. PTP frequency-locks the clock to the Dante grandmaster,
+  lifetime was the boot-time one-shot. PTP frequency-locks the clock to the grandmaster,
   whose rate is not UTC's, so the phase error integrated from boot with nothing subtracting from
   it and the fleet coherently followed it down.
 - Validated live before writing code: strih `/status` 19 min after the manual restart read
@@ -271,7 +271,7 @@ canary evidence before continuing.
   outlier protection is already provided by the two-agreeing-samples gate). Confirmed empirically
   by reverting just that selection: peak 6270 us before, under 2000 us after. Note the widening
   stays CORRECT for client nodes — a client measures against the master and both track the same
-  Dante rate, so its samples really are jitter; only the master measures against a source it does
+  grandmaster rate, so its samples really are jitter; only the master measures against a source it does
   not frequency-track.
 - The other Critical: `serde_json`'s `IndexMut<&str>` panics on a non-object, so the new
   `max_step_us` migration would have crashed the daemon at startup on a hand-edited
@@ -283,11 +283,11 @@ canary evidence before continuing.
   subtracts every step, error accrues at 19 ppm for a simulated hour). **A mock that returns a
   constant cannot exercise any adaptive/statistical code path; for a control loop the mock must
   close the loop.**
-- PR 69: https://github.com/zbynekdrlik/dantesync/pull/69 — green (7/7 checks + Auto Release),
+- PR 69: https://github.com/zbynekdrlik/dsync/pull/69 — green (7/7 checks + Auto Release),
   `mergeable: MERGEABLE`, `mergeStateStatus: CLEAN`. Plain `gh pr merge --merge` worked this time
   (no "not up to date" false refusal). Merged `3983ff77bfe4a8a7ac4c034bc94abe1883268e49`, issue
   auto-closed. Main CI green 8/8, tagged + released `v1.8.29` with the complete asset set.
-- Design-gate workaround worth reusing: pass `-R zbynekdrlik/dantesync` on every `gh issue comment`
+- Design-gate workaround worth reusing: pass `-R zbynekdrlik/dsync` on every `gh issue comment`
   when the session cwd is a sibling repo. The recorder resolves `repo_key` AND its read-back from
   that flag, so the marker lands under the right repo and no `[no-design: ...]` bypass is needed
   (the previous cycle had to bypass). One comment grants at most ONE evidence kind and only the
@@ -315,7 +315,7 @@ canary evidence before continuing.
   takes 3+ intervals (hand-traced + empirically verified: 1710us / 3-interval peak at the original
   570us/30s model) instead of the intended 2 (1140us).
 - **Rejected alternative, argued on the ticket:** a second frequency actuator (trim the master's
-  clock rate toward UTC). Rejected because this node's PTP servo keeps tracking the REAL Dante
+  clock rate toward UTC). Rejected because this node's PTP servo keeps tracking the REAL grandmaster
   grandmaster in frequency regardless of server mode (nothing disables it), and
   `.claude/rules/clock-discipline-and-testing.md` already documents why a second frequency
   correction fights the PTP servo's own re-lock every ~125ms. "Small frequent steps" (the fix's
@@ -364,14 +364,14 @@ canary evidence before continuing.
   own idempotency guard suppressed a step a caller might reasonably assume reran). Released
   `v1.8.31` with the full asset set (linux/windows/tray binaries + sha256, Linux sha256 verified
   locally against the downloaded binary).
-- Design-gate reminder (still true): pass `-R zbynekdrlik/dantesync` on every `gh issue comment`
-  when the session's ambient cwd might not match — confirmed AGAIN this cycle that a `cd dantesync
+- Design-gate reminder (still true): pass `-R zbynekdrlik/dsync` on every `gh issue comment`
+  when the session's ambient cwd might not match — confirmed AGAIN this cycle that a `cd dsync
   && gh issue comment ...` compound command's `cd` is NOT what the design-gate hook's `cwd`
   resolves from (it appears to use the session's own launch directory), so the first two comments
   posted this way were silently unclassified until reposted with `-R` explicit.
 - **No fleet deploy from this worker, by dispatch.** v1.8.31 is released and awaiting the
   supervisor's canary rollout on strih — flagging explicitly for that canary: confirm PTP lock
-  quality (not just the DanteSync gate's spread check) holds under the new ~10s server-mode
+  quality (not just the dsync gate's spread check) holds under the new ~10s server-mode
   stepping cadence before rolling the rest of the fleet, since that trade-off was argued from
   first principles, not measured live.
 
@@ -428,7 +428,7 @@ canary evidence before continuing.
   (no TLS-transient repeat of #71's own Auto-Release gotcha) — verified the actual new
   `release.yml` run each time regardless, per that cycle's own established discipline. Released
   `v1.8.33` with the full asset set, Linux sha256 verified locally.
-- Design-gate `-R zbynekdrlik/dantesync` discipline held clean the whole cycle — no repeat of the
+- Design-gate `-R zbynekdrlik/dsync` discipline held clean the whole cycle — no repeat of the
   #71 cycle's silently-unclassified-comment issue.
 - **No fleet deploy from this worker, by dispatch.** v1.8.33 is released and awaiting the
   supervisor's canary rollout on strih. Canary methodology note carried onto the ticket itself:
@@ -464,7 +464,7 @@ canary evidence before continuing.
   - Confirmed `w32time` Stopped/Disabled (no competing consumer) and the Grandmaster UUID
     identical across every restart today AND yesterday (ruled out a grandmaster change as the
     explanation for 19ppm -> 66ppm).
-  - Read the dantesync log directly and found the smoking gun already sitting there, unexploited:
+  - Read the dsync log directly and found the smoking gun already sitting there, unexploited:
     the EXISTING `[StepClock] Actual step: X (expected: Y)` diagnostic line was showing a large,
     essentially random shortfall on nearly every step (27.6%-116.7% delivered across 30 live
     samples) — a signature immediately recognizable as sub-millisecond truncation once
@@ -489,12 +489,12 @@ canary evidence before continuing.
   (or within a few 100ns-tick rounding units) instead of the 27.6%-116.7% scatter this cycle's own
   evidence recorded — that is the fix's own most direct, convincing self-test.
 
-## #83 — locked master must stop chasing the Dante GM's real (unfixable) rate error vs UTC
+## #83 — locked master must stop chasing the GM's real (unfixable) rate error vs UTC
 
 - Confirmed live (independent MCP re-verification on strih, distinct sample window from the
   coordinator's own): #80's fix genuinely working (`Actual step: X == Y`), staircase persisted at
   ~41.2ppm (matching the coordinator's ~38ppm), PTP lock stayed tight/stable throughout (Adj
-  -4.4..-5.7ppm) -- confirming the mismatch is architectural (Dante PTP frequency-coherence to the
+  -4.4..-5.7ppm) -- confirming the mismatch is architectural (PTPv1 frequency-coherence to the
   GM's own rate has no defined relationship to UTC's rate), not a bug in #71/#76/#80's own
   machinery.
 - Version bump: `2870e3b` (1.8.37 -> 1.8.38)
@@ -525,14 +525,14 @@ canary evidence before continuing.
   the issue**: the underlying GM-vs-UTC rate error is real and plausibly temperature-dependent
   (66ppm evening -> 38ppm midday), but is architecturally IRRELEVANT once #83 ships -- the fleet no
   longer chases it at seconds cadence regardless of its exact value.
-- Filed camera-box#1021 (dantesync-gate's fixed 2000us median bound will false-fail once this
+- Filed camera-box#1021 (dsync-gate's fixed 2000us median bound will false-fail once this
   fix's deadband ships -- the gate's existing #1014 "median-only" exemption only skips the SPREAD
   check, never the median bound itself) per the design comment's own cross-repo flag. NOT edited
   camera-box myself.
 - PR: #84 (dev->master), merged `dadb938`, tagged+released as `v1.8.38` (auto-release; both Linux
   AND Windows binary + tray sha256 verified locally)
 - No fleet deploy from this worker -- supervisor canaries strih by reading
-  `C:\ProgramData\DanteSync\dantesync.log`, expecting steps at MINUTES cadence (not 20-40s), PTP
+  `C:\ProgramData\dsync\dsync.log`, expecting steps at MINUTES cadence (not 20-40s), PTP
   lock quality unchanged, and the new `ntp_deadband_us` `/status` field present and correct.
 
 ## #83 (correction) — the shipped 25ms deadband was UNSAFE; corrected to 2500us + hard ceiling
@@ -585,7 +585,7 @@ canary evidence before continuing.
   (last-writer-wins) with NO best-master election; a box also seeing a foreign subnet's PTP
   multicast could lock onto a foreign GM (live: stream box on rig 10.77.9.x also sees mbc
   10.77.7.x and locked onto 10.77.7.109 vs rig GM 10.77.9.184).
-- Approach: configurable source allowlist (rejected full BMCA — heavy + a foreign Dante GM can
+- Approach: configurable source allowlist (rejected full BMCA — heavy + a foreign GM can
   advertise equal/better quality so it wouldn't even fix this; rejected first-GM-sticky — a
   restart race; rejected interface-bind — OS-coupled, untestable). New pure module
   `src/gm_filter.rs` (`GmAllowlist`, IP/CIDR, empty=unrestricted=backward-compat, fail-open).
@@ -643,7 +643,7 @@ canary evidence before continuing.
   `.claude/rules/multi-homed-interface-selection.md` (commit `07319aa`).
 - Local verify (Tier-0 via `--no-run` + direct exec): lib 275 + bin 19 + simulation_e2e 11 +
   purge_target 18 green; fmt clean; `clippy -- -D warnings -A dead_code` clean; gnu-target
-  `cargo check --bin dantesync --tests --lib` clean.
+  `cargo check --bin dsync --tests --lib` clean.
 - Supervisor next: merge `fix-1073-review-hardening` → master (v1.8.44) with/after v1.8.43 in the
   canary-first rollout; keep `"system": { "gm_allowlist": ["10.77.9.0/24"] }` on stream; verify
   `is_locked=true` + `gm_source_ip=10.77.9.184` on stream :8898/status AND survives a restart; only
@@ -670,7 +670,7 @@ canary evidence before continuing.
 
 ## #119 — a backward fleet date correction is SLEWED, never stepped (v1.10.0, draft PR #120, branch `issue-119-backward-slew`)
 
-- Design: main's Approach 1 (dantesync issuecomment-5841897121). `date_offset::correction_kind`
+- Design: main's Approach 1 (dsync issuecomment-5841897121). `date_offset::correction_kind`
   (forward = coordinated step, backward = coordinated `DateSlew` at `system.date_offset.slew_ppm`,
   default 100, clamped 10-500); DSYX extension v2 (flags bit 1, ppm in bytes 2-3, start offset
   appended, 112-byte reply); every box holds the slew (`HeldSlew`, `D = anchor + displacement`),
@@ -690,7 +690,7 @@ canary evidence before continuing.
 
 ## #119 follow-up — the fleet date in sub-threshold MICRO-corrections (v1.11.0, draft PR #121, branch `issue-119-micro`)
 
-- Design: main's Approach 1 (dantesync issuecomment-5845387690). `date_offset::MicroScheduler`
+- Design: main's Approach 1 (dsync issuecomment-5845387690). `date_offset::MicroScheduler`
   (20 min target-relative readings, Theil–Sen drift over 1 min bin medians, 5 min projected
   median level, 2 ms dead band / 0.5 ms exit / 4 ms reversal, noise-widened bands, capacity
   `micro_step_us / micro_interval_s` = 1.5 ms/min, falling-behind alarm, correction rate);
@@ -814,7 +814,7 @@ canary evidence before continuing.
 ## #126 a master restart keeps the fleet date (v1.15.0, branch `issue-126-restart-date-hold`)
 
 - Design: the main session's Approach 1 (issuecomment-5905806391: persist and restore D, followers hold through the gap, a coordinated step on request); STEP-0 validation 5906016607 (dev1's own journal: +247.77 ms local step at 06:02:42Z, 12 s after the 30 s loss); anchors + implementation notes 5906025640 (the record is the published state incl. the change in flight and the last nightly step; the restore judged at the first PTP window, so a readable file defers the boot step; the core anchors on its own window and realign moves only the master's wall; serde-free pure module).
-- Code: pure `src/date_offset/persist.rs` (record, validate: same GM, ≤ 1 day old, first window within the daily emergency cap) + `authority_restore.rs` (`persisted` / `restore` / `with_daily_last_step` / `step_now`, `DateFollower::align_with_session`); controller `restart.rs` (load, skip / defer / give up the boot step, restore at the first anchor, save on change + every 10 min), `restart_file.rs` (JSON, temp + rename), `hold.rs` (`authority_hold_s`, 900 s), `trigger.rs` + `src/date_step_trigger.rs` + `http_status.rs` (`POST /date/step`, loopback + `X-DanteSync-Step`, deadline); `/status` `"holding"`, `date_offset_restored`, `date_authority_hold_age_s`, `date_step_trigger_last`.
+- Code: pure `src/date_offset/persist.rs` (record, validate: same GM, ≤ 1 day old, first window within the daily emergency cap) + `authority_restore.rs` (`persisted` / `restore` / `with_daily_last_step` / `step_now`, `DateFollower::align_with_session`); controller `restart.rs` (load, skip / defer / give up the boot step, restore at the first anchor, save on change + every 10 min), `restart_file.rs` (JSON, temp + rename), `hold.rs` (`authority_hold_s`, 900 s), `trigger.rs` + `src/date_step_trigger.rs` + `http_status.rs` (`POST /date/step`, loopback + `X-Dsync-Step`, deadline); `/status` `"holding"`, `date_offset_restored`, `date_authority_hold_age_s`, `date_step_trigger_last`.
 - RED -> GREEN: pure `210bbc8` -> `f207018` (13 fail -> 160 pass); the hold test alone `af850de` (fails at tests.rs:489 on the pre-change tree); controller/HTTP `774f9c6` -> `45d0639` (16 fail -> 569 pass); bench `a3c9a75` -> `c91f424` (the 1.15 case fails with the 1.14 glue); review round 1 `b38e04d` -> `533c323` (14 fail -> pass; the lib replica 580/582, the 2 environmental); review round 2 `156818d` -> `45982c6` (5 fail -> pass; 585/587); review round 3 `fd589fd` -> `92e4a99` (5 fail -> pass; 592/594).
 - Local nets: `cargo fmt --check`; the pure rustc replica (162 tests); NEW: the whole lib's tests incl. the mockall controller tests under a rustc replica (real serde/serde_json built by hand, a small mockall stand-in): 580 of 582 pass (2 environmental); the two-clock bench 30/30 (1.14 control reproduces the incident, 1.15 keeps seq 2 with no follower step, steps on request land within 43 µs); MSRV clippy-driver clean on both libs.
 - Review round 3 (fresh context; 0 🔴 1 🟡 5 🔵; round 2 confirmed): a taken request left unanswered is 500 + accepted null (unknown), the wait after a take bounded (30 s), a test pins the late-answer branch, an opaque StepClaim, a directory sync failing after the rename is a warning not a failed save, heartbeat wording; the camera-box upgrader follow-up goes to the supervisor as a candidate.
@@ -860,7 +860,7 @@ canary evidence before continuing.
   `a_missing_pinned_nic_*`; `pinned_wait::tests::*` (8); `controller::ptp_liveness::tests::a_missing_pinned_interface_*`,
   `*five_seconds*`, `any_rejoin_failure_of_a_pinned_node_*`, `a_pinned_wait_logs_warn_*`;
   `config::tests::the_pinned_interface_key_*`, `the_cli_interface_overrides_*`; `status::tests::the_interface_and_config_state_fields_are_additive_131_116`.
-  Decision: a link-local-only pinned NIC is taken after the 10 s grace (Dante without DHCP).
+  Decision: a link-local-only pinned NIC is taken after the 10 s grace (an audio network without DHCP).
 - **#116** (13.9.2026 BOM incident): `config::file::load` never writes `config.json` on a
   failed parse; `config.json.last-good` (atomic, `crate::atomic_file`), BOM / UTF-16 decode,
   string-or-list `gm_allowlist`, alarm + `/status.config_state`. Same RED/GREEN commits. Tests:
@@ -891,10 +891,10 @@ canary evidence before continuing.
   serially in one `#[test]` at ~1/40 of the first version's CPU.
 - Rig check is dstack's (HANDOVER: no deploy from here): gen3 cold boot, byte [41] = 1 well before 86 s.
 
-## #98 part 1 — Dante stability gate (v1.23.0, 2026-11-02)
+## #98 part 1 — stability gate (v1.23.0, 2026-11-02)
 
-- Commits: 3cd8a16 version bump; 1cd81a2 RED (`scripts/test_dante_gate.py`, 24 tests vs an empty
-  stub); 2a73a1a GREEN (`scripts/dante_gate.py`); then `gate.yml` + the `auto-release` check + docs.
+- Commits: 3cd8a16 version bump; 1cd81a2 RED (`scripts/test_stability_gate.py`, 24 tests vs an empty
+  stub); 2a73a1a GREEN (`scripts/stability_gate.py`); then `gate.yml` + the `auto-release` check + docs.
 - Decision: dstack's event words map to `dante-stack-dev clock` v0.4.33's real JSON lines (read
   from its `--help` and a live run on dev1). Ready = `ready` turning 1, ReAnchored = non-null
   `re_anchor_ns` or `re_anchors` > 0, Holdover = `holdover` 1. A truncated log fails.
@@ -917,3 +917,24 @@ canary evidence before continuing.
   - Acceptance on dev1: all locked in 51.9 s. Over 30 s, service vs follower was 27.1 µs worst and
     14.0 µs mean, and follower vs follower 0.0 µs (the same kernel stamp).
   - CI runs everything with `--workspace`.
+
+- #147 (v1.25.0, the rename): dsync everywhere. Commits: bump `64ba9f2`, package/paths `cf7e165`,
+  state dir + service/pipe/tray/installers `c3ed01b`, gate `8c34f40`, wording `8370170`.
+  - Decision (ROZHODNUTÉ #147): the state dir is RESOLVED (`src/state_dir.rs`): `/etc/dsync`, else
+    the legacy dir in place, else create. Never copied: a second `drift.json` would seed the gate's
+    `--cold` run. Tests: `state_dir::tests::*` (all three cases + both existing), `status::tests::
+    the_state_dir_field_is_additive_147`.
+  - `gate.yml` keeps its file name: the release check looks runs up by it (pinned by
+    `test_the_release_check_looks_up_this_workflow_file_147`).
+  - `POST /date/step` takes `X-Dsync-Step` and still the pre-1.25 header
+    (`the_legacy_step_header_is_still_accepted_147`). The alarm text says NO PTP CLOCK; the
+    `[CLOCK-ALARM]` tag is unchanged.
+  - Residual "dante": legacy paths/units the code and installers must find, dstack's tool,
+    camera-box-owned names, quoted owner text, CHANGELOG history.
+  - Review (fresh context, 0 🔴 3 🟡 5 🔵), fixed in the review commit: the singleton takes the new
+    AND the legacy lock file / mutex (an old and a new daemon never both run during a unit switch;
+    `the_singleton_takes_the_new_and_the_legacy_lock_147`), the purge-target guard also matches
+    the pre-1.25 process names, rollout doc paths say "the state dir", a DVS `ptp.exe` named
+    again, uninstall offers both data dirs. Not verifiable from here: the `dsync-gate` runner label
+    (403 listing runners; the gate run proves it) and whether camera-box greps the alarm's human
+    text (now "NO PTP CLOCK"; the `[CLOCK-ALARM]` tag is unchanged) — relayed to dstack.

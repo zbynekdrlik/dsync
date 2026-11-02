@@ -1,25 +1,25 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! `dantesync-tray`: the clock-state icon in the system tray (Windows and Linux).
+//! `dsync-tray`: the clock-state icon in the system tray (Windows and Linux).
 //!
-//! Both platforms draw the shared view of `dantesync::tray_view` (icon colour, pulse
+//! Both platforms draw the shared view of `dsync::tray_view` (icon colour, pulse
 //! ring, menu text); only the shell differs. Built with the `tray` feature:
-//! `cargo build --release --features tray --bin dantesync-tray`.
+//! `cargo build --release --features tray --bin dsync-tray`.
 
 #[cfg(not(any(windows, target_os = "linux")))]
 fn main() {
-    println!("dantesync-tray runs on Windows and Linux only.");
+    println!("dsync-tray runs on Windows and Linux only.");
 }
 
-/// The Linux tray (dantesync#132): a gtk main loop hosts the `tray-icon` indicator
+/// The Linux tray (dsync#132): a gtk main loop hosts the `tray-icon` indicator
 /// (libayatana-appindicator, which falls back to an XEmbed status icon when no
 /// StatusNotifier host runs, e.g. tint2). A poller thread GETs the daemon's
 /// `127.0.0.1:8898/status` once a second; a 250 ms glib timeout applies the newest
 /// reading and handles the menu. No notifications: the Linux daemon `notify-send`s
-/// the NO DANTE CLOCK alarm itself (dantesync#114).
+/// the NO PTP CLOCK alarm itself (dsync#114).
 #[cfg(target_os = "linux")]
 mod linux_app {
-    use dantesync::tray_view::{self, IconSpec, TrayState, TrayStatus};
+    use dsync::tray_view::{self, IconSpec, TrayState, TrayStatus};
     use gtk::glib;
     use std::fs::{File, OpenOptions};
     use std::os::unix::fs::OpenOptionsExt;
@@ -54,7 +54,7 @@ mod linux_app {
             Ok(f) => f,
             Err(e) => {
                 eprintln!(
-                    "dantesync-tray: cannot open lock file {}: {}",
+                    "dsync-tray: cannot open lock file {}: {}",
                     path.display(),
                     e
                 );
@@ -66,7 +66,7 @@ mod linux_app {
         if rc == 0 {
             Some(file)
         } else {
-            eprintln!("dantesync-tray: another instance is running, exiting");
+            eprintln!("dsync-tray: another instance is running, exiting");
             None
         }
     }
@@ -97,7 +97,7 @@ mod linux_app {
             let spec = tray_view::icon_spec(status, false);
             if !spec.same_look(&self.shown) {
                 if let Err(e) = self.tray.set_icon(Some(icon_from_spec(&spec))) {
-                    eprintln!("dantesync-tray: set_icon failed: {}", e);
+                    eprintln!("dsync-tray: set_icon failed: {}", e);
                 }
                 self.shown = spec;
             }
@@ -108,7 +108,7 @@ mod linux_app {
             let state = tray_view::tray_state(status);
             if self.state != Some(state) {
                 eprintln!(
-                    "dantesync-tray: {} -> {} ({})",
+                    "dsync-tray: {} -> {} ({})",
                     self.state.map(TrayState::label).unwrap_or("START"),
                     state.label(),
                     texts.status_line
@@ -132,7 +132,7 @@ mod linux_app {
 
         if let Err(e) = gtk::init() {
             eprintln!(
-                "dantesync-tray: gtk init failed (no X session / DISPLAY?): {}",
+                "dsync-tray: gtk init failed (no X session / DISPLAY?): {}",
                 e
             );
             std::process::exit(1);
@@ -147,29 +147,29 @@ mod linux_app {
         let menu = Menu::new();
         let separator = PredefinedMenuItem::separator();
         if let Err(e) = menu.append_items(&[&status_i, &mode_i, &gm_i, &separator, &quit_i]) {
-            eprintln!("dantesync-tray: building the menu failed: {}", e);
+            eprintln!("dsync-tray: building the menu failed: {}", e);
             std::process::exit(1);
         }
 
         let connecting = IconSpec::connecting();
         let tray = match TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip(format!("DanteSync v{} - Connecting...", version))
+            .with_tooltip(format!("dsync v{} - Connecting...", version))
             .with_icon(icon_from_spec(&connecting))
             .build()
         {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("dantesync-tray: creating the tray icon failed: {}", e);
+                eprintln!("dsync-tray: creating the tray icon failed: {}", e);
                 std::process::exit(1);
             }
         };
 
         // The daemon's own config names a non-default `http_status.port`.
-        let config = std::fs::read_to_string(tray_view::LINUX_CONFIG_PATH).ok();
+        let config = std::fs::read_to_string(tray_view::config_path()).ok();
         let endpoint = tray_view::status_endpoint_from_config(config.as_deref());
         eprintln!(
-            "dantesync-tray: v{} polling http://{}/status",
+            "dsync-tray: v{} polling http://{}/status",
             version, endpoint
         );
         let (tx, rx) = mpsc::channel::<Option<TrayStatus>>();
@@ -204,7 +204,7 @@ mod linux_app {
             }
             while let Ok(event) = menu_events.try_recv() {
                 if event.id == quit_id {
-                    eprintln!("dantesync-tray: quit");
+                    eprintln!("dsync-tray: quit");
                     gtk::main_quit();
                     return glib::ControlFlow::Break;
                 }
@@ -228,12 +228,12 @@ mod app {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-    // dantesync#114: the alarm title is the lib's, so the tray balloon and the daemon
+    // dsync#114: the alarm title is the lib's, so the tray balloon and the daemon
     // log/notify-send stay byte-for-byte the same text.
-    use dantesync::clock_alarm::CLOCK_ALARM_TITLE;
-    // dantesync#132: the status view, icon, texts and alarm cadence are shared with
+    use dsync::clock_alarm::CLOCK_ALARM_TITLE;
+    // dsync#132: the status view, icon, texts and alarm cadence are shared with
     // the Linux tray.
-    use dantesync::tray_view::{self, AlarmAction, ClockAlarmCadence, IconSpec, TrayStatus};
+    use dsync::tray_view::{self, AlarmAction, ClockAlarmCadence, IconSpec, TrayStatus};
     use tokio::io::AsyncReadExt;
     use tokio::net::windows::named_pipe::ClientOptions;
     use tray_icon::{
@@ -259,7 +259,7 @@ mod app {
         /// Try to acquire single-instance lock. Returns None if another instance is running.
         fn try_acquire() -> Option<Self> {
             unsafe {
-                let mutex_name: Vec<u16> = "Global\\DanteSyncTrayMutex\0".encode_utf16().collect();
+                let mutex_name: Vec<u16> = "Global\\DsyncTrayMutex\0".encode_utf16().collect();
                 let handle = CreateMutexW(None, false, PCWSTR(mutex_name.as_ptr()));
 
                 match handle {
@@ -344,13 +344,12 @@ mod app {
     // VERSION CHECK - GitHub API
     // ========================================================================
 
-    const GITHUB_API_URL: &str =
-        "https://api.github.com/repos/zbynekdrlik/dantesync/releases/latest";
+    const GITHUB_API_URL: &str = "https://api.github.com/repos/zbynekdrlik/dsync/releases/latest";
 
     /// Fetch the latest version from GitHub releases
     async fn check_latest_version() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let client = reqwest::Client::builder()
-            .user_agent("DanteSync-Tray")
+            .user_agent("dsync-tray")
             .timeout(Duration::from_secs(10))
             .build()?;
 
@@ -368,11 +367,11 @@ mod app {
         was_ptp_offline: bool,
         was_ntp_failed: bool,
         first_update: bool,
-        // dantesync#114: per-cadence clock-alarm balloon tracking.
+        // dsync#114: per-cadence clock-alarm balloon tracking.
         clock_alarm: ClockAlarmCadence,
     }
 
-    /// The tray icon for a spec from the shared view (dantesync#132).
+    /// The tray icon for a spec from the shared view (dsync#132).
     fn icon_from_spec(spec: &IconSpec) -> Icon {
         Icon::from_rgba(
             tray_view::render_icon_rgba(spec),
@@ -451,7 +450,7 @@ mod app {
         let tray_icon = RefCell::new(Some(
             TrayIconBuilder::new()
                 .with_menu(Box::new(menu.clone()))
-                .with_tooltip("DanteSync - Connecting...")
+                .with_tooltip("dsync - Connecting...")
                 .with_icon(yellow_icon.clone())
                 .build()
                 .unwrap(),
@@ -471,7 +470,7 @@ mod app {
                     match ClientOptions::new()
                         .write(false)
                         .read(true)
-                        .open(r"\\.\pipe\dantesync")
+                        .open(r"\\.\pipe\dsync")
                     {
                         Ok(mut client) => {
                             loop {
@@ -593,24 +592,24 @@ mod app {
                                         // at all). "Server unreachable" was
                                         // simply false in the second case.
                                         show_notification(
-                                            "DanteSync",
+                                            "dsync",
                                             "UTC alignment stale - NTP not tracking"
                                         );
                                     } else if !status.ntp_failed && state.was_ntp_failed {
                                         show_notification(
-                                            "DanteSync",
+                                            "dsync",
                                             "UTC alignment restored"
                                         );
                                     }
                                     // PTP offline transitions (highest priority)
                                     else if is_ptp_offline && !state.was_ptp_offline {
                                         show_notification(
-                                            "DanteSync",
+                                            "dsync",
                                             "PTP offline - running NTP-only sync"
                                         );
                                     } else if !is_ptp_offline && state.was_ptp_offline {
                                         show_notification(
-                                            "DanteSync",
+                                            "dsync",
                                             "PTP restored - resuming PTP sync"
                                         );
                                     }
@@ -620,7 +619,7 @@ mod app {
                                     // Service came online
                                     if !state.was_online {
                                         show_notification(
-                                            "DanteSync",
+                                            "dsync",
                                             "Service connected"
                                         );
                                     }
@@ -635,7 +634,7 @@ mod app {
                             }
 
                             // ================================================
-                            // #114: loud, repeating NO-DANTE-CLOCK balloon.
+                            // #114: loud, repeating NO-PTP-CLOCK balloon.
                             // Windows can't toast from the session-0 service, so
                             // the tray raises the per-cadence balloon here from
                             // the /status.clock_alarm field.
@@ -653,7 +652,7 @@ mod app {
                                     AlarmAction::Cleared => {
                                         // Alarm just cleared — one reassuring toast.
                                         show_notification(
-                                            "DanteSync",
+                                            "dsync",
                                             tray_view::CLOCK_RESTORED_MESSAGE,
                                         )
                                     }
@@ -662,7 +661,7 @@ mod app {
                             }
 
                             // ================================================
-                            // ICON + TEXT - the shared view (dantesync#132)
+                            // ICON + TEXT - the shared view (dsync#132)
                             // ================================================
                             let has_update = update_available.load(Ordering::Relaxed);
                             let icon = icon_from_spec(&tray_view::icon_spec(Some(&status), has_update));
@@ -689,7 +688,7 @@ mod app {
                                 let mut state = notification_state.borrow_mut();
                                 if state.was_online {
                                     show_notification(
-                                        "DanteSync",
+                                        "dsync",
                                         "Service offline"
                                     );
                                 }
@@ -718,7 +717,7 @@ mod app {
 
                             // Show notification
                             show_notification(
-                                "DanteSync",
+                                "dsync",
                                 &format!("New version {} available", new_version)
                             );
                         }
@@ -733,7 +732,7 @@ mod app {
                         } else if event.id == restart_i.id() {
                             // Restart service using PowerShell (requires elevation)
                             let _ = std::process::Command::new("powershell.exe")
-                                .args(["-Command", "Start-Process powershell -Verb RunAs -ArgumentList '-Command','Restart-Service dantesync -Force'"])
+                                .args(["-Command", "Start-Process powershell -Verb RunAs -ArgumentList '-Command','Restart-Service dsync -Force'"])
                                 .spawn();
                         } else if event.id == start_stop_i.id() {
                             // Start or Stop service based on current state
@@ -741,25 +740,32 @@ mod app {
                             if is_online {
                                 // Service running - stop it
                                 let _ = std::process::Command::new("powershell.exe")
-                                    .args(["-Command", "Start-Process powershell -Verb RunAs -ArgumentList '-Command','Stop-Service dantesync -Force'"])
+                                    .args(["-Command", "Start-Process powershell -Verb RunAs -ArgumentList '-Command','Stop-Service dsync -Force'"])
                                     .spawn();
                             } else {
                                 // Service stopped - start it
                                 let _ = std::process::Command::new("powershell.exe")
-                                    .args(["-Command", "Start-Process powershell -Verb RunAs -ArgumentList '-Command','Start-Service dantesync'"])
+                                    .args(["-Command", "Start-Process powershell -Verb RunAs -ArgumentList '-Command','Start-Service dsync'"])
                                     .spawn();
                             }
                         } else if event.id == log_i.id() {
                             let _ = std::process::Command::new("notepad.exe")
-                                .arg(r"C:\ProgramData\DanteSync\dantesync.log")
+                                .arg(tray_view::log_path())
                                 .spawn();
                         } else if event.id == live_log_i.id() {
                             let _ = std::process::Command::new("powershell.exe")
-                                .args(["-NoExit", "-Command", "Get-Content 'C:\\ProgramData\\DanteSync\\dantesync.log' -Tail 20 -Wait"])
+                                .args([
+                                    "-NoExit".to_string(),
+                                    "-Command".to_string(),
+                                    format!(
+                                        "Get-Content '{}' -Tail 20 -Wait",
+                                        tray_view::log_path().display()
+                                    ),
+                                ])
                                 .spawn();
                         } else if event.id == config_i.id() {
                             let _ = std::process::Command::new("notepad.exe")
-                                .arg(r"C:\ProgramData\DanteSync\config.json")
+                                .arg(tray_view::config_path())
                                 .spawn();
                         } else if event.id == upgrade_i.id() {
                             // Run upgrade via PowerShell IRM (Invoke-RestMethod)
@@ -767,7 +773,7 @@ mod app {
                             let _ = std::process::Command::new("powershell.exe")
                                 .args([
                                     "-Command",
-                                    "Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command','irm https://raw.githubusercontent.com/zbynekdrlik/dantesync/master/install.ps1 | iex'"
+                                    "Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command','irm https://raw.githubusercontent.com/zbynekdrlik/dsync/master/install.ps1 | iex'"
                                 ])
                                 .spawn();
                         }

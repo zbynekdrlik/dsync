@@ -1,7 +1,7 @@
-//! Minimal NTP/SNTP Server implementation for DanteSync.
+//! Minimal NTP/SNTP Server implementation for dsync.
 //!
 //! This module provides a simple NTP server that responds to client queries
-//! with the current system time. It's designed for use in Dante audio networks
+//! with the current system time. It's designed for use in audio networks
 //! where one machine serves as the time master, disciplined by PTP, and all
 //! other machines sync their time via NTP from this master.
 //!
@@ -32,7 +32,7 @@ const NTP_EPOCH_OFFSET: u64 = 2_208_988_800;
 
 /// LI (Leap Indicator): 0 = no warning
 const LI_NO_WARNING: u8 = 0;
-/// RFC 5905: leap indicator 3 = "unknown (clock unsynchronized)" (dantesync#134).
+/// RFC 5905: leap indicator 3 = "unknown (clock unsynchronized)" (dsync#134).
 const LI_ALARM_UNSYNCHRONIZED: u8 = 3;
 
 /// Mode: 4 = server
@@ -66,7 +66,7 @@ pub(crate) enum RecvErrorAction {
 impl RecvErrorAction {
     /// How long to sleep before the next receive. `None` for everything that
     /// is normal: a stalled server answers nobody, and on the fleet's time
-    /// source that is the actual harm a benign reset used to cause. dantesync#136: the time
+    /// source that is the actual harm a benign reset used to cause. dsync#136: the time
     /// server's thread backs off the same way.
     pub(crate) fn backoff(self) -> Option<Duration> {
         match self {
@@ -82,7 +82,7 @@ const RECV_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 /// #68 — classify a `recv_from` error. Pure, so the policy is unit-tested
 /// directly instead of being inferred from a live socket (WSAECONNRESET in
 /// particular cannot be provoked at all on Linux, where an unconnected UDP
-/// socket never surfaces the ICMP error). dantesync#136: the time server's thread
+/// socket never surfaces the ICMP error). dsync#136: the time server's thread
 /// classifies its receive errors the same way.
 pub(crate) fn classify_recv_error(kind: std::io::ErrorKind) -> RecvErrorAction {
     match kind {
@@ -169,7 +169,7 @@ pub struct NtpServer {
     /// last actually re-read its own upstream reference. `None` (or a status
     /// with nothing measured yet) falls back to `reference_time`.
     status: Option<Arc<std::sync::RwLock<crate::status::SyncStatus>>>,
-    /// dantesync#52 — DSCP marking config, carried so `run_supervised`'s rebind
+    /// dsync#52 — DSCP marking config, carried so `run_supervised`'s rebind
     /// re-applies the mark on a fresh socket after an unexpected exit.
     dscp: crate::dscp::DscpConfig,
 }
@@ -202,7 +202,7 @@ impl NtpServer {
         #[cfg(windows)]
         disable_udp_conn_reset(&socket);
 
-        // dantesync#52: mark this reply socket's egress with DSCP so loaded venue
+        // dsync#52: mark this reply socket's egress with DSCP so loaded venue
         // switches prioritise timesync. Linux-effective; a logged no-op on Windows
         // (IP_TOS is filtered there — see crate::dscp). Best-effort: a failure
         // leaves the socket unmarked, exactly the pre-#52 behaviour.
@@ -229,7 +229,7 @@ impl NtpServer {
         self.status = Some(status);
     }
 
-    /// dantesync#134 review: LI = 3 (unsynchronized) while the master's wall is not placed yet
+    /// dsync#134 review: LI = 3 (unsynchronized) while the master's wall is not placed yet
     /// (its boot reading pending, its saved fleet date waiting for PTP) — rsntp clients and the
     /// Npcap transport reject such a reply, so no follower steps to a wall that moves in seconds.
     fn leap_indicator(&self) -> u8 {
@@ -451,7 +451,7 @@ where
     // Carried across restarts: `NtpServer::new()` would otherwise hand back a
     // server with `status: None`, silently reverting the reference-timestamp fix.
     let status_source = server.status.clone();
-    // dantesync#52: carry the DSCP config so the rebind re-marks the fresh socket.
+    // dsync#52: carry the DSCP config so the rebind re-marks the fresh socket.
     let dscp = server.dscp.clone();
     let mut current = server;
 
@@ -877,7 +877,7 @@ mod tests {
 
     #[test]
     fn a_master_whose_wall_is_not_placed_answers_unsynchronized_134() {
-        // dantesync#134 review: while the master's wall is not placed (its boot reading pending,
+        // dsync#134 review: while the master's wall is not placed (its boot reading pending,
         // its saved fleet date waiting for PTP) it must not serve that wall as synchronized — a
         // follower's boot step would land on a wall seconds off the line it joins next.
         let status = Arc::new(std::sync::RwLock::new(crate::status::SyncStatus::default()));

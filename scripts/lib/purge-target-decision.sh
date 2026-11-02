@@ -14,11 +14,12 @@
 # directly (tests/purge_target.rs) instead of being buried inline in the pre-push hook where a
 # future edit could silently change the threshold/safety behaviour with nothing to catch it.
 
-# Process names (comm) that indicate a live dantesync sync — never purge target/ while one of
+# Process names (comm) that indicate a live dsync sync — never purge target/ while one of
 # these is running. Matched by PROCESS NAME via `pgrep -x`, never a full-cmdline match, so this
-# script itself, an editor, or a grep merely mentioning "dantesync" can never false-positive it
+# script itself, an editor, or a grep merely mentioning "dsync" can never false-positive it
 # (same discipline as camera-box's probe-binary purge guard).
-PURGE_TARGET_DAEMON_COMM="${PURGE_TARGET_DAEMON_COMM:-dantesync|dantesync-tray}"
+# dsync#147: the pre-1.25 process names too (a box may still run the old daemon).
+PURGE_TARGET_DAEMON_COMM="${PURGE_TARGET_DAEMON_COMM:-dsync|dsync-tray|dantesync|dantesync-tray}"
 
 # purge_target_should_purge <size_mb> <threshold_mb>
 # Pure: no I/O, no side effects. Returns 0 (true — should purge) when size_mb is STRICTLY greater
@@ -30,7 +31,7 @@ purge_target_should_purge() {
 }
 
 # purge_target_daemon_live
-# Returns 0 (true — a live sync is running) when a process named dantesync or dantesync-tray is
+# Returns 0 (true — a live sync is running) when a process named dsync or dsync-tray (or a pre-1.25 one) is
 # currently running, 1 (false) otherwise. Purging target/ while the daemon (or its Windows tray
 # companion) is running/being measured is never acceptable — this is the safety gate.
 purge_target_daemon_live() {

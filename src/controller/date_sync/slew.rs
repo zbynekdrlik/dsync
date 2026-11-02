@@ -1,4 +1,4 @@
-//! dantesync#119 — the controller side of a coordinated date SLEW (`crate::date_offset::DateSlew`).
+//! dsync#119 — the controller side of a coordinated date SLEW (`crate::date_offset::DateSlew`).
 //!
 //! Two pieces make the slew exist on this clock, and together they are its decoupling:
 //!
@@ -27,14 +27,14 @@ const SLEW_WARN_INTERVAL: Duration = Duration::from_secs(10);
 const SLEW_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 impl DateSync {
-    /// dantesync#119 — `D` in effect at `wall_ns` (the anchor plus the held slew's displacement).
+    /// dsync#119 — `D` in effect at `wall_ns` (the anchor plus the held slew's displacement).
     pub(in crate::controller) fn d_in_effect(&self, wall_ns: i64) -> Option<i64> {
         self.core
             .anchor_ns()
             .map(|anchor| self.follower.in_effect_ns(anchor, wall_ns))
     }
 
-    /// dantesync#119 — the held slew's rate term at `wall_ns` (ppm; 0 without a running slew).
+    /// dsync#119 — the held slew's rate term at `wall_ns` (ppm; 0 without a running slew).
     pub(in crate::controller) fn slew_rate_ppm(&self, wall_ns: i64) -> f64 {
         match (self.enabled, self.core.anchor_ns()) {
             (true, Some(anchor)) => self.follower.slew_rate_ppm(anchor, wall_ns),
@@ -42,7 +42,7 @@ impl DateSync {
         }
     }
 
-    /// dantesync#119 — one PTP sample received at wall `t2_ns`, with the slew's scheduled
+    /// dsync#119 — one PTP sample received at wall `t2_ns`, with the slew's scheduled
     /// displacement removed: `(t2 for the phase lock, t2 for the rate servo)`. The phase lock's is
     /// relative to its anchor; the rate servo's also removes the slews already folded into the
     /// anchor (mod 1 s), so its phase is continuous across a fold. The displacement is taken
@@ -59,7 +59,7 @@ impl DateSync {
         (raw, raw.wrapping_sub(self.rate_folded_ns))
     }
 
-    /// dantesync#119 — the held slew is complete: fold it into the anchor (`D` unchanged) and keep
+    /// dsync#119 — the held slew is complete: fold it into the anchor (`D` unchanged) and keep
     /// both servos' measurements continuous across it. Returns the folded displacement.
     pub(in crate::controller) fn fold_completed_slew(&mut self, wall_ns: i64) -> Option<i64> {
         let anchor = self.core.anchor_ns()?;

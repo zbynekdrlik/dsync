@@ -1,4 +1,4 @@
-//! dantesync#119 (1.12) — the bench's DAILY scenarios: the fleet date corrected by ONE coordinated
+//! dsync#119 (1.12) — the bench's DAILY scenarios: the fleet date corrected by ONE coordinated
 //! step per night (owner decision, issue 119 comment 5849932587).
 //!
 //! Proven over 48 simulated hours (the grandmaster change and reboot still happen):
@@ -21,7 +21,7 @@ const FIRST_WINDOW_W: u64 = 42_400 * 2;
 const SECOND_WINDOW_W: u64 = 128_800 * 2;
 /// The step lands two 5 s leads after the window opens.
 const LANDING_S: f64 = 10.0;
-/// dantesync#119 (1.16): every nightly step is a whole multiple of the default quantum, so the
+/// dsync#119 (1.16): every nightly step is a whole multiple of the default quantum, so the
 /// fleet line lands within half of it of UTC (the remainder waits for the next night).
 const QUANTUM: i64 = 200 * MS;
 /// The master's estimate of the error is this close to the true error (the bench's NTP noise

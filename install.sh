@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-echo ">>> DanteSync Installer <<<"
+echo ">>> dsync Installer <<<"
 
 # Version is extracted from the installed binary
 if [ "$1" == "--version" ]; then
-    VERSION=$(/usr/local/bin/dantesync --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "not installed")
-    echo "DanteSync v$VERSION"
+    VERSION=$(/usr/local/bin/dsync --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "not installed")
+    echo "dsync v$VERSION"
     exit 0
 fi
 
@@ -29,20 +29,20 @@ if [ "$ARCH" == "x86_64" ]; then
     echo ">>> Detected x86_64 architecture. Fetching latest release..."
 
     # Get release version from GitHub API
-    RELEASE_VERSION=$(curl -sL https://api.github.com/repos/zbynekdrlik/dantesync/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+' || echo "latest")
+    RELEASE_VERSION=$(curl -sL https://api.github.com/repos/zbynekdrlik/dsync/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+' || echo "latest")
     echo ">>> Installing Version: $RELEASE_VERSION"
 
-    DOWNLOAD_URL="https://github.com/zbynekdrlik/dantesync/releases/latest/download/dantesync-linux-amd64"
+    DOWNLOAD_URL="https://github.com/zbynekdrlik/dsync/releases/latest/download/dsync-linux-amd64"
 
-    if curl --fail -L -o dantesync_bin "$DOWNLOAD_URL"; then
+    if curl --fail -L -o dsync_bin "$DOWNLOAD_URL"; then
         echo ">>> Download successful."
 
         echo ">>> Stopping existing service..."
-        systemctl stop dantesync 2>/dev/null || true
+        systemctl stop dsync 2>/dev/null || true
 
         echo ">>> Installing binary to /usr/local/bin/..."
-        chmod +x dantesync_bin
-        mv dantesync_bin /usr/local/bin/dantesync
+        chmod +x dsync_bin
+        mv dsync_bin /usr/local/bin/dsync
         SKIP_BUILD=true
     else
         echo ">>> Download failed. Falling back to source build."
@@ -60,28 +60,44 @@ if [ "$SKIP_BUILD" = false ]; then
         source "$HOME/.cargo/env" || source "/root/.cargo/env"
     fi
 
-    echo ">>> Building dantesync from source..."
+    echo ">>> Building dsync from source..."
     export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
 
     if [ ! -f "Cargo.toml" ]; then
         echo ">>> Cargo.toml not found. Cloning repository to build..."
         cd $(mktemp -d)
-        git clone https://github.com/zbynekdrlik/dantesync.git .
+        git clone https://github.com/zbynekdrlik/dsync.git .
     fi
 
     cargo build --release
 
     echo ">>> Stopping existing service..."
-    systemctl stop dantesync 2>/dev/null || true
+    systemctl stop dsync 2>/dev/null || true
 
     echo ">>> Installing binary to /usr/local/bin/..."
-    cp target/release/dantesync /usr/local/bin/
-    chmod +x /usr/local/bin/dantesync
+    cp target/release/dsync /usr/local/bin/
+    chmod +x /usr/local/bin/dsync
 fi
 
-# 4. Create Config Dir
-echo ">>> Creating configuration directory..."
-mkdir -p /etc/dantesync
+# 4. State Dir (dsync#147): the daemon uses /etc/dsync, else a pre-1.25 /etc/dantesync IN PLACE.
+# Create /etc/dsync only when neither exists: a new empty dir would hide the legacy config.
+if [ -d /etc/dsync ]; then
+    echo ">>> State directory: /etc/dsync"
+elif [ -d /etc/dantesync ]; then
+    echo ">>> State directory: /etc/dantesync (pre-1.25, used in place; rename it to /etc/dsync to switch)"
+else
+    echo ">>> Creating state directory /etc/dsync..."
+    mkdir -p /etc/dsync
+fi
+
+# 4b. Remove the pre-1.25 service and binary (dsync#147): one daemon per box.
+if [ -f /etc/systemd/system/dantesync.service ]; then
+    echo ">>> Removing the pre-1.25 dantesync.service..."
+    systemctl stop dantesync 2>/dev/null || true
+    systemctl disable dantesync 2>/dev/null || true
+    rm -f /etc/systemd/system/dantesync.service
+fi
+rm -f /usr/local/bin/dantesync
 
 # 5. Disable Conflicting Services
 echo ">>> Disabling conflicting time services..."
@@ -100,10 +116,10 @@ timedatectl set-ntp false 2>/dev/null || true
 # 6. Create Systemd Service
 echo ">>> Creating systemd service..."
 # Extract version from installed binary for service description
-BINARY_VERSION=$(/usr/local/bin/dantesync --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
-cat <<EOF > /etc/systemd/system/dantesync.service
+BINARY_VERSION=$(/usr/local/bin/dsync --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
+cat <<EOF > /etc/systemd/system/dsync.service
 [Unit]
-Description=DanteSync PTP Time Sync Service v$BINARY_VERSION
+Description=dsync PTP Time Sync Service v$BINARY_VERSION
 After=network-online.target
 Wants=network-online.target
 
@@ -111,7 +127,7 @@ Wants=network-online.target
 # Run as root for port 319, adjtimex, and RTC ioctl access
 User=root
 Group=root
-ExecStart=/usr/local/bin/dantesync
+ExecStart=/usr/local/bin/dsync
 Restart=always
 RestartSec=5
 # High priority for timestamping accuracy
@@ -125,14 +141,14 @@ EOF
 # 7. Enable and Start Service
 echo ">>> Starting service..."
 systemctl daemon-reload
-systemctl enable dantesync
-systemctl restart dantesync
+systemctl enable dsync
+systemctl restart dsync
 
 # 8. Final Verification
 echo ">>> Verifying installation..."
-INSTALLED_VERSION=$(/usr/local/bin/dantesync --version)
+INSTALLED_VERSION=$(/usr/local/bin/dsync --version)
 echo ">>> Installed: $INSTALLED_VERSION"
 
 echo ">>> Installation Complete!"
-echo ">>> Check status with: systemctl status dantesync"
-echo ">>> View logs with: journalctl -u dantesync -f"
+echo ">>> Check status with: systemctl status dsync"
+echo ">>> View logs with: journalctl -u dsync -f"

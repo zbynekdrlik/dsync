@@ -21,11 +21,11 @@ const PTP_MULTICAST: Ipv4Addr = Ipv4Addr::new(224, 0, 1, 129);
 /// `iface_ip`, purely to hold the IGMP membership for the process lifetime
 /// (membership is released when the socket is closed).
 ///
-/// dantesync#109: this socket binds an EPHEMERAL port (`net::igmp_join_bind_addr`),
+/// dsync#109: this socket binds an EPHEMERAL port (`net::igmp_join_bind_addr`),
 /// NOT the PTP ports 319/320. IGMP membership is per interface+group, not per
 /// port, and pcap's own BPF filter (not this socket) selects the captured PTP
 /// traffic — so binding 319/320 was a pointless exclusive claim that collided
-/// with a Dante Virtual Soundcard `ptp.exe` on the same host (dantesync, a
+/// with the virtual soundcard's `ptp.exe` on the same host (dsync, a
 /// boot-time service, bound first; `ptp.exe`, started later without
 /// `SO_REUSEADDR`, lost both ports with WSAEADDRINUSE). One socket for the
 /// group is sufficient; the old per-port pair (319 AND 320) and the now-pointless
@@ -64,7 +64,7 @@ fn join_multicast(iface_ip: Ipv4Addr) -> Result<UdpSocket> {
 /// a normal `Err` (exactly like any other pcap failure -- `NtpClient::new`
 /// already logs and falls back to userspace `rsntp` for this case) instead
 /// of crashing the process. This also hardens a real deployed box: if
-/// Npcap's runtime is ever missing/corrupted there, dantesync now degrades
+/// Npcap's runtime is ever missing/corrupted there, dsync now degrades
 /// gracefully instead of crashing outright.
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn wpcap_runtime_available() -> bool {
@@ -100,7 +100,7 @@ pub fn wpcap_runtime_available() -> bool {
 /// Guarded device enumeration — the SINGLE choke point before any
 /// `pcap::Device::list()` call (the #58 delay-load crash guard). BOTH
 /// name-based selection (`find_device`, PTP) and NTP-server-reachability
-/// selection (`find_device_for_ntp_server`, dantesync#53 continuation) go
+/// selection (`find_device_for_ntp_server`, dsync#53 continuation) go
 /// through this, so neither path can bypass the guard.
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn list_devices_guarded() -> Result<Vec<Device>> {
@@ -120,7 +120,7 @@ pub fn list_devices_guarded() -> Result<Vec<Device>> {
 /// an IP-address substring in its address list.
 ///
 /// Shared by the PTP capture path (below) — the NTP kernel-timestamped
-/// transport (dantesync#53) uses `find_device_for_ntp_server` instead
+/// transport (dsync#53) uses `find_device_for_ntp_server` instead
 /// (selection by NTP-server reachability, not by inherited PTP interface
 /// name — see that function's doc comment for why).
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
@@ -171,7 +171,7 @@ pub fn find_device(interface_name: &str) -> Result<Device> {
 /// allowlist gives no discriminating signal (unrestricted, or no device on a
 /// trusted subnet), so single-homed and no-allowlist boxes are byte-identical to
 /// before. This mirrors the dual-homed selection already proven for the NTP
-/// transport (`find_device_for_ntp_server`, dantesync#53).
+/// transport (`find_device_for_ntp_server`, dsync#53).
 ///
 /// Returns `(device, Some(matched_ip))` when the allowlist uniquely selects a
 /// trusted-subnet interface — `matched_ip` is the EXACT address that matched, so
@@ -253,7 +253,7 @@ pub fn find_ptp_capture_device(
 /// The device's first non-loopback IPv4 address.
 ///
 /// Shared by the PTP capture path (below) and the NTP kernel-timestamped
-/// transport (dantesync#53).
+/// transport (dsync#53).
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn device_ipv4(device: &Device) -> Result<Ipv4Addr> {
     device
@@ -274,7 +274,7 @@ pub fn device_ipv4(device: &Device) -> Result<Ipv4Addr> {
 /// timestamps and the given BPF filter applied.
 ///
 /// Shared by the PTP capture path (below) and the NTP kernel-timestamped
-/// transport (dantesync#53) — both need the same precise-timestamp capture
+/// transport (dsync#53) — both need the same precise-timestamp capture
 /// setup, differing only in which traffic the filter selects.
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn open_hiprec_capture(device: &Device, bpf_filter: &str) -> Result<Capture<Active>> {
@@ -298,7 +298,7 @@ pub fn open_hiprec_capture(device: &Device, bpf_filter: &str) -> Result<Capture<
 /// Convert a pcap capture timestamp (seconds, microseconds) to `SystemTime`.
 ///
 /// Shared by the PTP capture path (below) and the NTP kernel-timestamped
-/// transport (dantesync#53).
+/// transport (dsync#53).
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn pcap_ts_to_systemtime(ts_sec: i64, ts_usec: i64) -> SystemTime {
     let duration = Duration::new(ts_sec as u64, (ts_usec * 1000) as u32);
@@ -310,7 +310,7 @@ pub fn pcap_ts_to_systemtime(ts_sec: i64, ts_usec: i64) -> SystemTime {
 struct PtpCapture {
     capture: Capture<Active>,
     // Keep the socket alive for IGMP multicast membership (dropped on close);
-    // ONE ephemeral-port socket holds the 224.0.1.129 membership (dantesync#109).
+    // ONE ephemeral-port socket holds the 224.0.1.129 membership (dsync#109).
     _igmp_sock: UdpSocket,
     /// The Npcap device name (a replaced NIC is another device) and the IPv4 joined on.
     device_name: String,
@@ -318,7 +318,7 @@ struct PtpCapture {
 }
 
 /// Select the PTP capture device and the IPv4 to join on: the trusted grandmaster subnet of
-/// `gm_allowlist` (camera-box issue 1073), then (a re-join, dantesync#112) the device that carries
+/// `gm_allowlist` (camera-box issue 1073), then (a re-join, dsync#112) the device that carries
 /// `home`, then the name fallback -- the pure order is `net::choose_capture_device`. The startup
 /// passes `home = None`.
 fn select_ptp_device(
@@ -349,7 +349,7 @@ fn select_ptp_device(
     Ok((device, iface_ip))
 }
 
-/// dantesync#131 — the capture device of the PINNED interface `name` and its IPv4: the adapter
+/// dsync#131 — the capture device of the PINNED interface `name` and its IPv4: the adapter
 /// `name` (friendly name or GUID) must be usable now (`net::pinned_interface`), and the device is
 /// the one carrying that address. Otherwise a [`crate::net::PinnedInterfaceUnavailable`] (the
 /// controller names the NIC in the alarm) — never another device, never the subnet rule.
@@ -375,7 +375,7 @@ fn select_pinned_device(name: &str) -> Result<(Device, Ipv4Addr)> {
     select_pinned_device_at(name, ip)
 }
 
-/// dantesync#131 — the Npcap device of the pinned interface `name` at the IPv4 the caller already
+/// dsync#131 — the Npcap device of the pinned interface `name` at the IPv4 the caller already
 /// approved (the startup's `pinned_wait`, which applies the link-local grace).
 fn select_pinned_device_at(name: &str, ip: Ipv4Addr) -> Result<(Device, Ipv4Addr)> {
     let device = device_with_ip(ip).ok_or_else(|| {
@@ -388,7 +388,7 @@ fn select_pinned_device_at(name: &str, ip: Ipv4Addr) -> Result<(Device, Ipv4Addr
     Ok((device, ip))
 }
 
-/// dantesync#112 — the capture device that carries exactly `ip` now, if any.
+/// dsync#112 — the capture device that carries exactly `ip` now, if any.
 fn device_with_ip(ip: Ipv4Addr) -> Option<Device> {
     list_devices_guarded().ok()?.into_iter().find(|d| {
         d.addresses
@@ -398,21 +398,21 @@ fn device_with_ip(ip: Ipv4Addr) -> Option<Device> {
 }
 
 /// Open the PTP capture and the IGMP membership on the selected device. The startup and the
-/// re-join (dantesync#112) both open through here.
+/// re-join (dsync#112) both open through here.
 fn open_ptp_capture(device: Device, iface_ip: Ipv4Addr) -> Result<PtpCapture> {
     // CRITICAL: Join the multicast group via ONE ephemeral-port socket to
-    // trigger IGMP membership (dantesync#109: NOT bound to 319/320, so a
-    // Dante Virtual Soundcard ptp.exe on the same host keeps both PTP ports).
+    // trigger IGMP membership (dsync#109: NOT bound to 319/320, so a
+    // a DVS ptp.exe on the same host keeps both PTP ports).
     let igmp_sock = join_multicast(iface_ip)?;
     info!(
         "Joined PTP multicast group 224.0.1.129 on {} via an ephemeral-port IGMP socket \
-         (ports 319/320 left free for a DVS ptp.exe on the same host — dantesync#109)",
+         (ports 319/320 left free for a DVS ptp.exe on the same host — dsync#109)",
         iface_ip
     );
 
     // Apply BPF filter to only capture PTP multicast. The IGMP-join socket
     // above binds an ephemeral port, not 319/320, so DVS keeps exclusive
-    // ownership of both PTP ports (dantesync#109); this filter only scopes
+    // ownership of both PTP ports (dsync#109); this filter only scopes
     // which packets pcap decodes and never claims a port.
     let ptp_filter = "udp and dst host 224.0.1.129 and (dst port 319 or dst port 320)";
     let capture = open_hiprec_capture(&device, ptp_filter)?;
@@ -427,7 +427,7 @@ fn open_ptp_capture(device: Device, iface_ip: Ipv4Addr) -> Result<PtpCapture> {
 
 /// PTP network using Npcap with HostHighPrec timestamps
 pub struct NpcapPtpNetwork {
-    /// dantesync#112: `None` after a re-join could not open a capture; nothing is received until
+    /// dsync#112: `None` after a re-join could not open a capture; nothing is received until
     /// the next attempt.
     open: Option<PtpCapture>,
     using_hiprec: bool,
@@ -441,13 +441,13 @@ pub struct NpcapPtpNetwork {
     /// message, `ptp::is_time_message`, arrives on a later capture): the device that carries it
     /// comes before the name fallback in a re-join.
     home_ip: Ipv4Addr,
-    /// dantesync#131: the pinned interface; when set, the startup and every re-join use only its
+    /// dsync#131: the pinned interface; when set, the startup and every re-join use only its
     /// device (`select_pinned_device`).
     pinned: Option<String>,
 }
 
 impl NpcapPtpNetwork {
-    /// `pinned` (dantesync#131): the pinned interface and the IPv4 the startup approved for it;
+    /// `pinned` (dsync#131): the pinned interface and the IPv4 the startup approved for it;
     /// it alone selects the device, now and at every re-join.
     pub fn new(
         interface_name: &str,
@@ -520,7 +520,7 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
                 };
 
                 // Extract source IP / dest port / UDP payload from the
-                // Ethernet+IPv4+UDP frame (dantesync#53: shared pure parser,
+                // Ethernet+IPv4+UDP frame (dsync#53: shared pure parser,
                 // also used by the NTP kernel-timestamped transport).
                 let Some((source_ip, dst_port, payload)) = crate::frame::parse_udp_frame(data)
                 else {
@@ -542,7 +542,7 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
                         "[Npcap] PTP payload {} bytes from {}",
                         payload_len, source_ip
                     );
-                    // dantesync#112: the grandmaster's time arrives on this capture, so its
+                    // dsync#112: the grandmaster's time arrives on this capture, so its
                     // address is the home a re-join looks for (nothing else moves it).
                     if crate::ptp::is_time_message(&result) {
                         self.home_ip = joined_ip;
@@ -568,12 +568,12 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
         Ok(())
     }
 
-    /// dantesync#112 — re-open the capture after a NIC swap (a dead handle keeps failing with
+    /// dsync#112 — re-open the capture after a NIC swap (a dead handle keeps failing with
     /// ERROR_DEVICE_REMOVED) or any other silence: the startup selection with the home address
     /// (the trusted subnet, then the device that carries the home address, then the name
     /// fallback), on the default interface and the allowlist resolved NOW.
     fn rejoin(&mut self) -> Result<crate::network::RejoinOutcome> {
-        // dantesync#131: a pinned interface alone selects the device; not usable now = a typed
+        // dsync#131: a pinned interface alone selects the device; not usable now = a typed
         // error before the old capture is dropped.
         if let Some(name) = self.pinned.clone() {
             let (device, ip) = select_pinned_device(&name)?;

@@ -1,9 +1,9 @@
-//! dantesync#146 — the REPORTED lock under the PTP phase lock: DSYX byte [41], `/status.is_locked`,
+//! dsync#146 — the REPORTED lock under the PTP phase lock: DSYX byte [41], `/status.is_locked`,
 //! the tray and the IPC (all of them read `/status.is_locked`, one definition).
 //!
 //! # The contract (ROZHODNUTÉ on #146, dstack confirmed 2026-11-02)
 //!
-//! [41] = 1 means the clock is safe for a 250 µs Dante flow. The stack gates its media-clock ready
+//! [41] = 1 means the clock is safe for a 250 µs audio flow. The stack gates its media-clock ready
 //! on [41] alone; while it runs, [41] = 0 is a holdover (not a mute), and before its first ready
 //! the stack holds its TX back. So:
 //!

@@ -1,4 +1,4 @@
-//! dantesync#142 — the learned frequency survives a restart (a drift file, as chrony's and
+//! dsync#142 — the learned frequency survives a restart (a drift file, as chrony's and
 //! ntpd's `driftfile`).
 //!
 //! A cold start learned the oscillator's offset against the grandmaster from 0 at the ACQ
@@ -15,8 +15,8 @@
 //! measured windows disagree with (another box's oscillator, e.g. the disk moved) is dropped and
 //! the servo learns from 0. The controller glue is `controller/freq_seed.rs`.
 //!
-//! The file is `drift.json` beside `date-offset.json` (`/etc/dantesync/`,
-//! `C:\ProgramData\DanteSync\`), written by [`crate::atomic_file`] (temp file, fsync, rename,
+//! The file is `drift.json` beside `date-offset.json` (`/etc/dsync/`,
+//! `C:\ProgramData\dsync\`), written by [`crate::atomic_file`] (temp file, fsync, rename,
 //! directory fsync): a power cut leaves the old record or the new one, never a torn one.
 
 use serde::{Deserialize, Serialize};

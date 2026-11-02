@@ -14,17 +14,17 @@ paths:
 `Cargo.toml`). This means a plain `cargo check`/`cargo test`/`cargo clippy` on this Linux dev box
 **skips this code entirely** — it isn't even parsed, let alone compiled or tested.
 
-## What PR CI actually does with this code (dantesync#53 → #56 → #58)
+## What PR CI actually does with this code (dsync#53 → #56 → #58)
 
 - `ci.yml`'s `test` job runs `cargo test --lib`/`--test '*'` **on `ubuntu-latest` only** — this job
   still never touches `#[cfg(windows)]` code at all.
 - `ci.yml`'s `build` job compile-checks this code for real on `windows-latest` via
-  `cargo build --release --features tray --bin dantesync --bin dantesync-tray` (with the Npcap SDK
-  installed; the tray bin has `required-features = ["tray"]` since dantesync#132) — a
+  `cargo build --release --features tray --bin dsync --bin dsync-tray` (with the Npcap SDK
+  installed; the tray bin has `required-features = ["tray"]` since dsync#132) — a
   genuine type/borrow/API error in `#[cfg(windows)]` **production** code fails a PR here.
 - **#56 (superseded by #58 below):** added `cargo test --no-run --verbose` to compile+link every
   Windows test binary without executing it, closing the specific compile/link-break class that
-  shipped v1.8.22 (dantesync#53/PR #55's `pcap_ts_to_systemtime` regression, invisible to a
+  shipped v1.8.22 (dsync#53/PR #55's `pcap_ts_to_systemtime` regression, invisible to a
   `cargo build`-only check). At the time, the team believed a bare `cargo test` crashed
   (`STATUS_DLL_NOT_FOUND`) only in `ci.yml`'s own cache-restored environment, and that
   `release.yml`'s own `cargo test --verbose` "kept working reliably" — **that belief was wrong**
@@ -32,7 +32,7 @@ paths:
   too.
 - **#58 — root cause + real fix:** `pcap`'s `#[link(name = "wpcap")]` puts a hard PE import for
   `wpcap.dll` in every binary/test that transitively links `net_pcap.rs`
-  (`PcapNtpTransport`/`NpcapPtpNetwork`, added by dantesync#53/PR #55). Every `windows-latest`
+  (`PcapNtpTransport`/`NpcapPtpNetwork`, added by dsync#53/PR #55). Every `windows-latest`
   runner only ever has the Npcap **SDK** (link-time `.lib` stubs) installed, never the Npcap
   **runtime** (`wpcap.dll`/`Packet.dll`) — GitHub-hosted runners don't ship it, and the free Npcap
   installer has no silent-install switch at all (only Npcap OEM, a paid subscription, supports
@@ -82,9 +82,9 @@ against the GNU target does **not** need the Npcap SDK / `LIB` env var (that's o
 catch real type/borrow/API errors in `#[cfg(windows)]` code that a Linux-only check silently skips:
 
 ```bash
-cargo check --target x86_64-pc-windows-gnu --features tray --bin dantesync --bin dantesync-tray
+cargo check --target x86_64-pc-windows-gnu --features tray --bin dsync --bin dsync-tray
 cargo check --target x86_64-pc-windows-gnu --tests --lib   # ALSO check mod tests, not just bins
-cargo clippy --target x86_64-pc-windows-gnu --features tray --bin dantesync --bin dantesync-tray -- -A dead_code
+cargo clippy --target x86_64-pc-windows-gnu --features tray --bin dsync --bin dsync-tray -- -A dead_code
 ```
 
 **The `--tests --lib` line matters on its own** — the original recipe here only checked `--bin`

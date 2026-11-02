@@ -1,4 +1,4 @@
-//! dantesync#136 — a slow NTP upstream on loopback, for the tests of the burst off the loop.
+//! dsync#136 — a slow NTP upstream on loopback, for the tests of the burst off the loop.
 
 use crate::ntp_server::NtpServer;
 use std::net::{SocketAddr, UdpSocket};

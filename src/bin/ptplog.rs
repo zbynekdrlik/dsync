@@ -1,11 +1,11 @@
 //! Simple PTP packet logger - shows raw T1, T2, and offset without filtering
 
-use dantesync::ptp::{PtpV1Control, PtpV1FollowUpBody, PtpV1Header};
+use dsync::ptp::{PtpV1Control, PtpV1FollowUpBody, PtpV1Header};
 use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// The sequence id of a PTPv1 Sync (versionPTP 1), with the library's parser (dantesync#129: the
+/// The sequence id of a PTPv1 Sync (versionPTP 1), with the library's parser (dsync#129: the
 /// header is 40 bytes and versionPTP a u16).
 fn sync_sequence(packet: &[u8]) -> Option<u16> {
     let h = PtpV1Header::parse(packet).ok()?;
@@ -127,32 +127,32 @@ fn main() {
 mod tests {
     use super::*;
 
-    /// dantesync#129 — real Dante packets (`tests/fixtures/ptpv1/README.md`).
-    const DANTE_SYNC: &[u8] =
-        include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/dante-sync.bin");
-    const DANTE_FOLLOW_UP: &[u8] =
-        include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/dante-follow-up.bin");
+    /// dsync#129 — real PTPv1 packets (`tests/fixtures/ptpv1/README.md`).
+    const PTPV1_SYNC: &[u8] =
+        include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/ptpv1-sync.bin");
+    const PTPV1_FOLLOW_UP: &[u8] =
+        include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/ptpv1-follow-up.bin");
 
     #[test]
-    fn a_real_dante_sync_is_logged_129() {
+    fn a_real_ptpv1_sync_is_logged_129() {
         // versionPTP is a u16 (byte 0 is 0x00 on the wire): the old `buf[0] & 0x0F == 1` check
         // matched no real packet.
-        assert_eq!(sync_sequence(DANTE_SYNC), Some(0xb27a));
+        assert_eq!(sync_sequence(PTPV1_SYNC), Some(0xb27a));
         assert_eq!(
-            sync_sequence(DANTE_FOLLOW_UP),
+            sync_sequence(PTPV1_FOLLOW_UP),
             None,
             "a Follow_Up is no Sync"
         );
-        assert_eq!(sync_sequence(&DANTE_SYNC[..39]), None, "a runt");
+        assert_eq!(sync_sequence(&PTPV1_SYNC[..39]), None, "a runt");
     }
 
     #[test]
-    fn a_real_dante_follow_up_gives_its_origin_time_129() {
+    fn a_real_ptpv1_follow_up_gives_its_origin_time_129() {
         assert_eq!(
-            follow_up_origin(DANTE_FOLLOW_UP),
+            follow_up_origin(PTPV1_FOLLOW_UP),
             Some((0xb27a, 541_867 * 1_000_000_000 + 434_557_859))
         );
-        assert_eq!(follow_up_origin(DANTE_SYNC), None, "a Sync is no Follow_Up");
-        assert_eq!(follow_up_origin(&DANTE_FOLLOW_UP[..51]), None, "a runt");
+        assert_eq!(follow_up_origin(PTPV1_SYNC), None, "a Sync is no Follow_Up");
+        assert_eq!(follow_up_origin(&PTPV1_FOLLOW_UP[..51]), None, "a runt");
     }
 }

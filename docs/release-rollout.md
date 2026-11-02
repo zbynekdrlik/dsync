@@ -9,8 +9,8 @@ addresses, transports and credentials are not in this repository: they are in
 ## The order
 
 1. **Release.** Bump `Cargo.toml`, merge `dev` into `master`. CI's `auto-release` job tags
-   `vX.Y.Z` and `release.yml` publishes `dantesync-linux-amd64`, `dantesync-windows-amd64.exe`,
-   `dantesync-tray-windows-amd64.exe` and `dantesync-tray-linux-amd64`, each with a `.sha256`.
+   `vX.Y.Z` and `release.yml` publishes `dsync-linux-amd64`, `dsync-windows-amd64.exe`,
+   `dsync-tray-windows-amd64.exe` and `dsync-tray-linux-amd64`, each with a `.sha256`.
    A failure on either platform publishes nothing.
 2. **Verify the assets once** against their `.sha256` files before any node gets them.
 3. **One canary node first, never the NTP master.** Check both its `/status` on port 8898 and
@@ -86,9 +86,9 @@ addresses, transports and credentials are not in this repository: they are in
   absorbs the new session (≤ 100 µs) instead of stepping; and upgraded followers HOLD the
   fleet date through the master's restart instead of stepping on their own NTP 30 s in.
   - **Roll check on the master:** its journal shows `[DATE] no saved fleet date offset at
-    /etc/dantesync/date-offset.json` on this first start, then the file exists (it is written
+    <state dir>/date-offset.json` on this first start (`/status.state_dir`), then the file exists (it is written
     on every change of the authority). No follower journal shows `[DATE] stepped` around it.
-  - **The acceptance (a daytime restart, after that):** `systemctl restart dantesync` on the
+  - **The acceptance (a daytime restart, after that):** a restart of the daemon's unit on the
     master. Its journal: `[DATE] saved fleet date offset found … the boot step is skipped`,
     `[DATE] boot step of … SKIPPED`, then at its first lock `[DATE] RESTORED the fleet date
     offset …`; `/status` `date_offset_restored: true` with the SAME `date_offset_seq` and
@@ -97,7 +97,8 @@ addresses, transports and credentials are not in this repository: they are in
     with `date_authority_hold_age_s` while the master is away, then `… heard again after
     holding …` and `"follower"`; NO `[DATE] stepped` and no `[StepClock]` anywhere.
   - **The coordinated step on request** (acceptance tests only): on the MASTER itself,
-    `curl -s -X POST -H 'X-DanteSync-Step: 1' http://127.0.0.1:8898/date/step` → `202` +
+    `curl -s -X POST -H 'X-Dsync-Step: 1' http://127.0.0.1:8898/date/step` (a pre-1.25 master
+    needs its old header name; 1.25+ accepts both) → `202` +
     `{"accepted":true,"amount_ns":…,"land_ptp_ns":…,"due_in_ms":…,"seq":…}`; every box then logs
     ONE `[DATE] stepped +…us (coordinated, seq N)` at the instant. Refused with a reason (`409`)
     while another change is in flight, without a settled UTC estimate, or for a fleet ahead of
@@ -108,8 +109,9 @@ addresses, transports and credentials are not in this repository: they are in
     `/status.date_step_trigger_last` (and the log) before asking again. A pre-1.15 build answers
     `200` + the status JSON: key on `"accepted"`. `/status.date_step_trigger_last` records the
     last one.
-  - **Rolling the MASTER back to a pre-1.15 build: delete `/etc/dantesync/date-offset.json`
-    (`C:\ProgramData\DanteSync\date-offset.json`) in the same step.** 1.14 does not know the
+  - **Rolling the MASTER back to a pre-1.15 build: delete `date-offset.json` in its state dir
+    in the same step** (`/status.state_dir`: `/etc/dsync` / `C:\ProgramData\dsync`, or the
+    pre-1.25 dir a box keeps in place, #147). 1.14 does not know the
     file and starts a new session; a 1.15 installed again within a day would restore the
     session from BEFORE the rollback (same grandmaster, under a day old, within the 5 s cap)
     and every follower would re-join it with a step at its own poll. A node that starts as a

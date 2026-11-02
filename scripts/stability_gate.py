@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""dsync #98: the Dante stability gate's verdict and its release check.
+"""dsync #98: the stability gate's verdict and its release check.
 
-Two subcommands, both used by CI (`docs/dante-gate.md`):
+Two subcommands, both used by CI (`docs/stability-gate.md`):
 
 verdict <clock.jsonl> --polls N
     Judges the output of dstack's `dante-stack-dev clock --seconds N` (v0.4.33: one JSON object
@@ -10,7 +10,7 @@ verdict <clock.jsonl> --polls N
       Ready      = a poll whose `ready` turns 1 (the first poll counts when it is already 1).
       ReAnchored = a poll with a non-null `re_anchor_ns` or a non-zero `re_anchors`.
       Holdover   = a poll with `holdover` = 1, EXCEPT on a StepNear poll. dstack's tracker
-                   (crates/dante-stack/src/clock.rs, v0.4.33) turns every unusable poll after the
+                   (`Tracker::feed` in its clock module, v0.4.33) turns every unusable poll after the
                    anchor into Holdover, StepNear included; the rule allows StepNear, so those are
                    counted apart (`step_near_holdover_polls`) and pass.
       ReAnchored polls are those with a non-null `re_anchor_ns`; `re_anchors` is cumulative, so
@@ -63,7 +63,7 @@ class Verdict:
 
     def report(self):
         lines = [
-            "Dante gate verdict: %s" % ("PASS" if self.passed else "FAIL"),
+            "Stability gate verdict: %s" % ("PASS" if self.passed else "FAIL"),
             "Polls: %d of %d" % (self.polls, self.polls_expected),
             "Ready events: %d (need exactly 1)" % self.ready_events,
             "ReAnchored polls: %d, re_anchors max %d (need 0)"
@@ -167,7 +167,7 @@ def _verdict_cmd(opts):
         with open(opts.clock_log, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
     except OSError as exc:
-        print("Dante gate verdict: FAIL\nReason: cannot read %s: %s" % (opts.clock_log, exc))
+        print("Stability gate verdict: FAIL\nReason: cannot read %s: %s" % (opts.clock_log, exc))
         return 1
     v = verdict(lines, opts.polls)
     text = v.report()
@@ -203,7 +203,7 @@ def _release_check_cmd(opts, run):
     if match:
         sha, gate = match
         print(
-            "release-check: tree %s passed the Dante gate: commit %s, run %s (%s)"
+            "release-check: tree %s passed the stability gate: commit %s, run %s (%s)"
             % (opts.tree, sha, gate.get("html_url", gate.get("id")), gate.get("event"))
         )
         return 0

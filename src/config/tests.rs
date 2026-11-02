@@ -346,7 +346,7 @@ fn gm_allowlist_serde_roundtrip_preserves_entries() {
 }
 
 // ========================================================================
-// DSCP CONFIG TESTS (dantesync#52)
+// DSCP CONFIG TESTS (dsync#52)
 // ========================================================================
 
 #[test]
@@ -391,7 +391,7 @@ fn dscp_serde_roundtrip_preserves_values() {
 }
 
 // ========================================================================
-// PHASE SLEW CONFIG TESTS (dantesync#97)
+// PHASE SLEW CONFIG TESTS (dsync#97)
 // ========================================================================
 
 #[test]
@@ -449,7 +449,7 @@ fn phase_slew_serde_roundtrip() {
     assert!(restored.phase_slew.enabled);
 }
 
-// ---- dantesync#117 / #88 ---------------------------------------------------------------
+// ---- dsync#117 / #88 ---------------------------------------------------------------
 
 #[test]
 fn clock_discipline_defaults_to_the_ptp_phase_lock_117() {
@@ -849,7 +849,7 @@ fn a_saved_date_offset_is_restored_within_the_daily_emergency_cap_126() {
     }
 }
 
-/// dantesync#131 — `system.interface`: a name pins, blank / null / absent does not, a non-string
+/// dsync#131 — `system.interface`: a name pins, blank / null / absent does not, a non-string
 /// fails the parse (the loader then runs the last-good config, loudly).
 #[test]
 fn the_pinned_interface_key_parses_and_blank_is_unset_131() {
@@ -864,7 +864,7 @@ fn the_pinned_interface_key_parses_and_blank_is_unset_131() {
     assert_eq!(SystemConfig::default().interface, None);
 }
 
-/// dantesync#131 — `--interface` wins over `system.interface`; a blank CLI value is unset.
+/// dsync#131 — `--interface` wins over `system.interface`; a blank CLI value is unset.
 #[test]
 fn the_cli_interface_overrides_the_config_131() {
     let cfg: SystemConfig = serde_json::from_str(r#"{"interface": "enp56s0"}"#).expect("parses");

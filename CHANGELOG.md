@@ -1,9 +1,48 @@
 # Changelog
 
-All notable changes to DanteSync will be documented in this file.
+All notable changes to dsync will be documented in this file.
+Entries before 1.25.0 keep the names of their time (the project was renamed in 1.25.0).
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.25.0] - 2026-11-02
+
+### Changed
+
+- The project is dsync everywhere (#147, owner 2026-11-02). Breaking for whoever installs or deploys it:
+  - Binaries `dsync` and `dsync-tray`; release assets `dsync-linux-amd64`,
+    `dsync-windows-amd64.exe`, `dsync-tray-linux-amd64`, `dsync-tray-windows-amd64.exe` (each with
+    its `.sha256`).
+  - Linux unit `dsync.service` (in `install.sh` / `setup.sh`); Windows service `dsync`, pipe
+    `\\.\pipe\dsync`, tray texts "dsync", install dir `C:\Program Files\dsync`.
+  - The installers remove a pre-1.25 service/unit and its binary; its state dir stays.
+  - The loud alarm reads "NO PTP CLOCK" (the `[CLOCK-ALARM]` log tag is unchanged).
+  - `POST /date/step` takes the `X-Dsync-Step` header; the pre-1.25 header name is still accepted.
+- Wording: code, logs, docs and rules say "PTPv1", "the grandmaster" or "the audio network".
+- The release gate is the "Stability Gate" (`gate.yml`, runner label `dsync-gate`,
+  `scripts/stability_gate.py`, `docs/stability-gate.md`).
+
+### Fixed
+
+- The rate servo measures a window's span in the grandmaster's time (the window's t1), the time
+  the offset it differentiates is in, not `Instant::now()` when the window is processed. In
+  production the same rate within ppm, minus the processing jitter. In the e2e simulations every
+  span was under 0.1 s of wall time, and a pause under coverage divided a simulated offset by a real
+  span (`test_auto_adaptive_drift_rates` at the ±500 ppm clamp, PR #149). The #146 follow-up (1).
+
+### Added
+
+- The state dir is resolved at start (`src/state_dir.rs`, ROZHODNUTÉ #147: resolve, never copy):
+  `/etc/dsync` (`C:\ProgramData\dsync`) when it exists, else the pre-1.25 dir IN PLACE, else a
+  new `/etc/dsync`. `config.json` (+ `last-good`), `date-offset.json`, `drift.json` and the Windows
+  log follow it. The choice is logged (`[State] state dir …`) and reported in `/status.state_dir`
+  (additive).
+
+### Unchanged
+
+- DSYX on UDP 31900 (magics `DSYN`/`DSYX`/`DSYR`, layout, bytes [41]/[62]); HTTP `/status` on
+  port 8898 with every existing field; `config.json` keys.
 
 ## [1.24.0] - 2026-11-02
 

@@ -1,5 +1,5 @@
 /target
-dantesync.log
+dsync.log
 e2e_test.log
 .claude/command-history.log
 __pycache__/

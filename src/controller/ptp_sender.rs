@@ -1,4 +1,4 @@
-//! dantesync#129 (slice 0) — who sends the PTP time this node follows, as the Sync carries it.
+//! dsync#129 (slice 0) — who sends the PTP time this node follows, as the Sync carries it.
 //!
 //! Before 1.17 the header was parsed as 36 bytes, so every node read the grandmaster UUID as the
 //! constant `ptp::LEGACY_MISREAD_GM_UUID` and never read the version or the subdomain. Now the
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn the_grandmaster_line_names_its_best_master_fields_129() {
-        let sync = include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/dante-sync.bin");
+        let sync = include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/ptpv1-sync.bin");
         let body = PtpV1SyncMessageBody::parse(&sync[PtpV1Header::SIZE..]).expect("a Sync body");
         assert_eq!(
             describe_grandmaster(&body),

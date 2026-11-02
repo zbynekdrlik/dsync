@@ -1,9 +1,9 @@
 ---
 name: sync-monitoring
-description: Monitor and verify DanteSync clock synchronization across multiple computers. Use when checking sync status, running comparison tests, or verifying NTP/PTP alignment.
+description: Monitor and verify dsync clock synchronization across multiple computers. Use when checking sync status, running comparison tests, or verifying NTP/PTP alignment.
 ---
 
-# DanteSync Sync Monitoring
+# dsync Sync Monitoring
 
 ## Quick Status Check
 
@@ -28,7 +28,7 @@ built-in list, so always pass `--hosts`.
 - `1-5ms`: DRIFT - May need investigation
 - `> 5ms`: ERROR - Sync problem detected
 
-**NTP measurement quality (dantesync#53):** `ntp_offset_us` (status JSON / tray) is a
+**NTP measurement quality (dsync#53):** `ntp_offset_us` (status JSON / tray) is a
 burst-filtered, RTT-selected MEDIAN (5 raw samples/check, lowest-3-RTT accepted), not a single raw
 round trip. Two fields expose whether to TRUST that median: `ntp_spread_us` (max-min across the
 accepted samples â€” large even when the offset itself looks reasonable means the node's NTP
@@ -65,5 +65,5 @@ logged loudly at startup) or the network/server path itself is genuinely noisy â
 
 **Config Locations:**
 
-- Linux: `/etc/dantesync/config.json`
-- Windows: `C:\ProgramData\DanteSync\config.json`
+- Linux: `/etc/dsync/config.json`
+- Windows: `C:\ProgramData\dsync\config.json`

@@ -1,4 +1,4 @@
-//! dantesync#116 — `config.json`: the file format, its migration, and loading it so that a file
+//! dsync#116 — `config.json`: the file format, its migration, and loading it so that a file
 //! that does not parse NEVER costs the node its real configuration.
 //!
 //! Before 1.21 every failure (unreadable, a UTF-8 BOM, a value of the wrong shape) took the
@@ -25,7 +25,7 @@ pub struct Config {
     /// camera-box issue 1073: this gained `#[serde(default)]` so a file that
     /// omits `ntp_server` (e.g. an operator who writes only
     /// `{"system": {"gm_allowlist": [...]}}` during the fix rollout) parses
-    /// instead of failing the WHOLE-file parse — which (before dantesync#116)
+    /// instead of failing the WHOLE-file parse — which (before dsync#116)
     /// sent `load_config` down its overwrite-with-defaults path and SILENTLY
     /// DELETED the allowlist they just added. Missing
     /// → the fleet default (same value the fresh-config template already writes).
@@ -67,7 +67,7 @@ impl Default for Config {
 /// changed (i.e. the file should be written back).
 ///
 /// Extracted from `load_config()` in #68 so it is testable at all (a panicking
-/// mutable index once reached the fleet's clock master). dantesync#116 moved the
+/// mutable index once reached the fleet's clock master). dsync#116 moved the
 /// whole loader here, with injected paths, so the loading is tested too.
 ///
 /// **Never index a nested value mutably without proving it is an object first.**
@@ -76,7 +76,7 @@ impl Default for Config {
 /// attempt to enable it — would abort the daemon at startup, which under a
 /// service manager is a restart loop rather than a degraded start. A malformed
 /// value is instead left alone and fails the typed parse, which [`load`] answers
-/// with the last-good copy (dantesync#116), never with a panic.
+/// with the last-good copy (dsync#116), never with a panic.
 pub fn migrate_config_json(json: &mut serde_json::Value) -> bool {
     let mut needs_migration = false;
 
@@ -137,8 +137,8 @@ pub const TEMPLATE: &str = r#"{
     "port": 8898
   },
   "system": {
-    "_interface": "dantesync#131 — set \"interface\" to the PTP NIC (e.g. \"enp2s0\", on Windows \"Ethernet\") to pin it; unset = first IPv4 NIC",
-    "_phase_slew": "dantesync#97 — set enabled:true (per-box, canary rollout) to SLEW sub-50ms UTC errors instead of stepping",
+    "_interface": "dsync#131 — set \"interface\" to the PTP NIC (e.g. \"enp2s0\", on Windows \"Ethernet\") to pin it; unset = first IPv4 NIC",
+    "_phase_slew": "dsync#97 — set enabled:true (per-box, canary rollout) to SLEW sub-50ms UTC errors instead of stepping",
     "phase_slew": {
       "enabled": false
     }
@@ -152,7 +152,7 @@ pub const LOADED_FROM_LAST_GOOD: &str = "last-good";
 /// Neither loaded; the built-in defaults run.
 pub const LOADED_FROM_DEFAULTS: &str = "defaults";
 
-/// dantesync#116 — where the running configuration came from, published as
+/// dsync#116 — where the running configuration came from, published as
 /// `/status.config_state` (`null` in a pre-1.21 blob).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigState {
@@ -313,7 +313,7 @@ fn read_parsed(path: &Path) -> Result<Option<Parsed>, String> {
     }
 }
 
-/// dantesync#116 — load `path`, keeping `last_good` as the fallback.
+/// dsync#116 — load `path`, keeping `last_good` as the fallback.
 ///
 /// - `path` parses: a migration is written back (atomically, only now that the file is known to
 ///   be good), the last-good copy is refreshed, `loaded_from = "file"`.

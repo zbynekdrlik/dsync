@@ -1,13 +1,29 @@
-# DanteSync Installer for Windows
+# dsync Installer for Windows
 # Run as Administrator in PowerShell
 
 $ErrorActionPreference = "Stop"
 
 $RepoOwner = "zbynekdrlik"
-$RepoName = "dantesync"
-$InstallDir = "C:\Program Files\DanteSync"
-$ServiceName = "dantesync"
-$DataDir = "C:\ProgramData\DanteSync"
+$RepoName = "dsync"
+$InstallDir = "C:\Program Files\dsync"
+$ServiceName = "dsync"
+
+# dsync#147: the state directory is the daemon's choice (src/state_dir.rs): C:\ProgramData\dsync
+# when it exists, else the pre-1.25 one IN PLACE (never copied), else a new C:\ProgramData\dsync.
+# The installer follows the same rule, so it never creates an empty new dir beside a legacy one.
+$NewDataDir = "C:\ProgramData\dsync"
+$LegacyDataDir = "C:\ProgramData\DanteSync"
+if (Test-Path $NewDataDir) {
+    $DataDir = $NewDataDir
+} elseif (Test-Path $LegacyDataDir) {
+    $DataDir = $LegacyDataDir
+} else {
+    $DataDir = $NewDataDir
+}
+
+# The pre-1.25 installation, removed below (one daemon per box). Its data dir stays.
+$LegacyServiceName = "dantesync"
+$LegacyInstallDir = "C:\Program Files\DanteSync"
 
 # Fetch version from GitHub first (single source of truth: Cargo.toml -> GitHub Release)
 $LatestReleaseUrl = "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest"
@@ -19,7 +35,7 @@ try {
 }
 
 Write-Host ""
-Write-Host ">>> DanteSync Windows Installer $Version <<<" -ForegroundColor Cyan
+Write-Host ">>> dsync Windows Installer $Version <<<" -ForegroundColor Cyan
 Write-Host ""
 
 # Check for Administrator privileges
@@ -528,15 +544,15 @@ if (-not $ReleaseInfo) {
 Write-Host "Installing Version: $Version" -ForegroundColor Green
 
 # Use exact matching to avoid ambiguity
-$Asset = $ReleaseInfo.assets | Where-Object { $_.name -eq "dantesync-windows-amd64.exe" } | Select-Object -First 1
-$TrayAsset = $ReleaseInfo.assets | Where-Object { $_.name -eq "dantesync-tray-windows-amd64.exe" } | Select-Object -First 1
+$Asset = $ReleaseInfo.assets | Where-Object { $_.name -eq "dsync-windows-amd64.exe" } | Select-Object -First 1
+$TrayAsset = $ReleaseInfo.assets | Where-Object { $_.name -eq "dsync-tray-windows-amd64.exe" } | Select-Object -First 1
 
 if (!$Asset) {
-    Write-Error "Could not find 'dantesync-windows-amd64.exe' in latest release."
+    Write-Error "Could not find 'dsync-windows-amd64.exe' in latest release."
 }
 
-$ExePath = "$InstallDir\dantesync.exe"
-$TrayPath = "$InstallDir\dantesync-tray.exe"
+$ExePath = "$InstallDir\dsync.exe"
+$TrayPath = "$InstallDir\dsync-tray.exe"
 
 # 4. Stop & Remove Existing Service/Processes (CRITICAL: Do this BEFORE download)
 Write-Host "Stopping services and processes..."
@@ -562,12 +578,37 @@ Write-Host "Disabling Windows Time service (W32Time)..."
 Stop-Service -Name "W32Time" -Force -ErrorAction SilentlyContinue
 Set-Service -Name "W32Time" -StartupType Disabled -ErrorAction SilentlyContinue
 
+# dsync#147: remove the pre-1.25 installation (service, processes, autostart, shortcut,
+# Add/Remove Programs entry, program files). Its data dir is used in place and stays.
+$LegacyService = Get-Service -Name $LegacyServiceName -ErrorAction SilentlyContinue
+if ($LegacyService) {
+    Write-Host "Removing the pre-1.25 service '$LegacyServiceName'..."
+    Stop-Service -Name $LegacyServiceName -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    sc.exe delete $LegacyServiceName | Out-Null
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1060) { # 1060 = does not exist
+        Write-Warning "sc delete $LegacyServiceName returned exit code $LASTEXITCODE"
+    }
+    Start-Sleep -Seconds 1
+}
+Stop-Process -Name "dantesync" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "dantesync-tray" -Force -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "DanteSyncTray" -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "DanteSyncTrayStart" -Confirm:$false -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "DanteSyncTray" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "DanteSyncTray" -ErrorAction SilentlyContinue
+Remove-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\DanteSync.lnk" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DanteSync" -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path $LegacyInstallDir) {
+    Remove-Item -Path $LegacyInstallDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # Kill processes - try graceful close for tray first to avoid ghost icons
 Write-Host "Checking for running processes..."
-Stop-Process -Name "dantesync" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "dsync" -Force -ErrorAction SilentlyContinue
 
-# Gracefully close dantesync-tray by sending close message to its window
-$trayProc = Get-Process -Name "dantesync-tray" -ErrorAction SilentlyContinue
+# Gracefully close dsync-tray by sending close message to its window
+$trayProc = Get-Process -Name "dsync-tray" -ErrorAction SilentlyContinue
 if ($trayProc) {
     Write-Host "  - Closing tray application gracefully..."
     # Try to close main window first (allows cleanup of tray icon)
@@ -575,7 +616,7 @@ if ($trayProc) {
     Start-Sleep -Seconds 2
     # If still running, force kill
     if (!$trayProc.HasExited) {
-        Stop-Process -Name "dantesync-tray" -Force -ErrorAction SilentlyContinue
+        Stop-Process -Name "dsync-tray" -Force -ErrorAction SilentlyContinue
     }
 }
 Start-Sleep -Seconds 1
@@ -596,7 +637,7 @@ if ($TrayAsset) {
         Write-Warning "Failed to download tray app. Error: $_"
     }
 } else {
-    Write-Warning "Tray application ('dantesync-tray-windows-amd64.exe') not found in latest release."
+    Write-Warning "Tray application ('dsync-tray-windows-amd64.exe') not found in latest release."
 }
 
 # 6. Install Service
@@ -606,7 +647,7 @@ Write-Host "Installing Service..."
 $BinPath = "`"$ExePath`" --service"
 
 try {
-    New-Service -Name $ServiceName -BinaryPathName $BinPath -DisplayName "DanteSync" -StartupType Automatic -Description "Synchronizes system time with Dante PTP Master"
+    New-Service -Name $ServiceName -BinaryPathName $BinPath -DisplayName "dsync" -StartupType Automatic -Description "Synchronizes system time with the PTPv1 grandmaster"
 } catch {
     Write-Error "Failed to create service. Ensure you are running as Administrator. Error: $_"
 }
@@ -624,13 +665,13 @@ if (Test-Path $TrayPath) {
     Write-Host "Setting up Tray App to run at startup..."
 
     # Remove any old scheduled task (we use registry now)
-    Unregister-ScheduledTask -TaskName "DanteSyncTray" -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "DsyncTray" -Confirm:$false -ErrorAction SilentlyContinue
 
     # Registry Run entry (HKLM - covers all users)
     Write-Host "  - Adding registry startup entry..."
     $RegPathLM = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
     try {
-        Set-ItemProperty -Path $RegPathLM -Name "DanteSyncTray" -Value "`"$TrayPath`"" -ErrorAction Stop
+        Set-ItemProperty -Path $RegPathLM -Name "DsyncTray" -Value "`"$TrayPath`"" -ErrorAction Stop
         Write-Host "    Registry entry added for all users." -ForegroundColor Gray
     } catch {
         Write-Warning "Failed to add registry entry: $_"
@@ -638,7 +679,7 @@ if (Test-Path $TrayPath) {
 
     # Start tray in user's interactive session (works over SSH/remote)
     # Using scheduled task ensures it runs on the logged-in user's desktop
-    $TrayProcess = Get-Process -Name "dantesync-tray" -ErrorAction SilentlyContinue
+    $TrayProcess = Get-Process -Name "dsync-tray" -ErrorAction SilentlyContinue
     if (!$TrayProcess) {
         Write-Host "Starting Tray App in interactive session..."
 
@@ -646,7 +687,7 @@ if (Test-Path $TrayPath) {
         $LoggedInUser = (Get-WmiObject -Class Win32_ComputerSystem).UserName
         if ($LoggedInUser) {
             # Create a one-time scheduled task to run immediately in user's session
-            $TrayTaskName = "DanteSyncTrayStart"
+            $TrayTaskName = "DsyncTrayStart"
             Unregister-ScheduledTask -TaskName $TrayTaskName -Confirm:$false -ErrorAction SilentlyContinue
 
             $Action = New-ScheduledTaskAction -Execute $TrayPath
@@ -674,23 +715,23 @@ if (Test-Path $TrayPath) {
 Write-Host "Adding to Start Menu..."
 try {
     $StartMenuPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
-    $ShortcutPath = "$StartMenuPath\DanteSync.lnk"
+    $ShortcutPath = "$StartMenuPath\dsync.lnk"
 
     $WshShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
     $Shortcut.TargetPath = $TrayPath
-    $Shortcut.Description = "DanteSync - Tray Application"
+    $Shortcut.Description = "dsync - Tray Application"
     $Shortcut.WorkingDirectory = $InstallDir
     $Shortcut.Save()
 
-    Write-Host "  - Added 'DanteSync' to Start Menu" -ForegroundColor Gray
+    Write-Host "  - Added 'dsync' to Start Menu" -ForegroundColor Gray
 } catch {
     Write-Warning "Failed to add Start Menu shortcut: $_"
 }
 
 # 10. Register in Add/Remove Programs (Windows "Installed Apps")
 Write-Host "Registering in Windows Installed Apps..."
-$UninstallKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DanteSync"
+$UninstallKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\dsync"
 
 # Get version from executable
 $FileVersion = $Version -replace '^v', ''  # Remove 'v' prefix if present
@@ -700,7 +741,7 @@ try {
         New-Item -Path $UninstallKey -Force | Out-Null
     }
 
-    Set-ItemProperty -Path $UninstallKey -Name "DisplayName" -Value "DanteSync"
+    Set-ItemProperty -Path $UninstallKey -Name "DisplayName" -Value "dsync"
     Set-ItemProperty -Path $UninstallKey -Name "DisplayVersion" -Value $FileVersion
     Set-ItemProperty -Path $UninstallKey -Name "Publisher" -Value "Zbyněk Drlík"
     Set-ItemProperty -Path $UninstallKey -Name "InstallLocation" -Value $InstallDir
@@ -742,5 +783,5 @@ if ($ScriptPath) {
 
 Write-Host "Installation Complete!" -ForegroundColor Green
 Write-Host "Service '$ServiceName' is running."
-Write-Host "Logs available at: $DataDir\dantesync.log" -ForegroundColor Gray
+Write-Host "Logs available at: $DataDir\dsync.log" -ForegroundColor Gray
 Write-Host "Config available at: $DataDir\config.json" -ForegroundColor Gray

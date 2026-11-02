@@ -3,7 +3,7 @@
 #
 # MANUAL STEPS REQUIRED:
 # 1. Start this script
-# 2. When prompted, power off the primary Dante grandmaster
+# 2. When prompted, power off the primary grandmaster
 # 3. Wait for a secondary device to take over GM role
 # 4. Observe sync behavior
 # 5. Power primary GM back on
@@ -16,7 +16,7 @@ OUTPUT="gm_failover_test_$(date +%Y%m%d_%H%M%S).csv"
 
 echo "=== Grandmaster Failover Test ==="
 echo ""
-echo "This test verifies DanteSync handles GM changes correctly."
+echo "This test verifies dsync handles GM changes correctly."
 echo "Output: $OUTPUT"
 echo ""
 
@@ -32,7 +32,7 @@ sleep 60
 
 echo ""
 echo "========================================================"
-echo "  ACTION REQUIRED: Power OFF the primary Dante Grandmaster"
+echo "  ACTION REQUIRED: Power OFF the primary grandmaster"
 echo "========================================================"
 read -p "Press ENTER when GM is powered off..."
 
@@ -45,7 +45,7 @@ sleep 120
 
 echo ""
 echo "========================================================"
-echo "  ACTION REQUIRED: Power ON the primary Dante Grandmaster"
+echo "  ACTION REQUIRED: Power ON the primary grandmaster"
 echo "========================================================"
 read -p "Press ENTER when GM is powered back on..."
 
@@ -67,7 +67,7 @@ python3 "$SCRIPT_DIR/analyze-sync.py" "$OUTPUT"
 echo ""
 echo "=== Expected Behavior ==="
 echo "1. During failover: Temporary increase in spread (new GM has different frequency)"
-echo "2. DanteSync should detect new GM and re-acquire lock within ~30s"
+echo "2. dsync should detect new GM and re-acquire lock within ~30s"
 echo "3. After recovery: Spread should return to baseline"
 echo "4. No computer should show sustained >10ms offset"
 echo ""

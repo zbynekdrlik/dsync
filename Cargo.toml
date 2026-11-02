@@ -13,21 +13,21 @@ ctrlc = { version = "3.4", features = ["termination"] }
 nix = { version = "0.27", features = ["socket", "net", "uio", "fs", "ioctl"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# dantesync#136: the PTP code shared with the in-process follower library.
-dsync-ptp = { path = "crates/dsync-ptp", version = "1.24.0" }
+# dsync#136: the PTP code shared with the in-process follower library.
+dsync-ptp = { path = "crates/dsync-ptp", version = "1.25.0" }
 
 [package]
-name = "dantesync"
-version = "1.24.0"
+name = "dsync"
+version = "1.25.0"
 edition = "2021"
-description = "High-precision PTP synchronization for Dante Audio networks"
+description = "High-precision PTPv1 synchronization for audio networks"
 license = "MIT"
-repository = "https://github.com/zbynekdrlik/dantesync"
-keywords = ["ptp", "dante", "audio", "synchronization", "time"]
+repository = "https://github.com/zbynekdrlik/dsync"
+keywords = ["ptp", "audio", "synchronization", "time"]
 categories = ["network-programming"]
 rust-version = "1.70"
 
-# dantesync#136: the service (this root package) and the PTP library crate consumers pin by tag.
+# dsync#136: the service (this root package) and the PTP library crate consumers pin by tag.
 [workspace]
 members = ["crates/dsync-ptp"]
 
@@ -40,7 +40,7 @@ windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_Networking_WinSock",
     "Win32_NetworkManagement_IpHelper",
-    "Win32_NetworkManagement_Ndis",  # dantesync#131: GetAdaptersAddresses (the pinned PTP interface)
+    "Win32_NetworkManagement_Ndis",  # dsync#131: GetAdaptersAddresses (the pinned PTP interface)
     "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
@@ -62,9 +62,9 @@ winrt-notification = "0.5"  # Windows toast notifications
 pcap = "2.2"  # Npcap for Windows packet capture with precise timestamps
 reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false }  # HTTP client for version check (native-tls = Windows schannel, drops the rustls-webpki stack — #340 security audit RUSTSEC-2026-0098/0099/0104)
 
-# dantesync#132: the tray icon, on Windows (winit + named pipe) and on Linux (gtk main
+# dsync#132: the tray icon, on Windows (winit + named pipe) and on Linux (gtk main
 # loop + the :8898 HTTP status). Optional, enabled only by the `tray` feature that the
-# `dantesync-tray` bin requires, so the daemon (headless camera boxes) never links gtk
+# `dsync-tray` bin requires, so the daemon (headless camera boxes) never links gtk
 # and no other build needs the gtk / libxdo dev packages.
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 tray-icon = { version = "0.14", optional = true }
@@ -73,7 +73,7 @@ tray-icon = { version = "0.14", optional = true }
 gtk = { version = "0.18", optional = true }  # the same gtk 0.18 tray-icon 0.14 (muda) runs on
 
 [features]
-# Build the tray: `cargo build --release --features tray --bin dantesync-tray`.
+# Build the tray: `cargo build --release --features tray --bin dsync-tray`.
 # Linux needs libgtk-3-dev + libxdo-dev to build it (libayatana-appindicator3 is loaded at run time).
 tray = ["dep:tray-icon", "dep:gtk"]
 
@@ -83,15 +83,15 @@ sd-notify = "0.4"
 
 [dev-dependencies]
 mockall = "0.12"
-dsync-ptp = { path = "crates/dsync-ptp", version = "1.24.0", features = ["mock", "sim"] }
+dsync-ptp = { path = "crates/dsync-ptp", version = "1.25.0", features = ["mock", "sim"] }
 tempfile = "3.10"
 
 [[bin]]
-name = "dantesync"
+name = "dsync"
 path = "src/main.rs"
 
 [[bin]]
-name = "dantesync-tray"
+name = "dsync-tray"
 path = "src/bin/tray.rs"
 required-features = ["tray"]
 

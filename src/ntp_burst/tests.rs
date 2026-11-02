@@ -1,4 +1,4 @@
-//! dantesync#136 — the `ntp-burst` thread. Upper bounds only (no lower bound is measured across a
+//! dsync#136 — the `ntp-burst` thread. Upper bounds only (no lower bound is measured across a
 //! thread spawn); the slow upstream makes one burst last about a second.
 
 use super::test_support::SlowNtpUpstream;

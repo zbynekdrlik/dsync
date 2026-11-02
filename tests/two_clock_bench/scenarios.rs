@@ -20,7 +20,7 @@ fn same_steps(got: &[(u32, i64, f64)], want: &[(u32, i64)]) -> bool {
     got.len() == want.len()
         && got.iter().zip(want).all(|(g, w)| {
             let tolerance = if near_gm_event(g.2) {
-                dantesync::date_offset::ABSORB_TOLERANCE_NS
+                dsync::date_offset::ABSORB_TOLERANCE_NS
             } else {
                 0
             };
@@ -578,7 +578,7 @@ fn windows_boxes_take_the_backward_steps_exactly_too_119() {
             r.max_step_residual_ns[i] as f64 / 1e3
         );
         assert!(
-            r.max_step_residual_ns[i] <= 2 * dantesync::clock::step::STEP_TOLERANCE_NS,
+            r.max_step_residual_ns[i] <= 2 * dsync::clock::step::STEP_TOLERANCE_NS,
             "box {i}: a step landed {} µs off",
             r.max_step_residual_ns[i] as f64 / 1e3
         );

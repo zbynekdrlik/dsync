@@ -28,7 +28,7 @@ impl From<u8> for PtpV1Control {
     }
 }
 
-/// dantesync#129 — what every node before 1.17 read as the grandmaster UUID off a real Dante Sync:
+/// dsync#129 — what every node before 1.17 read as the grandmaster UUID off a real PTPv1 Sync:
 /// a 36-byte header plus a 13-byte skip landed on absolute bytes 49..55, the reserved byte and
 /// `grandmasterCommunicationTechnology` (1) inside zeros. It was reported on `/status.gm_uuid`,
 /// saved by the NTP master with its date offset (`date-offset.json`) and announced on 31900, so it
@@ -52,12 +52,12 @@ pub const LEGACY_MISREAD_GM_UUID: [u8; 6] = [0, 0, 0, 0, 1, 0];
 /// | 34 | flags (u16) |
 /// | 36..40 | reserved |
 ///
-/// dantesync#129: the size was 36 before 1.17, so the Sync body was read 4 bytes early.
+/// dsync#129: the size was 36 before 1.17, so the Sync body was read 4 bytes early.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PtpV1Header {
     pub version_ptp: u16,
     pub version_network: u16,
-    /// The subdomain name, NUL-padded (Dante: `_DFLT`).
+    /// The subdomain name, NUL-padded (the audio network: `_DFLT`).
     pub subdomain: [u8; 16],
     /// Taken from `control` (the message's kind), not from the header's `messageType` byte.
     pub message_type: PtpV1Control,
@@ -122,7 +122,7 @@ fn nul_terminated(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
-/// dantesync#112 — a PTP TIME message: a datagram with a whole PTPv1 header whose control is Sync
+/// dsync#112 — a PTP TIME message: a datagram with a whole PTPv1 header whose control is Sync
 /// or Follow_Up, i.e. the grandmaster's time. The ONE definition of "PTP was received": the
 /// controller's liveness (and the grandmaster it names) and the backends' home address both use
 /// it, so a runt, another follower's Delay_Req or any stray datagram on 319/320 counts for neither.
@@ -143,7 +143,7 @@ pub struct PtpTimestamp {
 impl PtpTimestamp {
     /// Convert timestamp to nanoseconds.
     /// Uses saturating arithmetic to prevent overflow from malformed packets.
-    /// Note: Dante PTP uses device uptime (not Unix epoch), so seconds values
+    /// Note: the grandmaster's PTPv1 time is its device uptime (not Unix epoch), so seconds values
     /// are typically small, but we handle edge cases defensively.
     pub fn to_nanos(&self) -> i64 {
         (self.seconds as i64)
@@ -172,7 +172,7 @@ impl PtpTimestamp {
 /// | 36 | reserved |
 /// | 37 | grandmasterPreferred |
 ///
-/// The rest of the 84-byte body (the local and parent clock) is not read. dantesync#129: the
+/// The rest of the 84-byte body (the local and parent clock) is not read. dsync#129: the
 /// best-master fields are parsed for the grandmaster failover; nothing selects on them yet.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PtpV1SyncMessageBody {
@@ -230,7 +230,7 @@ impl PtpV1SyncMessageBody {
         })
     }
 
-    /// The clock identifier as text (Dante: `DFLT`), as [`PtpV1Header::subdomain_name`].
+    /// The clock identifier as text (the audio network: `DFLT`), as [`PtpV1Header::subdomain_name`].
     pub fn grandmaster_identifier_name(&self) -> String {
         nul_terminated(&self.grandmaster_clock_identifier)
     }
@@ -252,7 +252,7 @@ impl PtpV1FollowUpBody {
         }
         let mut rdr = Cursor::new(data);
 
-        // reserved (2). dantesync#129: before 1.17 the body started 4 bytes early (a 36-byte
+        // reserved (2). dsync#129: before 1.17 the body started 4 bytes early (a 36-byte
         // header) and skipped 6, which reached the same absolute byte 42: the decode is unchanged.
         rdr.set_position(2);
 
@@ -274,12 +274,12 @@ impl PtpV1FollowUpBody {
 mod tests {
     use super::*;
 
-    /// dantesync#129 — a real Dante PTPv1 Sync (124 bytes, the UDP payload) and its Follow_Up
+    /// dsync#129 — a real PTPv1 Sync (124 bytes, the UDP payload) and its Follow_Up
     /// (52 bytes), captured read-only off the wire: see `tests/fixtures/ptpv1/README.md`.
-    const DANTE_SYNC: &[u8] = include_bytes!("../tests/fixtures/ptpv1/dante-sync.bin");
-    const DANTE_FOLLOW_UP: &[u8] = include_bytes!("../tests/fixtures/ptpv1/dante-follow-up.bin");
+    const PTPV1_SYNC: &[u8] = include_bytes!("../tests/fixtures/ptpv1/ptpv1-sync.bin");
+    const PTPV1_FOLLOW_UP: &[u8] = include_bytes!("../tests/fixtures/ptpv1/ptpv1-follow-up.bin");
     /// The grandmaster of the captured packets (an Audinate port, OUI 00:1d:c1).
-    const DANTE_GM: [u8; 6] = [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14];
+    const PTPV1_GM: [u8; 6] = [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14];
 
     #[test]
     fn test_ptp_v1_control_from() {
@@ -293,11 +293,11 @@ mod tests {
     }
 
     #[test]
-    fn the_fixture_is_a_whole_dante_sync_and_its_follow_up_129() {
-        assert_eq!(DANTE_SYNC.len(), 124, "a PTPv1 Sync is 124 bytes");
-        assert_eq!(DANTE_FOLLOW_UP.len(), 52, "a PTPv1 Follow_Up is 52 bytes");
-        assert_eq!(DANTE_SYNC[32], 0, "control = Sync");
-        assert_eq!(DANTE_FOLLOW_UP[32], 2, "control = Follow_Up");
+    fn the_fixture_is_a_whole_ptpv1_sync_and_its_follow_up_129() {
+        assert_eq!(PTPV1_SYNC.len(), 124, "a PTPv1 Sync is 124 bytes");
+        assert_eq!(PTPV1_FOLLOW_UP.len(), 52, "a PTPv1 Follow_Up is 52 bytes");
+        assert_eq!(PTPV1_SYNC[32], 0, "control = Sync");
+        assert_eq!(PTPV1_FOLLOW_UP[32], 2, "control = Follow_Up");
     }
 
     #[test]
@@ -308,42 +308,42 @@ mod tests {
         assert_eq!(PtpV1Header::SIZE, 40);
         assert_eq!(
             PtpV1Header::SIZE + PtpV1FollowUpBody::SIZE,
-            DANTE_FOLLOW_UP.len()
+            PTPV1_FOLLOW_UP.len()
         );
     }
 
     #[test]
-    fn the_real_dante_header_decodes_129() {
-        let h = PtpV1Header::parse(DANTE_SYNC).expect("a whole header");
+    fn the_real_ptpv1_header_decodes_129() {
+        let h = PtpV1Header::parse(PTPV1_SYNC).expect("a whole header");
         assert_eq!(h.version_ptp, 1, "versionPTP is a u16 at 0..2");
         assert_eq!(h.version_network, 1, "versionNetwork is a u16 at 2..4");
-        assert_eq!(h.subdomain_name(), "_DFLT", "the Dante default subdomain");
-        assert_eq!(h.source_uuid, DANTE_GM);
+        assert_eq!(h.subdomain_name(), "_DFLT", "the default PTPv1 subdomain");
+        assert_eq!(h.source_uuid, PTPV1_GM);
         assert_eq!(h.source_port_id, 2);
         assert_eq!(h.sequence_id, 0xb27a);
         assert_eq!(h.control, 0);
         assert_eq!(h.message_type, PtpV1Control::Sync);
 
-        let f = PtpV1Header::parse(DANTE_FOLLOW_UP).expect("a whole header");
+        let f = PtpV1Header::parse(PTPV1_FOLLOW_UP).expect("a whole header");
         assert_eq!(f.message_type, PtpV1Control::FollowUp);
         assert_eq!(f.sequence_id, 0xb27a);
-        assert_eq!(f.source_uuid, DANTE_GM);
+        assert_eq!(f.source_uuid, PTPV1_GM);
     }
 
     #[test]
-    fn the_real_dante_sync_names_its_grandmaster_129() {
-        let body = PtpV1SyncMessageBody::parse(&DANTE_SYNC[PtpV1Header::SIZE..])
+    fn the_real_ptpv1_sync_names_its_grandmaster_129() {
+        let body = PtpV1SyncMessageBody::parse(&PTPV1_SYNC[PtpV1Header::SIZE..])
             .expect("a whole Sync body");
         assert_eq!(
-            body.grandmaster_clock_uuid, DANTE_GM,
+            body.grandmaster_clock_uuid, PTPV1_GM,
             "grandmasterClockUuid is at body 14..20 (absolute 54..60)"
         );
         assert_ne!(body.grandmaster_clock_uuid, LEGACY_MISREAD_GM_UUID);
     }
 
     #[test]
-    fn the_real_dante_sync_carries_the_best_master_fields_129() {
-        let b = PtpV1SyncMessageBody::parse(&DANTE_SYNC[PtpV1Header::SIZE..])
+    fn the_real_ptpv1_sync_carries_the_best_master_fields_129() {
+        let b = PtpV1SyncMessageBody::parse(&PTPV1_SYNC[PtpV1Header::SIZE..])
             .expect("a whole Sync body");
         assert_eq!(b.grandmaster_port_id, 0);
         assert_eq!(b.grandmaster_sequence_id, 0xb27a);
@@ -359,32 +359,32 @@ mod tests {
         // Header SIZE 36 + a 13-byte skip = absolute 49..55: the reserved byte 52 and
         // grandmasterCommunicationTechnology (53) = 1 inside zeros. Every pre-1.17 node reported
         // it as its grandmaster's UUID (and saved it, and announced it on 31900).
-        assert_eq!(DANTE_SYNC[49..55], LEGACY_MISREAD_GM_UUID);
+        assert_eq!(PTPV1_SYNC[49..55], LEGACY_MISREAD_GM_UUID);
     }
 
     #[test]
     fn the_real_follow_up_decode_is_byte_identical_129() {
         // The absolute offsets 42..44 / 44..48 / 48..52 are what every version decoded (36 + 6
         // before 1.17, 40 + 2 since): the precise origin timestamp must not move by a byte.
-        let body = PtpV1FollowUpBody::parse(&DANTE_FOLLOW_UP[PtpV1Header::SIZE..])
+        let body = PtpV1FollowUpBody::parse(&PTPV1_FOLLOW_UP[PtpV1Header::SIZE..])
             .expect("a whole Follow_Up body");
         assert_eq!(body.associated_sequence_id, 0xb27a);
         assert_eq!(body.precise_origin_timestamp.seconds, 541_867);
         assert_eq!(body.precise_origin_timestamp.nanoseconds, 434_557_859);
-        let be16 = |i: usize| u16::from_be_bytes([DANTE_FOLLOW_UP[i], DANTE_FOLLOW_UP[i + 1]]);
+        let be16 = |i: usize| u16::from_be_bytes([PTPV1_FOLLOW_UP[i], PTPV1_FOLLOW_UP[i + 1]]);
         let be32 = |i: usize| {
             u32::from_be_bytes([
-                DANTE_FOLLOW_UP[i],
-                DANTE_FOLLOW_UP[i + 1],
-                DANTE_FOLLOW_UP[i + 2],
-                DANTE_FOLLOW_UP[i + 3],
+                PTPV1_FOLLOW_UP[i],
+                PTPV1_FOLLOW_UP[i + 1],
+                PTPV1_FOLLOW_UP[i + 2],
+                PTPV1_FOLLOW_UP[i + 3],
             ])
         };
         assert_eq!(body.associated_sequence_id, be16(42));
         assert_eq!(body.precise_origin_timestamp.seconds, be32(44));
         assert_eq!(body.precise_origin_timestamp.nanoseconds, be32(48));
         // It pairs with the Sync of the same sequence id.
-        let sync = PtpV1Header::parse(DANTE_SYNC).expect("a whole header");
+        let sync = PtpV1Header::parse(PTPV1_SYNC).expect("a whole header");
         assert_eq!(body.associated_sequence_id, sync.sequence_id);
     }
 
@@ -405,10 +405,10 @@ mod tests {
         assert!(!is_time_message(&packet(4, 60)), "Management");
         assert!(!is_time_message(&packet(0, 39)), "a runt");
         assert!(!is_time_message(&[]), "nothing");
-        assert!(is_time_message(DANTE_SYNC));
-        assert!(is_time_message(DANTE_FOLLOW_UP));
+        assert!(is_time_message(PTPV1_SYNC));
+        assert!(is_time_message(PTPV1_FOLLOW_UP));
         assert!(
-            !is_time_message(&DANTE_SYNC[..39]),
+            !is_time_message(&PTPV1_SYNC[..39]),
             "a header cut short (#129)"
         );
     }
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn test_parse_header_too_short() {
         assert!(PtpV1Header::parse(&[0u8; 39]).is_err());
-        assert!(PtpV1Header::parse(&DANTE_SYNC[..39]).is_err());
+        assert!(PtpV1Header::parse(&PTPV1_SYNC[..39]).is_err());
     }
 
     #[test]

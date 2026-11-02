@@ -1,4 +1,4 @@
-//! dantesync#119 follow-up — the controller side of the date MICRO-corrections
+//! dsync#119 follow-up — the controller side of the date MICRO-corrections
 //! (`crate::date_offset::MicroScheduler`): the NTP master's loop drives its authority's micro
 //! clock, schedules each increment on its own wall like any announce, publishes it at once, and
 //! keeps the loud `date correction falling behind` line in step with the authority's alarm. Every

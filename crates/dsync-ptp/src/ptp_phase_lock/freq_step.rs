@@ -1,11 +1,11 @@
-//! The FREQUENCY-STEP detector of the phase lock (camera-box issue 1372, dantesync slice).
+//! The FREQUENCY-STEP detector of the phase lock (camera-box issue 1372, dsync slice).
 //!
 //! # Why
 //!
-//! A Dante leader re-election can move the grandmaster's frequency by ~25 ppm at once (the
+//! A PTP leader re-election can move the grandmaster's frequency by ~25 ppm at once (the
 //! AIC128-D card and the 10.77.7.106 device differ by that much, 29.9.2026). The phase lock's PI
 //! is deliberately slow (critically damped, ~100 s), so it follows such a step in ~8-12 minutes,
-//! and for all that time every OBS media clock is off the Dante tick while the Dante audio devices
+//! and for all that time every OBS media clock is off the grandmaster tick while the audio devices
 //! followed at once. On the video VLAN the grandmaster keeps its identity through such a flip, so
 //! no re-anchor path sees it.
 //!

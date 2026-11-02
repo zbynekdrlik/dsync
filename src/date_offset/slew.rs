@@ -1,24 +1,24 @@
-//! dantesync#119 — the coordinated date SLEW: how a BACKWARD fleet date correction is applied.
+//! dsync#119 — the coordinated date SLEW: how a BACKWARD fleet date correction is applied.
 //!
 //! A backward step makes wall time run back on every box at once, and wall-time consumers
-//! downstream (Dante DVS/ASIO, the camera-box stream OBS) lose that much audio. So the direction
+//! downstream (the virtual soundcard DVS (ASIO), the camera-box stream OBS) lose that much audio. So the direction
 //! decides ([`correction_kind`]): forward = the coordinated step, backward = a [`DateSlew`] every
 //! box follows. Pure (explicit time inputs, no I/O), like the rest of `crate::date_offset`.
 
 use super::DateAnnounce;
 
-/// dantesync#119 — the default slew rate of a backward correction: 100 ppm pays 50 ms in 500 s.
-/// Every box moves by this rate against the Dante tick while a slew runs; camera-box's ASRC takes
+/// dsync#119 — the default slew rate of a backward correction: 100 ppm pays 50 ms in 500 s.
+/// Every box moves by this rate against the grandmaster tick while a slew runs; camera-box's ASRC takes
 /// it as a rate (it tracks hundreds of ppm) and 100 ppm of pitch is inaudible.
 pub const DEFAULT_SLEW_PPM: u32 = 100;
 
-/// dantesync#119 — the configurable slew rate is clamped to this range. Below 10 ppm a 50 ms
+/// dsync#119 — the configurable slew rate is clamped to this range. Below 10 ppm a 50 ms
 /// correction takes over 80 minutes and a fast grandmaster-vs-UTC drift could outrun it; above
 /// 500 ppm the slew leaves the ±500 ppm frequency envelope of the servos.
 pub const MIN_SLEW_PPM: u32 = 10;
 pub const MAX_SLEW_PPM: u32 = 500;
 
-/// dantesync#119 — the slew rate actually used for a configured (or received) value: `0` means
+/// dsync#119 — the slew rate actually used for a configured (or received) value: `0` means
 /// the default, anything else is clamped to [`MIN_SLEW_PPM`]..=[`MAX_SLEW_PPM`].
 pub fn clamp_slew_ppm(ppm: u32) -> u32 {
     if ppm == 0 {
@@ -28,7 +28,7 @@ pub fn clamp_slew_ppm(ppm: u32) -> u32 {
     }
 }
 
-/// dantesync#119 — how a fleet date correction is applied.
+/// dsync#119 — how a fleet date correction is applied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CorrectionKind {
     /// Every box steps its wall forward at the announced instant (the fleet is behind UTC).
@@ -42,19 +42,19 @@ pub enum CorrectionKind {
     TooLargeToSlew,
 }
 
-/// dantesync#119 ROZHODNUTÉ (issuecomment-5842590141) — a backward correction is slewed only up
+/// dsync#119 ROZHODNUTÉ (issuecomment-5842590141) — a backward correction is slewed only up
 /// to this many step bounds: 2 × 50 ms = 100 ms by default, ~17 min at 100 ppm. Normal drift
 /// corrections are just over one bound, so they always slew.
 pub const SLEW_CAP_STEP_BOUNDS: i64 = 2;
 
-/// dantesync#119 — the largest backward correction that is slewed, for a step bound (ns).
+/// dsync#119 — the largest backward correction that is slewed, for a step bound (ns).
 pub fn slew_cap_ns(step_bound_ns: i64) -> i64 {
     step_bound_ns.max(0).saturating_mul(SLEW_CAP_STEP_BOUNDS)
 }
 
-/// dantesync#119 — THE direction decision. `correction_ns` is the change of `D` (`UTC − wall`):
+/// dsync#119 — THE direction decision. `correction_ns` is the change of `D` (`UTC − wall`):
 /// positive moves the wall forward, which every consumer tolerates (a forward step lost no audio
-/// on the rig); negative would move it BACKWARDS, which Dante DVS/ASIO turns into lost samples,
+/// on the rig); negative would move it BACKWARDS, which the virtual soundcard DVS (ASIO) turns into lost samples,
 /// so it is slewed — unless it is larger than [`slew_cap_ns`] of `step_bound_ns`.
 pub fn correction_kind(correction_ns: i64, step_bound_ns: i64) -> CorrectionKind {
     if correction_ns >= 0 {
@@ -66,7 +66,7 @@ pub fn correction_kind(correction_ns: i64, step_bound_ns: i64) -> CorrectionKind
     }
 }
 
-/// dantesync#119 — the slew part of an announce (the rest is in [`DateAnnounce`]).
+/// dsync#119 — the slew part of an announce (the rest is in [`DateAnnounce`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlewSpec {
     /// `D` where the slew starts.
@@ -75,7 +75,7 @@ pub struct SlewSpec {
     pub ppm: u32,
 }
 
-/// dantesync#119 — a coordinated date SLEW: `D` moves from `from_ns` to `to_ns` at `ppm`, starting
+/// dsync#119 — a coordinated date SLEW: `D` moves from `from_ns` to `to_ns` at `ppm`, starting
 /// at the PTP instant `start_ptp_ns`. The whole schedule is a pure function of PTP time, so every
 /// box that holds the same slew has the same `D` at the same PTP instant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,7 +172,7 @@ impl DateSlew {
     }
 }
 
-/// dantesync#119 — the slew a box follows. Its `D` is `anchor + displacement(ptp)`, with
+/// dsync#119 — the slew a box follows. Its `D` is `anchor + displacement(ptp)`, with
 /// `displacement = carry + slew.offset_at(ptp) − ref`: the anchor stays the phase lock's base and
 /// the slew moves `D` on top of it until the box folds the paid amount into the anchor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,7 +216,7 @@ impl HeldSlew {
     }
 }
 
-/// dantesync#119 — the displacement of `D` from `anchor_ns` at the wall reading `wall_ns` for a box
+/// dsync#119 — the displacement of `D` from `anchor_ns` at the wall reading `wall_ns` for a box
 /// holding `h`: the fixed point `d = displacement(wall − anchor − d)`.
 ///
 /// Iterated until it stops changing. For a backward slew the map is non-decreasing in `d` with a

@@ -69,7 +69,7 @@ REBOOT_TIME=$(date +%s.%N)
 echo "Reboot initiated at: $(date)"
 
 echo ""
-echo "Waiting for reboot and DanteSync startup (180 seconds)..."
+echo "Waiting for reboot and dsync startup (180 seconds)..."
 sleep 180
 
 echo "Collecting post-reboot data for 120 seconds..."

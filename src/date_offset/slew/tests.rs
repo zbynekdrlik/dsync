@@ -1,11 +1,11 @@
-//! dantesync#119 — the slew law's tests: the direction decision, the schedule, the v2 wire, the
+//! dsync#119 — the slew law's tests: the direction decision, the schedule, the v2 wire, the
 //! authority's slew policy and every box's hold / join / freeze / fold. Beside
 //! `crate::date_offset::tests` (whose helpers they reuse) so neither file outgrows a reader.
 
 use super::super::tests::{ext, in_effect, MS, S};
 use super::super::*;
 
-// ---- dantesync#119: a backward correction is a SLEW -----------------------------------------
+// ---- dsync#119: a backward correction is a SLEW -----------------------------------------
 
 const US: i64 = 1_000;
 
@@ -347,7 +347,7 @@ fn a_rebase_moves_a_running_slew_into_the_new_base_119() {
     );
 }
 
-// ---- dantesync#119: every box follows the slew -----------------------------------------------
+// ---- dsync#119: every box follows the slew -----------------------------------------------
 
 /// Equal to the nanosecond. The slew's schedule is floored to whole ns, so at a nanosecond
 /// boundary two adjacent PTP instants give the same wall: recovering PTP time (and so `D`) from a
@@ -648,7 +648,7 @@ fn a_forward_slew_from_the_wire_is_not_a_slew_119() {
     assert!(e.announce.as_slew().is_some());
 }
 
-// ---- dantesync#119 ROZHODNUTÉ issuecomment-5842590141: the slew cap ----------------------------
+// ---- dsync#119 ROZHODNUTÉ issuecomment-5842590141: the slew cap ----------------------------
 
 #[test]
 fn a_backward_correction_beyond_twice_the_bound_is_too_large_to_slew_119() {

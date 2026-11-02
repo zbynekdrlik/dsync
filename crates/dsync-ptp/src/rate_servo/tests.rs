@@ -22,6 +22,16 @@ fn the_monotonic_stamp_measures_a_span_in_seconds_and_never_backwards() {
 }
 
 #[test]
+fn the_grandmaster_stamp_measures_a_span_in_seconds_and_never_backwards() {
+    assert_eq!(GmNs(2_500_000_000).secs_since(GmNs(1_000_000_000)), 1.5);
+    assert_eq!(
+        GmNs(1).secs_since(GmNs(5)),
+        0.0,
+        "a GM time that went back: span 0"
+    );
+}
+
+#[test]
 fn the_first_window_has_no_previous_offset_and_is_no_measurement_142() {
     let mut servo = RateServo::<MonoNs>::new();
     let m = servo.measure_offset(123.0, MonoNs(0));

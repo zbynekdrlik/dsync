@@ -12,8 +12,8 @@ paths:
 
 ## FIRST: the pinned interface (#131, owner ruling 1.11.2026) overrides everything below
 
-"by defaul dantesync musi mat jasne nastavenie na ktoru eth sa ma bindnut, neexistuje ze sa toto
-deje nejako nahodne". stream-snv ran a whole production without the Dante clock because a USB
+"by defaul dsync musi mat jasne nastavenie na ktoru eth sa ma bindnut, neexistuje ze sa toto
+deje nejako nahodne". stream-snv ran a whole production without the grandmaster clock because a USB
 NIC (VBAN leg) got its /32 before the rig NIC at boot and was first in `getifaddrs` order.
 
 - `system.interface` / `--interface` (CLI wins, blank = unset; `SystemConfig::pinned_interface`)
@@ -21,7 +21,7 @@ NIC (VBAN leg) got its /32 before the rig NIC at boot and was first in `getifadd
   (`GetAdaptersAddresses`, feature `Win32_NetworkManagement_Ndis`), case-insensitive, a GUID with
   or without braces / `\Device\NPF_` (`net::classify_pinned_with`). The pure classifier returns
   `Ready(ip) | LinkLocalOnly(ip) | NoIpv4 | Missing`; loopback never counts. A link-local-only
-  NIC (a Dante segment without DHCP — or an APIPA placeholder at boot) is taken by the startup
+  NIC (an audio-network segment without DHCP — or an APIPA placeholder at boot) is taken by the startup
   only after `net::PINNED_STARTUP_GRACE` (10 s, `net::usable_pinned_ip`), by a re-join at once.
 - Pinned startup: `pinned_wait::PinnedWait::run` (every OS boundary injected, unit-tested) looks
   every second until the NIC has an IPv4 AND the receive path OPENS on it — an open failure
@@ -62,12 +62,12 @@ join to the NIC that reaches the grandmaster — not whichever NIC the OS enumer
 
 The identical "PTP and NTP live on different subnets on a dual-homed host" problem was already solved
 for the NTP transport by `net_pcap::find_device_for_ntp_server` + `ntp_packet::select_ntp_pcap_device`
-(dantesync#53 — subnet containment, longest-prefix, skip zero-netmask junk adapters). The PTP
+(dsync#53 — subnet containment, longest-prefix, skip zero-netmask junk adapters). The PTP
 interface selection MIRRORS it. If you touch the receive path, follow that pattern; do not add a
 config field pinning the interface (rejected — the `gm_allowlist` the operator already sets IS the
 signal, zero extra config).
 
-dantesync issue 112: the startup AND the PTP re-join select through ONE `select_ptp_device(hint,
+dsync issue 112: the startup AND the PTP re-join select through ONE `select_ptp_device(hint,
 allowlist, home)` (startup `home = None`): the trusted-subnet rule, then the device that carries the
 home address (where the grandmaster's time was last received), then the name fallback — the pure
 order is `net::choose_capture_device`. Linux has no trusted-subnet rule (it uses
@@ -81,7 +81,7 @@ devices to exercise. So the selection LOGIC lives in `gm_filter.rs` (pure, no pc
 fully Linux-unit-tested; `find_ptp_capture_device` is thin glue that only enumerates devices and
 delegates. To verify a receive-path change:
 - Logic: `cargo test --lib` (the `gm_filter::tests::*interface*` / `*tie*` / `*ambiguous*` tests).
-- Windows glue: `cargo check --target x86_64-pc-windows-gnu --bin dantesync --tests --lib` (see
+- Windows glue: `cargo check --target x86_64-pc-windows-gnu --bin dsync --tests --lib` (see
   `windows-only-code.md`). It compiles net_pcap but does not run it — CI's Windows leg runs the
   `mod tests`.
 
@@ -107,17 +107,17 @@ BYTE-IDENTICAL. Only a multi-homed box WITH a restricting allowlist whose defaul
 subnet changes behavior. The Linux socket path (`RealPtpNetwork`) is intentionally NOT changed (the
 fleet's only multi-homed box is Windows).
 
-## The IGMP-join socket must bind an EPHEMERAL port, NEVER 319/320 (dantesync#109 — DVS coexistence)
+## The IGMP-join socket must bind an EPHEMERAL port, NEVER 319/320 (dsync#109 — DVS coexistence)
 
-On a box that ALSO runs Dante Virtual Soundcard (the `stream` box, 10.77.9.204), DVS's own `ptp.exe`
+On a box that ALSO runs the virtual soundcard (DVS) (the `stream` box, 10.77.9.204), DVS's own `ptp.exe`
 needs UDP 319/320 exclusively for its PTP follower. The pcap path's IGMP-membership socket
 (`net_pcap::join_multicast`) must therefore bind an **ephemeral port (`net::igmp_join_bind_addr()` →
 `0.0.0.0:0`)**, never a PTP port — IGMP group membership is per interface+group, NOT per port, and
 pcap's own BPF filter (`dst port 319 or dst port 320`) selects the captured traffic, so the join
 socket's bound port is irrelevant. It used to bind 319 AND 320 (one socket each, plus a pointless
-`SO_REUSEADDR`); dantesync is a boot-time service and bound first, DVS's `ptp.exe` (a login-time app
+`SO_REUSEADDR`); dsync is a boot-time service and bound first, DVS's `ptp.exe` (a login-time app
 without `SO_REUSEADDR`) then failed its own bind with `WSAEADDRINUSE` — live on `stream` 2026-09-03
-dantesync held BOTH 319 and 320 and `ptp.exe` held neither — starving DVS's follower of the PTP
+dsync held BOTH 319 and 320 and `ptp.exe` held neither — starving DVS's follower of the PTP
 *general* messages (Follow_Up/Delay_Resp) on 320, so its media clock free-ran on the host crystal
 (≈−17 ppm off the grandmaster, hidden only by the camera-box ASRC servo). **Never re-add a
 fixed-PTP-port bind to any pcap/socket join path.**
@@ -129,11 +129,11 @@ fixed-PTP-port bind to any pcap/socket join path.**
   319/320, so it MUST bind them — but it now logs a loud `error!` (with the WSA error, incl.
   `WSAEADDRINUSE=10048`, and the likely DVS cause) when a bind fails, instead of a silent Err.
 - Acceptance on the `stream` box after deploying the fix: `Get-NetUDPEndpoint -LocalPort 319,320`
-  shows ONLY `ptp.exe` on both ports (dantesync no longer appears), and the OBS log's
+  shows ONLY `ptp.exe` on both ports (dsync no longer appears), and the OBS log's
   `asrc: source 'mbc' estimated=` residual collapses from ≈−17 ppm toward 0 (DVS is now disciplined
   by the grandmaster). Read live state via the win-stream MCP (session-agnostic `Get-NetUDPEndpoint`
   / process list / OBS log read). **`ptp.exe` binds its ports only at ITS start** — after the
-  dantesync restart the ports may sit UNOWNED (nobody on 319/320) until DVS is restarted; that is
+  dsync restart the ports may sit UNOWNED (nobody on 319/320) until DVS is restarted; that is
   NOT "still broken", it is the DVS side not having retried yet. If `ptp.exe` has not re-bound within
-  ~1 min, restart Dante Virtual Soundcard (it briefly drops the ASIO device stream OBS reads `mbc`
+  ~1 min, restart the virtual soundcard (DVS) (it briefly drops the ASIO device stream OBS reads `mbc`
   from — do it off-air and verify OBS audio resumes), THEN re-read the endpoints.

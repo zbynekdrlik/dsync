@@ -78,9 +78,9 @@ pub struct WinsockPtpNetwork {
     recv_msg_fn: Option<WsaRecvMsgFn>,
     qpc_frequency: i64,
     timestamping_enabled: bool,
-    /// dantesync#112: the interface address the sockets joined on (what a re-join compares with).
+    /// dsync#112: the interface address the sockets joined on (what a re-join compares with).
     interface_ip: Ipv4Addr,
-    /// dantesync#112: the address the grandmaster's time (`ptp::is_time_message`) was last
+    /// dsync#112: the address the grandmaster's time (`ptp::is_time_message`) was last
     /// received on; the interface that carries it is where a re-join goes first.
     home_ip: Ipv4Addr,
 }
@@ -140,7 +140,7 @@ impl WinsockPtpNetwork {
         })
     }
 
-    /// dantesync#112: close both PTP sockets (each is `INVALID_SOCKET` afterwards, and an invalid
+    /// dsync#112: close both PTP sockets (each is `INVALID_SOCKET` afterwards, and an invalid
     /// one is not closed again).
     fn close_sockets(&mut self) {
         for sock in [&mut self.socket_319, &mut self.socket_320] {
@@ -192,11 +192,11 @@ impl WinsockPtpNetwork {
                 // Capture the error BEFORE closesocket (which can reset it).
                 let err = WSAGetLastError().0;
                 closesocket(sock);
-                // dantesync#109: on a Dante Virtual Soundcard host, DVS's own
+                // dsync#109: on a virtual soundcard host, DVS's own
                 // ptp.exe already owns 319/320 exclusively (WSAEADDRINUSE =
                 // 10048), so this bind loses the port. Today this failure was
                 // silent (a bare Err propagated up); log it LOUDLY so the
-                // collision is diagnosable from dantesync's log alone.
+                // collision is diagnosable from dsync's log alone.
                 let inuse_hint = if err == 10048 {
                     " = WSAEADDRINUSE (port already owned exclusively, e.g. by DVS ptp.exe)"
                 } else {
@@ -204,8 +204,8 @@ impl WinsockPtpNetwork {
                 };
                 error!(
                     "Failed to bind PTP UDP port {} (WSA error {}{}). Another PTP daemon \
-                     (e.g. Dante Virtual Soundcard's ptp.exe) likely owns this port -- \
-                     dantesync's Winsock PTP receive on port {} cannot start.",
+                     (e.g. a DVS ptp.exe) likely owns this port -- \
+                     dsync's Winsock PTP receive on port {} cannot start.",
                     port, err, inuse_hint, port
                 );
                 return Err(anyhow!("Failed to bind port {}: {}", port, err));
@@ -569,7 +569,7 @@ impl Drop for WinsockPtpNetwork {
 
 impl crate::traits::PtpNetwork for WinsockPtpNetwork {
     fn recv_packet(&mut self) -> Result<Option<(Vec<u8>, usize, SystemTime, Option<Ipv4Addr>)>> {
-        // dantesync#112: no sockets after a failed re-join; nothing to read until the next one.
+        // dsync#112: no sockets after a failed re-join; nothing to read until the next one.
         if self.socket_319 == INVALID_SOCKET || self.socket_320 == INVALID_SOCKET {
             return Ok(None);
         }
@@ -579,7 +579,7 @@ impl crate::traits::PtpNetwork for WinsockPtpNetwork {
             None => self.recv_with_timestamp(self.socket_320)?,
         };
         if let Some((data, ..)) = &received {
-            // dantesync#112: the grandmaster's time arrives on this join, so its address is the
+            // dsync#112: the grandmaster's time arrives on this join, so its address is the
             // home a re-join looks for (nothing else moves it).
             if crate::ptp::is_time_message(data) {
                 self.home_ip = self.interface_ip;
@@ -593,7 +593,7 @@ impl crate::traits::PtpNetwork for WinsockPtpNetwork {
         Ok(())
     }
 
-    /// dantesync#112 — the same socket re-create as the startup: on the interface that carries the
+    /// dsync#112 — the same socket re-create as the startup: on the interface that carries the
     /// home address now, else on the default interface.
     fn rejoin(&mut self) -> Result<crate::traits::RejoinOutcome> {
         // The interface that carries the home address first (a re-plugged NIC may come back

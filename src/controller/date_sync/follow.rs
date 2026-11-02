@@ -1,4 +1,4 @@
-//! dantesync#88 / #119 — a follower acting on the authority's announce: the step it takes now,
+//! dsync#88 / #119 — a follower acting on the authority's announce: the step it takes now,
 //! the step or slew it schedules (a micro-correction scheduled quietly), what it logs.
 
 use super::*;
@@ -43,7 +43,7 @@ where
                 let cause = if delta_ns < -cap {
                     "date correction too large to slew"
                 } else {
-                    "the authority does not slew (an older dantesync?)"
+                    "the authority does not slew (an older dsync?)"
                 };
                 warn!(
                     "[DATE] {}: coordinated BACKWARD date step {:+}us scheduled (seq {}) in {} ms",

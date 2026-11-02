@@ -1,4 +1,4 @@
-//! dantesync#142 — the controller's drift-file glue: the seed at start (written to the clock
+//! dsync#142 — the controller's drift-file glue: the seed at start (written to the clock
 //! before the warmup), every fallback to the cold learn with its reason, the save only while
 //! LOCKED (every 10 minutes and at shutdown), the rejection, and the `/status` fields.
 
@@ -134,7 +134,7 @@ fn the_drift_file_is_saved_only_while_locked_every_ten_minutes_142() {
     assert!(c.freq_seed.next_save.is_none());
     assert!(!path.exists());
 
-    // dantesync#146: the rate servo's lock alone is not "locked" — [41] (the phase within the
+    // dsync#146: the rate servo's lock alone is not "locked" — [41] (the phase within the
     // bound) is; an engaged phase lock holds the rate lock while it still slews.
     c.rate.is_locked = true;
     c.tick_drift_file();
@@ -216,10 +216,7 @@ fn a_controller_without_a_drift_file_never_writes_one_142() {
 
 /// One window 0.5 s after the previous one.
 fn window(c: &mut Ctl, offset_us: f64) {
-    if c.rate.last_offset_us.is_some() {
-        c.rate.last_offset_time = Some(Instant::now() - Duration::from_millis(500));
-    }
-    c.apply_self_tuning_servo(offset_us);
+    c.servo_window_after(offset_us, 0.5);
 }
 
 #[test]

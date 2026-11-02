@@ -25,7 +25,7 @@ pub use self::linux::LinuxClock as PlatformClock;
 
 pub mod step;
 
-/// dantesync#119 (1.11.1) -- FILETIME (100 ns ticks since 1601-01-01) of the Unix epoch.
+/// dsync#119 (1.11.1) -- FILETIME (100 ns ticks since 1601-01-01) of the Unix epoch.
 pub const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 
 /// A Windows FILETIME as ns since the Unix epoch (the step law's time axis, `step`). Pure and

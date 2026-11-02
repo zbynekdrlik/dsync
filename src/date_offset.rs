@@ -1,8 +1,8 @@
-//! dantesync#88 — the fleet DATE-OFFSET authority and its coordinated-step announce.
+//! dsync#88 — the fleet DATE-OFFSET authority and its coordinated-step announce.
 //!
-//! # The model (owner contract, dantesync#117 ROZHODNUTÉ issuecomment-5836853146)
+//! # The model (owner contract, dsync#117 ROZHODNUTÉ issuecomment-5836853146)
 //!
-//! Dante PTP carries no real-world time — the grandmaster's clock is device uptime. Every box
+//! PTPv1 carries no real-world time — the grandmaster's clock is device uptime. Every box
 //! phase-locks its system clock to `PTP time + D` (see `crate::ptp_phase_lock`), where `D` is ONE
 //! fleet-wide date offset:
 //!
@@ -34,15 +34,15 @@
 //! All times are nanoseconds. "PTP time" is the grandmaster's timestamp domain (`t1`), "wall" is
 //! the local system clock (`t2`); on a phase-locked box `wall ≈ ptp + D`.
 //!
-//! # dantesync#119 — a correction BACKWARDS is slewed, never stepped
+//! # dsync#119 — a correction BACKWARDS is slewed, never stepped
 //!
 //! A backward step makes wall time run back on every box at once, and wall-time consumers downstream
-//! (Dante DVS/ASIO, the camera-box stream OBS) lose that much audio (−43.7 ms at the −51 ms step of
+//! (the virtual soundcard DVS (ASIO), the camera-box stream OBS) lose that much audio (−43.7 ms at the −51 ms step of
 //! camera-box#1372). So only a POSITIVE correction (the fleet is behind UTC) is a coordinated step.
 //! A NEGATIVE one is announced as a [`DateSlew`]: from its start instant every box moves `D` down at
 //! the same bounded rate (`slew_ppm`, default 100 = 50 ms in 500 s) until the amount is paid. `D`
 //! is then a function of PTP time, [`DateSlew::offset_at`], identical on every box, so the relative
-//! phase holds; only the fleet-vs-Dante rate deviates by `slew_ppm` while it runs. The wall never
+//! phase holds; only the fleet-vs-grandmaster rate deviates by `slew_ppm` while it runs. The wall never
 //! runs backwards: the controller applies the slew as an extra rate term of the ONE frequency word
 //! and removes the scheduled displacement from every PTP measurement, so neither servo reads it as
 //! grandmaster disagreement (`controller/date_sync.rs`).
@@ -52,7 +52,7 @@
 //! state — typically a master that booted on a bad NTP reading — and is a coordinated step, logged
 //! loudly (ROZHODNUTÉ issuecomment-5842590141).
 //!
-//! # dantesync#119 follow-up — the correction is spread into MICRO-corrections (v1.11)
+//! # dsync#119 follow-up — the correction is spread into MICRO-corrections (v1.11)
 //!
 //! Correcting the whole error once it reached 50 ms made a 50 ms event every ~47 minutes at the
 //! rig's drift — 1.5 video frames that every wall-anchored consumer saw. Now the authority corrects
@@ -63,9 +63,9 @@
 //! only for an ABNORMAL error beyond [`slew_cap_ns`] (2 × the step bound): one coordinated step,
 //! either direction, logged loudly. The step bound itself no longer triggers anything.
 //!
-//! # dantesync#119 (1.12) — ONE coordinated step per NIGHT (the default)
+//! # dsync#119 (1.12) — ONE coordinated step per NIGHT (the default)
 //!
-//! Each micro-step disturbs the Dante Virtual Soundcard on a Windows box; one rare step does not
+//! Each micro-step disturbs the virtual soundcard on a Windows box; one rare step does not
 //! (owner decision, issue comment 5849932587). In [`CorrectionMode::Daily`] the authority keeps
 //! reading UTC and fitting the same robust estimate all day but announces nothing; when the nightly
 //! window opens ([`DailyScheduler`], 02:00 UTC by default) it announces ONE coordinated step, any
@@ -74,7 +74,7 @@
 //! stepped by day, unrounded. [`CorrectionMode::Micro`] is the 1.11 behaviour, byte for byte (and
 //! what a bare [`DateAuthority::new`] runs). The step bound's 1.10 correction ("bound") is gone.
 //!
-//! # dantesync#126 — a master restart keeps the fleet date (1.15)
+//! # dsync#126 — a master restart keeps the fleet date (1.15)
 //!
 //! The authority's published state is saved by the master whenever it changes
 //! ([`DateAuthority::persisted`], the record in `persist`) and restored by a restarted master
@@ -121,7 +121,7 @@ pub const DEFAULT_STEP_BOUND_NS: i64 = 50_000_000;
 /// Every client polls the authority once per second, so 5 s gives ≥ 4 chances to hear it.
 pub const MIN_STEP_LEAD_NS: i64 = 5_000_000_000;
 
-/// dantesync#119 follow-up — a micro-correction is announced this many leads ahead. There are
+/// dsync#119 follow-up — a micro-correction is announced this many leads ahead. There are
 /// ~3 a minute instead of one an hour, so the few-in-10⁴ chance that a box misses every poll of
 /// one lead (and takes it late, out of step with the fleet) would recur several times a day; two
 /// leads (≥ 9 polls) make it vanish, and the landing is still far inside the 20 s spacing.
@@ -176,9 +176,9 @@ pub struct DateAnnounce {
     pub effective_ptp_ns: i64,
     /// Bumped on every change of `D` (a step, a slew OR a rebase).
     pub seq: u32,
-    /// dantesync#119 — `Some` when this change is a coordinated SLEW (a backward correction).
+    /// dsync#119 — `Some` when this change is a coordinated SLEW (a backward correction).
     pub slew: Option<SlewSpec>,
-    /// dantesync#119 follow-up — this change is a MICRO-correction (a sub-threshold increment):
+    /// dsync#119 follow-up — this change is a MICRO-correction (a sub-threshold increment):
     /// applied exactly like any step or slew, only logged quietly and kept out of the NTP
     /// step-storm count. Read only from an extension of version ≥ 3.
     pub micro: bool,
@@ -205,7 +205,7 @@ impl DateAnnounce {
 // THE AUTHORITY (the NTP master)
 // ============================================================================
 
-/// dantesync#119 follow-up — the micro-correction tuning as it can actually run: one correction
+/// dsync#119 follow-up — the micro-correction tuning as it can actually run: one correction
 /// is in flight at a time and each is announced [`MICRO_LEAD_FACTOR`] × `lead_ns` ahead, so the
 /// interval is at least that; a backward one is in flight for its slew of one step at `slew_ppm`
 /// too, so the BACKWARD interval is at least lead + slew (a forward step is not slowed by it). The
@@ -231,7 +231,7 @@ pub fn effective_micro(requested: MicroConfig, lead_ns: i64, slew_ppm: u32) -> M
 pub struct DateAuthority {
     step_bound_ns: i64,
     lead_ns: i64,
-    /// dantesync#119 — the rate of a backward correction's slew.
+    /// dsync#119 — the rate of a backward correction's slew.
     slew_ppm: u32,
     /// `D` in effect when no slew runs (a slew moves it along [`DateSlew::offset_at`]).
     current_ns: i64,
@@ -239,25 +239,25 @@ pub struct DateAuthority {
     current_since_ptp_ns: i64,
     /// A pending coordinated step: (new D, effective PTP instant).
     pending: Option<(i64, i64)>,
-    /// dantesync#119 — the coordinated slew announced last, until it is complete (scheduled or
+    /// dsync#119 — the coordinated slew announced last, until it is complete (scheduled or
     /// running). While it exists it IS the published announce, and `current_ns` is its `from`.
     slew: Option<DateSlew>,
     seq: u32,
     /// Consecutive same-sign readings beyond the abnormal cap: (sign, count).
     over_bound: Option<(i8, u32)>,
-    /// dantesync#119 follow-up — the micro-correction tuning as configured …
+    /// dsync#119 follow-up — the micro-correction tuning as configured …
     micro_requested: MicroConfig,
     /// … and the decision, on the EFFECTIVE tuning ([`effective_micro`]).
     micro: MicroScheduler,
     /// The change that made the current `seq` was a micro-correction (published with it).
     micro_kind: bool,
-    /// dantesync#119 (1.12) — how the date is corrected: one step per night (`Daily`, the
+    /// dsync#119 (1.12) — how the date is corrected: one step per night (`Daily`, the
     /// config's default) or the 1.11 micro-corrections (`Micro`, the pure constructor's default,
     /// so a bare `DateAuthority::new` keeps the 1.11 behaviour byte for byte).
     mode: CorrectionMode,
-    /// dantesync#119 (1.12) — the nightly scheduler (`Daily` mode only).
+    /// dsync#119 (1.12) — the nightly scheduler (`Daily` mode only).
     daily: Option<DailyScheduler>,
-    /// dantesync#119 (1.12) — the last nightly decision worth a log line, until the controller
+    /// dsync#119 (1.12) — the last nightly decision worth a log line, until the controller
     /// takes it ([`take_daily_event`](Self::take_daily_event)).
     daily_event: Option<DailyDecision>,
 }
@@ -308,13 +308,13 @@ impl DateAuthority {
         self
     }
 
-    /// dantesync#119 — the slew rate of backward corrections (clamped by [`clamp_slew_ppm`]).
+    /// dsync#119 — the slew rate of backward corrections (clamped by [`clamp_slew_ppm`]).
     pub fn with_slew_ppm(mut self, ppm: u32) -> Self {
         self.slew_ppm = clamp_slew_ppm(ppm);
         self.rebuild_micro()
     }
 
-    /// dantesync#119 follow-up — the micro-correction tuning (applied as [`effective_micro`]).
+    /// dsync#119 follow-up — the micro-correction tuning (applied as [`effective_micro`]).
     pub fn with_micro(mut self, cfg: MicroConfig) -> Self {
         self.micro_requested = cfg;
         self.rebuild_micro()
@@ -324,12 +324,12 @@ impl DateAuthority {
         self.slew_ppm
     }
 
-    /// dantesync#119 follow-up — the micro-correction scheduler (its estimate, rate and alarm).
+    /// dsync#119 follow-up — the micro-correction scheduler (its estimate, rate and alarm).
     pub fn micro(&self) -> &MicroScheduler {
         &self.micro
     }
 
-    /// dantesync#119 — the announced slew while it is not yet complete at `now_ptp_ns` (scheduled
+    /// dsync#119 — the announced slew while it is not yet complete at `now_ptp_ns` (scheduled
     /// or running); `None` otherwise.
     pub fn slew_in_progress(&self, now_ptp_ns: i64) -> Option<DateSlew> {
         self.slew.filter(|s| !s.complete_at(now_ptp_ns))
@@ -404,7 +404,7 @@ impl DateAuthority {
     /// (`current = offset, since = eff`), so no promotion is needed here. Read-only, so
     /// `/status` can publish it from a shared reference.
     ///
-    /// dantesync#119: while a slew is scheduled or running (and after it, until it is promoted)
+    /// dsync#119: while a slew is scheduled or running (and after it, until it is promoted)
     /// the announce IS the slew; read after its end it gives `to` in effect — the same `D` the
     /// promoted form publishes. The MICRO kind belongs to the `seq`: it stays on the promoted form.
     pub fn announce(&self) -> DateAnnounce {
@@ -468,14 +468,14 @@ impl DateAuthority {
     /// reading is judged by the error that REMAINS once the change already announced has landed
     /// (`utc_error − (target D − D now)`).
     ///
-    /// dantesync#119 follow-up: a normal reading only feeds the micro-correction estimate — the
+    /// dsync#119 follow-up: a normal reading only feeds the micro-correction estimate — the
     /// corrections themselves are decided by [`on_tick`](Self::on_tick). A reading beyond
     /// [`slew_cap_ns`] (2 × the step bound) is an ABNORMAL error (typically a master that booted on
     /// a bad NTP reading, seconds off): on [`AUTHORITY_AGREEMENT_N`] consecutive same-sign ones it
     /// is corrected in ONE coordinated step taking effect `lead` from now, forward or backward
     /// (`TooLargeToSlew`), once no other change is in flight. Returns that announce.
     ///
-    /// dantesync#119 (1.12): in daily mode the cap is the EMERGENCY cap (`daily_emergency_ms`): a
+    /// dsync#119 (1.12): in daily mode the cap is the EMERGENCY cap (`daily_emergency_ms`): a
     /// day's drift (~1.5 s on the rig) is recorded for the nightly step, never stepped by day, and
     /// the micro-corrections' falling-behind alarm is never raised (there is nothing to fall
     /// behind: the error is corrected at night by design).
@@ -515,14 +515,14 @@ impl DateAuthority {
         Some(self.announce())
     }
 
-    /// dantesync#119 follow-up — the micro-correction clock: called on every loop iteration of the
+    /// dsync#119 follow-up — the micro-correction clock: called on every loop iteration of the
     /// master (so the spacing is exact, not tied to the NTP cadence). Announces the next increment
     /// when [`MicroScheduler::decide`] makes one, [`MICRO_LEAD_FACTOR`] × `lead` from now: forward
     /// a coordinated STEP,
     /// backward a coordinated SLEW at `slew_ppm` ([`correction_kind`]). Nothing while another
     /// change is in flight or an abnormal correction is being confirmed.
     ///
-    /// dantesync#119 (1.12): in daily mode the nightly scheduler decides instead
+    /// dsync#119 (1.12): in daily mode the nightly scheduler decides instead
     /// ([`daily_tick`](Self::daily_tick)).
     pub fn on_tick(&mut self, now_ptp_ns: i64) -> Option<DateAnnounce> {
         self.promote(now_ptp_ns);
@@ -564,7 +564,7 @@ impl DateAuthority {
     /// A pending step survives a rebase with its WALL instant and its size unchanged: both the
     /// pending offset and its effective PTP instant are shifted into the new base.
     ///
-    /// dantesync#119: `new_offset_ns` is the `D` IN EFFECT in the new base. A slew in progress is
+    /// dsync#119: `new_offset_ns` is the `D` IN EFFECT in the new base. A slew in progress is
     /// shifted the same way, so it keeps running at the same wall instants and the same rate. The
     /// micro-correction history moves into the new base too (the wall, and so every reading, is
     /// continuous).
@@ -628,7 +628,7 @@ pub enum FollowAction {
         delta_ns: i64,
         effective_wall_ns: i64,
     },
-    /// dantesync#119 — a coordinated slew was scheduled: from `start_wall_ns` this box moves `D`
+    /// dsync#119 — a coordinated slew was scheduled: from `start_wall_ns` this box moves `D`
     /// by `amount_ns` at `ppm`. Nothing jumps now; the controller adds the rate term from the
     /// start ([`DateFollower::slew_rate_ppm`]).
     SlewScheduled {
@@ -664,10 +664,10 @@ pub struct DateFollower {
     adopted_seq: Option<u32>,
     pending: Option<ScheduledStep>,
     late_steps: u32,
-    /// dantesync#119 — the slew this box follows (scheduled, running, or complete but not yet
+    /// dsync#119 — the slew this box follows (scheduled, running, or complete but not yet
     /// folded into the anchor).
     held: Option<HeldSlew>,
-    /// dantesync#119 follow-up — the `seq` of the last MICRO-correction announce heard.
+    /// dsync#119 follow-up — the `seq` of the last MICRO-correction announce heard.
     micro_seq: Option<u32>,
 }
 
@@ -694,29 +694,29 @@ impl DateFollower {
         self.late_steps
     }
 
-    /// dantesync#119 — the slew this box follows, if any.
+    /// dsync#119 — the slew this box follows, if any.
     pub fn held_slew(&self) -> Option<HeldSlew> {
         self.held
     }
 
-    /// dantesync#119 follow-up — was the announce `seq` a MICRO-correction?
+    /// dsync#119 follow-up — was the announce `seq` a MICRO-correction?
     pub fn is_micro_seq(&self, seq: u32) -> bool {
         self.micro_seq == Some(seq)
     }
 
-    /// dantesync#119 follow-up — the slew this box holds is a micro-correction.
+    /// dsync#119 follow-up — the slew this box holds is a micro-correction.
     pub fn held_slew_is_micro(&self) -> bool {
         self.held.is_some() && self.adopted_seq.is_some_and(|q| self.is_micro_seq(q))
     }
 
-    /// dantesync#119 follow-up — a micro-correction is in flight on this box at `wall_ns`: its
+    /// dsync#119 follow-up — a micro-correction is in flight on this box at `wall_ns`: its
     /// step is scheduled, or its slew is scheduled or running.
     pub fn micro_in_flight(&self, anchor_ns: i64, wall_ns: i64) -> bool {
         self.pending.is_some_and(|p| self.is_micro_seq(p.seq))
             || (self.held_slew_is_micro() && self.slew_remaining_ns(anchor_ns, wall_ns).is_some())
     }
 
-    /// dantesync#119 — the displacement of `D` from `anchor_ns` at the wall reading `wall_ns`: 0
+    /// dsync#119 — the displacement of `D` from `anchor_ns` at the wall reading `wall_ns`: 0
     /// without a slew. `D` is a function of PTP time and PTP time is `wall − D`, so it is solved
     /// as a fixed point ([`solve_displacement`]): every box and the authority then evaluate the
     /// SAME PTP instant, to the nanosecond. Taken from the WALL (not a sample's `t1`), so it stays
@@ -728,17 +728,17 @@ impl DateFollower {
         solve_displacement(&h, anchor_ns, wall_ns)
     }
 
-    /// dantesync#119 — `D` in effect at `wall_ns` for a box whose phase-lock anchor is `anchor_ns`.
+    /// dsync#119 — `D` in effect at `wall_ns` for a box whose phase-lock anchor is `anchor_ns`.
     pub fn in_effect_ns(&self, anchor_ns: i64, wall_ns: i64) -> i64 {
         anchor_ns.wrapping_add(self.displacement_at_wall(anchor_ns, wall_ns))
     }
 
-    /// dantesync#119 — this box's PTP "now" at `wall_ns` (`wall − D in effect`).
+    /// dsync#119 — this box's PTP "now" at `wall_ns` (`wall − D in effect`).
     pub fn now_ptp_ns(&self, anchor_ns: i64, wall_ns: i64) -> i64 {
         wall_ns.wrapping_sub(self.in_effect_ns(anchor_ns, wall_ns))
     }
 
-    /// dantesync#119 — the extra frequency term (ppm) the slew asks for at `wall_ns`; 0 outside.
+    /// dsync#119 — the extra frequency term (ppm) the slew asks for at `wall_ns`; 0 outside.
     pub fn slew_rate_ppm(&self, anchor_ns: i64, wall_ns: i64) -> f64 {
         match self.held {
             Some(h) => h.slew.rate_ppm_at(self.now_ptp_ns(anchor_ns, wall_ns)),
@@ -746,7 +746,7 @@ impl DateFollower {
         }
     }
 
-    /// dantesync#119 — what the held slew still has to pay at `wall_ns` (`None` without one, or
+    /// dsync#119 — what the held slew still has to pay at `wall_ns` (`None` without one, or
     /// once it is complete).
     pub fn slew_remaining_ns(&self, anchor_ns: i64, wall_ns: i64) -> Option<i64> {
         let h = self.held?;
@@ -754,7 +754,7 @@ impl DateFollower {
         (!h.slew.complete_at(p)).then(|| h.slew.remaining_ns(p))
     }
 
-    /// dantesync#119 — once the held slew is complete at `wall_ns`, drop it and return the
+    /// dsync#119 — once the held slew is complete at `wall_ns`, drop it and return the
     /// displacement to fold into the anchor (`D` is unchanged by the fold).
     pub fn take_completed_slew(&mut self, anchor_ns: i64, wall_ns: i64) -> Option<i64> {
         let h = self.held?;
@@ -765,7 +765,7 @@ impl DateFollower {
         Some(h.total_displacement())
     }
 
-    /// dantesync#119 — stop following the held slew where it is (`D` stays continuous; the
+    /// dsync#119 — stop following the held slew where it is (`D` stays continuous; the
     /// displacement is folded at the next [`take_completed_slew`](Self::take_completed_slew)).
     /// The NTP master does this when its own local NTP step moves its wall, like
     /// [`cancel_pending`](Self::cancel_pending) for a scheduled step.
@@ -778,7 +778,7 @@ impl DateFollower {
         }
     }
 
-    /// dantesync#119 — this box re-anchored onto a new time base whose `D` is `shift_ns` larger:
+    /// dsync#119 — this box re-anchored onto a new time base whose `D` is `shift_ns` larger:
     /// the held slew moves with it, so it keeps running at the same wall instants.
     pub fn rebase_slew(&mut self, shift_ns: i64) {
         if let Some(h) = self.held.as_mut() {
@@ -909,7 +909,7 @@ impl DateFollower {
         }
     }
 
-    /// dantesync#119 — an announced SLEW. Scheduled ahead of its start (nothing jumps), held while
+    /// dsync#119 — an announced SLEW. Scheduled ahead of its start (nothing jumps), held while
     /// it runs, and — for a box that first hears it mid-way (a join, or a late poll) — adopted for
     /// its REMAINING part: the box lands on the fleet's current `D` once (the usual join / absorb /
     /// late rules) and slews the rest with everyone else. A re-announce of the slew this box

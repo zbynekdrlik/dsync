@@ -103,10 +103,10 @@ jobs:
         # dsync#136: --workspace lints the dsync-ptp library crate too.
         run: cargo clippy --workspace -- -D warnings -A dead_code
 
-      # dantesync#132: the tray bin needs the `tray` feature (gtk + tray-icon on Linux),
+      # dsync#132: the tray bin needs the `tray` feature (gtk + tray-icon on Linux),
       # which the plain clippy above leaves out on purpose (the daemon never links gtk).
       - name: Run Clippy (Linux tray)
-        run: cargo clippy --features tray --bin dantesync-tray -- -D warnings -A dead_code
+        run: cargo clippy --features tray --bin dsync-tray -- -D warnings -A dead_code
 
   # ============================================================================
   # Tests
@@ -147,7 +147,7 @@ jobs:
         run: cargo test --workspace --test '*' --verbose
         timeout-minutes: 10
 
-      # dantesync#98: the Dante gate's verdict + release check (scripts/dante_gate.py).
+      # dsync#98: the stability gate's verdict + release check (scripts/stability_gate.py).
       - name: Run script tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
@@ -184,9 +184,9 @@ jobs:
           # winit's Wayland/CSD backend advisories (#47 CI investigation, 2026-07-10) — chain is
           # winit -> sctk-adwaita -> smithay-client-toolkit/wayland-scanner -> quick-xml, and
           # winit -> sctk-adwaita -> ab_glyph -> owned_ttf_parser -> ttf-parser. `winit` itself is
-          # a [target.'cfg(windows)'.dependencies] entry (dantesync-tray only); its Linux/Wayland
+          # a [target.'cfg(windows)'.dependencies] entry (dsync-tray only); its Linux/Wayland
           # client-side-decoration backend is NEVER compiled into ANY shipped artifact — Windows
-          # builds use winit's Win32 backend, and the Linux tray (dantesync#132, `--features tray`)
+          # builds use winit's Win32 backend, and the Linux tray (dsync#132, `--features tray`)
           # uses tray-icon's gtk backend, never winit. cargo-audit still flags them because
           # Cargo.lock resolves the full cross-platform graph regardless of what actually
           # compiles for a given target. No
@@ -221,7 +221,7 @@ jobs:
   # #56: the Windows leg ALSO compiles the test binaries here (not just
   # `cargo build`) -- previously the only place Windows-only #[cfg(test)]
   # code ever compiled was release.yml, i.e. AFTER a PR already merged. A
-  # Windows-only test that stopped compiling (dantesync#53/PR #55's
+  # Windows-only test that stopped compiling (dsync#53/PR #55's
   # NpcapPtpNetwork::pcap_ts_to_systemtime regression) passed every PR gate
   # and only broke at release time, publishing a half-complete release
   # (v1.8.22: Linux asset uploaded, Windows leg failed, no .exe at all).
@@ -305,7 +305,7 @@ jobs:
               Start-Sleep -Seconds (30 * $attempt)
             }
           }
-          if (-not $ok) { Write-Error "Npcap SDK unavailable after 5 attempts (npcap.com throttles GitHub runner IPs -- dantesync issue 66)"; exit 1 }
+          if (-not $ok) { Write-Error "Npcap SDK unavailable after 5 attempts (npcap.com throttles GitHub runner IPs -- dsync issue 66)"; exit 1 }
           Expand-Archive npcap-sdk.zip -DestinationPath npcap-sdk -Force
           echo "LIB=$PWD\npcap-sdk\Lib\x64;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
@@ -317,14 +317,14 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo build --release --target ${{ matrix.target }}
 
-      # dantesync#132: the same command release.yml publishes `dantesync-tray-linux-amd64` from.
+      # dsync#132: the same command release.yml publishes `dsync-tray-linux-amd64` from.
       - name: Build Tray (Linux)
         if: runner.os == 'Linux'
-        run: cargo build --release --features tray --bin dantesync-tray --target ${{ matrix.target }}
+        run: cargo build --release --features tray --bin dsync-tray --target ${{ matrix.target }}
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --release --features tray --bin dantesync --bin dantesync-tray --target ${{ matrix.target }}
+        run: cargo build --release --features tray --bin dsync --bin dsync-tray --target ${{ matrix.target }}
 
   # ============================================================================
   # Code Coverage
@@ -357,7 +357,7 @@ jobs:
 
       # --timeout: tarpaulin's ptrace engine kills a test binary that sends it no event for this
       # long (default 60 s). Once every line is covered, the two-clock bench computes for minutes
-      # on already-covered code, so a stretch with no test ending and no thread starting (dantesync
+      # on already-covered code, so a stretch with no test ending and no thread starting (dsync
       # issue 119 CI run 36274688463: 61 s) is not a hang. The coverage threshold is unchanged.
       - name: Generate coverage
         # dsync#136: --workspace keeps the moved PTP code (crates/dsync-ptp) in the coverage.
@@ -387,15 +387,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      # dantesync#98: a release is tagged only after a successful gate.yml run (the Dante stability
+      # dsync#98: a release is tagged only after a successful gate.yml run (the stability
       # gate on companion) tested this exact tree. The merge commit has a new SHA but, with master an
       # ancestor of dev, the same tree as dev's gated head. Only push / workflow_dispatch gate runs
       # count (a schedule run measures nothing). No match = no tag; gate the tree (after the merge:
-      # `gh workflow run gate.yml --ref master`) and re-run this job. See docs/dante-gate.md.
-      - name: Require a green Dante gate on this tree
+      # `gh workflow run gate.yml --ref master`) and re-run this job. See docs/stability-gate.md.
+      - name: Require a green stability gate on this tree
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/dante_gate.py release-check --repo "$GITHUB_REPOSITORY" --tree "$(git rev-parse 'HEAD^{tree}')"
+        run: python3 scripts/stability_gate.py release-check --repo "$GITHUB_REPOSITORY" --tree "$(git rev-parse 'HEAD^{tree}')"
 
       - name: Extract version and create tag
         run: |

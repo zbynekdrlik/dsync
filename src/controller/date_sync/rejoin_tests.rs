@@ -1,4 +1,4 @@
-//! dantesync#112 — a PTP loss, the multicast re-join and the re-acquisition never re-derive the
+//! dsync#112 — a PTP loss, the multicast re-join and the re-acquisition never re-derive the
 //! fleet date offset on the NTP master.
 //!
 //! The 29.9.2026 strih-lx case: the fleet's date master lost PTP at a USB NIC re-plug, and only a
@@ -41,7 +41,7 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
             .withf(|dur, sign| *dur == Duration::from_millis(3) && *sign == -1)
             .returning(|_, _| Ok(()));
         let (mut c, d) = anchored_controller_with(clock, MockNtpSource::new(), true, config(daily));
-        // dantesync#146: the reported lock is the phase lock's, within the bound.
+        // dsync#146: the reported lock is the phase lock's, within the bound.
         c.lock_reported_for_test();
         let rejoins = Arc::new(AtomicU32::new(0));
         let seen = rejoins.clone();
@@ -96,7 +96,7 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
         c.check_ptp_status();
         c.date_sync.pending_median_ns = Some(d + 3_000_000);
         c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + 30 * S;
-        c.apply_self_tuning_servo(0.0);
+        c.servo_window_after(0.0, 0.5);
         assert!(
             c.date_sync.core.engaged(),
             "daily={daily}: the phase lock re-engaged in the same process"
@@ -108,7 +108,7 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
             let st = st.read().expect("status");
             assert!(
                 !st.is_locked,
-                "daily={daily}: [41] waits for the bound (dantesync#146)"
+                "daily={daily}: [41] waits for the bound (dsync#146)"
             );
             assert_eq!(st.mode, "PROD");
         }
@@ -117,7 +117,7 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
             c.last_ntp_step = Some(Instant::now() - Duration::from_secs(3));
             c.date_sync.pending_median_ns = Some(d);
             c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + (30 + k) * S;
-            c.apply_self_tuning_servo(0.0);
+            c.servo_window_after(0.0, 0.5);
         }
         c.update_shared_status();
         let st = c.get_status_shared();

@@ -1,4 +1,4 @@
-//! dantesync#119 follow-up — the bench's MICRO-correction scenarios: the fleet date corrected in
+//! dsync#119 follow-up — the bench's MICRO-correction scenarios: the fleet date corrected in
 //! increments of at most 500 µs, at most one per 20 s, beyond a 2 ms dead band.
 
 use super::*;

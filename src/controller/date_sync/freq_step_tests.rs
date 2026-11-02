@@ -39,7 +39,7 @@ fn a_grandmaster_frequency_step_is_followed_published_and_never_moves_d_1372() {
     for w in 0..(step_at + 300) {
         c.date_sync.pending_median_ns = Some(d + e_ns.round() as i64);
         c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + w * 500_000_000;
-        c.apply_self_tuning_servo(0.0);
+        c.servo_window_after(0.0, 0.5);
         if w == step_at - 1 {
             let st = c.get_status_shared();
             let st = st.read().expect("status");

@@ -1,4 +1,4 @@
-//! dantesync#146 — DSYX [41] (`/status.is_locked`) under the phase lock, in the closed-loop
+//! dsync#146 — DSYX [41] (`/status.is_locked`) under the phase lock, in the closed-loop
 //! simulation of the whole controller (`lock_sim.rs`).
 //!
 //! The contract (ROZHODNUTÉ on #146, dstack confirmed): [41] = 1 means the clock is safe for a

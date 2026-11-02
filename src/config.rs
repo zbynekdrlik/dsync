@@ -40,25 +40,25 @@ pub struct SystemConfig {
     /// all-invalid list degrades to unrestricted with a loud warning) so a config
     /// typo can never take the rig's clock offline. See `crate::gm_filter`.
     ///
-    /// dantesync#116: a single string is accepted too (`"10.77.9.230"`, or several separated by
+    /// dsync#116: a single string is accepted too (`"10.77.9.230"`, or several separated by
     /// commas / whitespace) — the commonest hand-edit slip, which used to fail the whole file.
     #[serde(default, deserialize_with = "string_or_list")]
     pub gm_allowlist: Vec<String>,
 
-    /// dantesync#131 — the NIC PTP binds to, by name (`"enp56s0"`; on Windows the adapter's
+    /// dsync#131 — the NIC PTP binds to, by name (`"enp56s0"`; on Windows the adapter's
     /// name, e.g. `"Ethernet"`, or its GUID). The owner's ruling (1.11.2026): the interface is an
-    /// explicit setting, never chosen by listing order. When set, dantesync waits for that NIC's
+    /// explicit setting, never chosen by listing order. When set, dsync waits for that NIC's
     /// IPv4 and never joins another one (startup and every PTP re-join); a missing NIC raises the
     /// clock alarm with its name. `--interface` overrides it ([`SystemConfig::pinned_interface`]).
     ///
     /// Unset (`null`, `""`, absent — every pre-1.21 file): the previous selection, with a startup
     /// warning that the interface is not pinned. A non-string value fails the parse, so the
-    /// last-good config runs, loudly (dantesync#116): a pin that silently became "unpinned" would
+    /// last-good config runs, loudly (dsync#116): a pin that silently became "unpinned" would
     /// bring back exactly the incident it exists for.
     #[serde(default, deserialize_with = "optional_name")]
     pub interface: Option<String>,
 
-    /// dantesync#97 — the phase-slew feature switch (default OFF, per-box canary opt-in).
+    /// dsync#97 — the phase-slew feature switch (default OFF, per-box canary opt-in).
     ///
     /// Its own `#[serde(default)]` (plus the sub-object's per-field default) means every
     /// pre-#97 config that lacks the key still parses and defaults to DISABLED — with it off the
@@ -68,7 +68,7 @@ pub struct SystemConfig {
     #[serde(default)]
     pub phase_slew: PhaseSlewConfig,
 
-    /// dantesync#52 — DSCP marking of timesync UDP sockets (default: ON, EF/46).
+    /// dsync#52 — DSCP marking of timesync UDP sockets (default: ON, EF/46).
     ///
     /// Its own `#[serde(default)]` (plus the sub-object's per-field default) means every
     /// pre-#52 config that lacks the key still parses and defaults to marking enabled. See
@@ -77,7 +77,7 @@ pub struct SystemConfig {
     #[serde(default)]
     pub dscp: DscpConfig,
 
-    /// dantesync#114 — cadence (seconds) of the loud "NO DANTE CLOCK" alarm while
+    /// dsync#114 — cadence (seconds) of the loud "NO PTP CLOCK" alarm while
     /// the node is NOT PTP-locked to an allowed grandmaster. Default 60 s (the
     /// owner's "every minute"). Floored at `CLOCK_ALARM_INTERVAL_FLOOR_S` (10 s)
     /// at read time so a `0` can never turn the alarm into per-tick spam.
@@ -89,9 +89,9 @@ pub struct SystemConfig {
     #[serde(default = "default_clock_alarm_interval_s")]
     pub clock_alarm_interval_s: u64,
 
-    /// dantesync#117 — how this node disciplines its clock.
+    /// dsync#117 — how this node disciplines its clock.
     ///
-    /// - `"ptp_phase_lock"` (DEFAULT): the owner contract. RATE and PHASE come from the Dante PTP
+    /// - `"ptp_phase_lock"` (DEFAULT): the owner contract. RATE and PHASE come from the PTPv1
     ///   grandmaster only (`crate::ptp_phase_lock`); NTP only moves the DATE, through the fleet
     ///   date offset the NTP master announces (`crate::date_offset`, #88). `phase_slew` is never
     ///   engaged in this mode.
@@ -107,14 +107,14 @@ pub struct SystemConfig {
     )]
     pub clock_discipline: String,
 
-    /// dantesync#88 — the fleet date-offset authority's tuning (read by the NTP master only).
+    /// dsync#88 — the fleet date-offset authority's tuning (read by the NTP master only).
     /// Lenient as a whole: `null` or a non-object means the defaults, never a failed parse.
     #[serde(default, deserialize_with = "lenient_date_offset")]
     pub date_offset: DateOffsetConfig,
 }
 
 impl SystemConfig {
-    /// dantesync#131 — the PTP interface to pin: `--interface` (`cli`) over `system.interface`;
+    /// dsync#131 — the PTP interface to pin: `--interface` (`cli`) over `system.interface`;
     /// blank counts as unset.
     pub fn pinned_interface(&self, cli: Option<&str>) -> Option<String> {
         cli.map(str::trim)
@@ -124,7 +124,7 @@ impl SystemConfig {
     }
 }
 
-/// dantesync#116 — `gm_allowlist` as a list of strings, or as one string holding one or more
+/// dsync#116 — `gm_allowlist` as a list of strings, or as one string holding one or more
 /// entries separated by commas / whitespace; `null` = empty (unrestricted). Anything else (a
 /// number, a list holding a non-string) still fails the parse.
 fn string_or_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -148,7 +148,7 @@ where
     })
 }
 
-/// dantesync#131 — an optional interface name: trimmed, blank = `None`, `null` = `None`.
+/// dsync#131 — an optional interface name: trimmed, blank = `None`, `null` = `None`.
 fn optional_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -190,7 +190,7 @@ impl SystemConfig {
     }
 }
 
-/// dantesync#88 — the date-offset authority's tuning (ROZHODNUTÉ Q3 defaults).
+/// dsync#88 — the date-offset authority's tuning (ROZHODNUTÉ Q3 defaults).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DateOffsetConfig {
     /// The master announces a date step only when |UTC − wall| exceeds this (ms). Default 50.
@@ -207,15 +207,15 @@ pub struct DateOffsetConfig {
         deserialize_with = "lenient_lead_ms"
     )]
     pub step_lead_ms: u64,
-    /// dantesync#119 — the rate (ppm) at which a BACKWARD correction is slewed (a backward date
-    /// step would lose Dante audio downstream). Default 100 (50 ms in 500 s). `0` means the
+    /// dsync#119 — the rate (ppm) at which a BACKWARD correction is slewed (a backward date
+    /// step would lose audio downstream). Default 100 (50 ms in 500 s). `0` means the
     /// default; anything else is clamped to 10..=500 at read time ([`Self::slew_ppm`]).
     #[serde(
         default = "default_date_slew_ppm",
         deserialize_with = "lenient_slew_ppm"
     )]
     pub slew_ppm: u64,
-    /// dantesync#119 follow-up — the largest single date MICRO-correction (µs). Default 500. `0`
+    /// dsync#119 follow-up — the largest single date MICRO-correction (µs). Default 500. `0`
     /// means the default; anything else is clamped to 50..=1000 at read time ([`Self::micro`]) —
     /// above 1 ms SongPlayer re-anchors, the disturbance the micro-corrections avoid.
     #[serde(
@@ -223,7 +223,7 @@ pub struct DateOffsetConfig {
         deserialize_with = "lenient_micro_step_us"
     )]
     pub micro_step_us: u64,
-    /// dantesync#119 follow-up — the smallest spacing between two micro-corrections (s). Default
+    /// dsync#119 follow-up — the smallest spacing between two micro-corrections (s). Default
     /// 20 (with the default step: 1.5 ms/min of capacity). `0` means the default; anything else is
     /// clamped to 10..=600 at read time.
     #[serde(
@@ -231,7 +231,7 @@ pub struct DateOffsetConfig {
         deserialize_with = "lenient_micro_interval_s"
     )]
     pub micro_interval_s: u64,
-    /// dantesync#119 (1.12) — how the NTP master corrects the fleet date:
+    /// dsync#119 (1.12) — how the NTP master corrects the fleet date:
     ///
     /// - `"daily"` (DEFAULT, owner decision): nothing all day, then ONE coordinated step of the
     ///   error rounded to whole `daily_step_quantum_ms`, either direction, when the nightly window
@@ -246,7 +246,7 @@ pub struct DateOffsetConfig {
         deserialize_with = "lenient_string"
     )]
     pub correction: String,
-    /// dantesync#119 (1.12) — where the nightly window opens, UTC (`"HH:MM"`, `"HH:MM:SS"` or
+    /// dsync#119 (1.12) — where the nightly window opens, UTC (`"HH:MM"`, `"HH:MM:SS"` or
     /// `"HH"`). Default `"02:00"` = 04:00 CEST / 03:00 CET (UTC keeps it tz-library-free; the 1 h
     /// DST shift is accepted). A bad value means the default, with a loud warning.
     #[serde(
@@ -254,7 +254,7 @@ pub struct DateOffsetConfig {
         deserialize_with = "lenient_string"
     )]
     pub daily_step_utc: String,
-    /// dantesync#119 (1.12) — in daily mode, an error beyond this (ms) is stepped at once, loudly,
+    /// dsync#119 (1.12) — in daily mode, an error beyond this (ms) is stepped at once, loudly,
     /// not at night. Default 5000. `0` means the default; anything else is clamped to
     /// 1000..=3600000 at read time.
     #[serde(
@@ -262,7 +262,7 @@ pub struct DateOffsetConfig {
         deserialize_with = "lenient_daily_emergency_ms"
     )]
     pub daily_emergency_ms: u64,
-    /// dantesync#119 (1.16) — the nightly step is the error rounded to a whole number of this
+    /// dsync#119 (1.16) — the nightly step is the error rounded to a whole number of this
     /// (ms), ties away from zero; the remainder stays and is measured again the next night.
     /// Default 200: a whole number of frames at 25/30/50/60 fps and of samples at 48 kHz on every
     /// per-second genlock grid, so the step changes no grid's phase. `0` (or a non-number) means
@@ -273,7 +273,7 @@ pub struct DateOffsetConfig {
         deserialize_with = "lenient_daily_step_quantum_ms"
     )]
     pub daily_step_quantum_ms: u64,
-    /// dantesync#126 — how long (s) a follower HOLDS the fleet date offset after the master went
+    /// dsync#126 — how long (s) a follower HOLDS the fleet date offset after the master went
     /// silent (its 30 s authority-loss window), before it falls back to its local NTP date path.
     /// Default 900: a master restart or reboot plus its PTP re-acquisition. While holding, the
     /// follower keeps `D` and seq and its NTP readings are report-only; the master heard again
@@ -286,9 +286,9 @@ pub struct DateOffsetConfig {
     pub authority_hold_s: u64,
 }
 
-/// dantesync#126 — the default follower hold through a silent master (s).
+/// dsync#126 — the default follower hold through a silent master (s).
 pub const DEFAULT_AUTHORITY_HOLD_S: u64 = 900;
-/// dantesync#126 — the longest follower hold (s): a day.
+/// dsync#126 — the longest follower hold (s): a day.
 pub const MAX_AUTHORITY_HOLD_S: u64 = 86_400;
 
 fn default_date_authority_hold_s() -> u64 {
@@ -305,7 +305,7 @@ where
     ))
 }
 
-/// The `system.date_offset.correction` values (dantesync#119, 1.12).
+/// The `system.date_offset.correction` values (dsync#119, 1.12).
 pub const DATE_CORRECTION_DAILY: &str = crate::date_offset::CORRECTION_DAILY;
 pub const DATE_CORRECTION_MICRO: &str = crate::date_offset::CORRECTION_MICRO;
 /// The 1.10 correction at the step bound: removed in 1.11.0, read as `"daily"` with a warning.
@@ -347,7 +347,7 @@ where
     ))
 }
 
-/// dantesync#117 — a hand-edit like `"clock_discipline": true` must not fail the WHOLE config
+/// dsync#117 — a hand-edit like `"clock_discipline": true` must not fail the WHOLE config
 /// parse (`load_config` would then fall back to defaults). Any non-string becomes a marker string
 /// that `unknown_clock_discipline` reports, so the controller warns and uses the default.
 fn lenient_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -360,7 +360,7 @@ where
     })
 }
 
-/// dantesync#88 — the same leniency for the numeric tuning: a non-negative number (an integer, or
+/// dsync#88 — the same leniency for the numeric tuning: a non-negative number (an integer, or
 /// a float like `10000.0` rounded) is taken; anything else means the default.
 fn lenient_u64_or(value: serde_json::Value, default: u64) -> u64 {
     value
@@ -374,7 +374,7 @@ fn lenient_u64_or(value: serde_json::Value, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-/// dantesync#88 — `"date_offset": null` / a string / an array must not fail the whole config
+/// dsync#88 — `"date_offset": null` / a string / an array must not fail the whole config
 /// parse (which would make `load_config` overwrite the file with defaults, losing `ntp_server`).
 fn lenient_date_offset<'de, D>(deserializer: D) -> Result<DateOffsetConfig, D::Error>
 where
@@ -446,7 +446,7 @@ fn default_date_slew_ppm() -> u64 {
     crate::date_offset::DEFAULT_SLEW_PPM as u64
 }
 
-/// dantesync#119 follow-up — the smallest effective `date_offset.step_bound_ms` (the cap is 2 × it,
+/// dsync#119 follow-up — the smallest effective `date_offset.step_bound_ms` (the cap is 2 × it,
 /// 10 ms, five times the micro-corrections' dead band).
 pub const MIN_DATE_STEP_BOUND_MS: u64 = 5;
 
@@ -476,7 +476,7 @@ impl Default for DateOffsetConfig {
 }
 
 impl DateOffsetConfig {
-    /// The effective bound in ns (`0` → the default). dantesync#119 follow-up: floored at
+    /// The effective bound in ns (`0` → the default). dsync#119 follow-up: floored at
     /// [`MIN_DATE_STEP_BOUND_MS`], so the abnormal-correction cap (2 × the bound) stays well above
     /// the micro-corrections' 2 ms dead band — a smaller bound would turn every normal correction
     /// into a confirmed large step and the micro-corrections would never run.
@@ -494,32 +494,32 @@ impl DateOffsetConfig {
         (self.step_lead_ms.clamp(5_000, 3_600_000) as i64) * 1_000_000
     }
 
-    /// dantesync#119 — the effective slew rate (ppm): `0` → the default (100), else clamped to
+    /// dsync#119 — the effective slew rate (ppm): `0` → the default (100), else clamped to
     /// `crate::date_offset::MIN_SLEW_PPM..=MAX_SLEW_PPM` (10..=500).
     pub fn slew_ppm(&self) -> u32 {
         crate::date_offset::clamp_slew_ppm(self.slew_ppm.min(u32::MAX as u64) as u32)
     }
 
-    /// dantesync#119 follow-up — the effective micro-correction tuning (`0` → the defaults, else
+    /// dsync#119 follow-up — the effective micro-correction tuning (`0` → the defaults, else
     /// clamped: step 50..=1000 µs, interval 10..=600 s).
     pub fn micro(&self) -> crate::date_offset::MicroConfig {
         crate::date_offset::MicroConfig::new(self.micro_step_us, self.micro_interval_s)
     }
 
-    /// dantesync#126 — the effective follower hold through a silent master: `0` = none (the 1.14
+    /// dsync#126 — the effective follower hold through a silent master: `0` = none (the 1.14
     /// fallback at the 30 s authority loss), else at most [`MAX_AUTHORITY_HOLD_S`].
     pub fn authority_hold(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.authority_hold_s.min(MAX_AUTHORITY_HOLD_S))
     }
 
-    /// dantesync#126 — how far off the saved `D` a restarted master's first PTP window may read
+    /// dsync#126 — how far off the saved `D` a restarted master's first PTP window may read
     /// its wall and still restore it (ns): the daily emergency cap (`daily_emergency_ms`,
     /// clamped as for the nightly step), whatever the correction mode.
     pub fn restore_cap_ns(&self) -> i64 {
         crate::date_offset::clamp_daily_emergency_ms(self.daily_emergency_ms) as i64 * 1_000_000
     }
 
-    /// dantesync#119 (1.12) — the effective date-correction mode, and a warning for every value
+    /// dsync#119 (1.12) — the effective date-correction mode, and a warning for every value
     /// that fell back to its default (the controller logs them loudly at startup): `"daily"` (the
     /// default, and what an unknown value or the removed `"bound"` means) or `"micro"`,
     /// case-insensitive; `daily_step_utc` parsed leniently, else 02:00; `daily_step_quantum_ms`
@@ -582,7 +582,7 @@ fn default_clock_alarm_interval_s() -> u64 {
     60
 }
 
-/// dantesync#97 — phase-slew servo switch. Only the on/off flag is configurable; the servo's
+/// dsync#97 — phase-slew servo switch. Only the on/off flag is configurable; the servo's
 /// gains / caps / rate limits are hard constants in `crate::phase_slew` (the same way the PTP
 /// servo's own gains are hardcoded and auto-tuned — see `ServoConfig`'s "legacy" note).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -607,7 +607,7 @@ impl Default for PhaseSlewConfig {
 
 /// NTP Server configuration for unified time source mode.
 ///
-/// When enabled, DanteSync becomes an NTP server that:
+/// When enabled, dsync becomes an NTP server that:
 /// 1. Syncs time from upstream NTP on startup, and — since #68 — KEEPS
 ///    re-querying that upstream on the normal cadence, disciplining itself
 ///    with bounded corrections
@@ -617,7 +617,7 @@ impl Default for PhaseSlewConfig {
 ///
 /// #68 — this used to read "syncs ONCE on startup, stops all periodic NTP
 /// queries". That was the defect, not a footnote: PTP locks the master's
-/// FREQUENCY to the Dante grandmaster, whose rate is not UTC's rate, so with
+/// FREQUENCY to the grandmaster, whose rate is not UTC's rate, so with
 /// the periodic queries off the master's UTC phase error integrated from boot
 /// with nothing subtracting from it (6-19 ppm measured on strih ⇒ ~21 ms 19
 /// minutes after a restart, 1.04 s over two days) while `ntp_failed` stayed
@@ -681,7 +681,7 @@ impl Default for NtpServerConfig {
 /// Serves the SAME `SyncStatus` JSON the named pipe already emits (minus the pipe's
 /// 4-byte length prefix), over a plain HTTP GET, bound to the LAN interface
 /// (0.0.0.0). This lets automation/CI on a DIFFERENT machine read PTP/NTP lock
-/// status without a human or an SMB/named-pipe bridge (dantesync#47).
+/// status without a human or an SMB/named-pipe bridge (dsync#47).
 ///
 /// Unlike `NtpServerConfig` (opt-in — only ONE machine per network should become
 /// the NTP master), this is enabled by DEFAULT: it is read-only, LAN-bound, and the
@@ -776,10 +776,10 @@ impl Default for SystemConfig {
         // UNIFIED CONFIGURATION - Same core behavior on Windows and Linux
         //
         // ARCHITECTURE: Dual-source time synchronization
-        // 1. PTP (Dante) → frequency synchronization only (adjust_frequency)
+        // 1. PTP (the grandmaster) → frequency synchronization only (adjust_frequency)
         // 2. NTP → UTC phase alignment (step_clock)
         //
-        // CRITICAL: Dante PTP provides DEVICE UPTIME, not UTC time!
+        // CRITICAL: the grandmaster's PTPv1 time is DEVICE UPTIME, not UTC time!
         // - NTP handles all time stepping via periodic UTC corrections
         // - PTP locks the frequency while NTP keeps absolute time correct
         //
@@ -800,24 +800,24 @@ impl Default for SystemConfig {
             // the historical last-writer-wins behavior. Backward compatible.
             gm_allowlist: Vec::new(),
 
-            // dantesync#131: not pinned (the previous selection, with a warning).
+            // dsync#131: not pinned (the previous selection, with a warning).
             interface: None,
 
-            // dantesync#97: phase slew is OFF by default — merging it changes nothing on the
+            // dsync#97: phase slew is OFF by default — merging it changes nothing on the
             // fleet until a box opts in during the canary rollout.
             phase_slew: PhaseSlewConfig::default(),
 
-            // dantesync#52: DSCP marking ON by default (EF/46). Harmless when a
+            // dsync#52: DSCP marking ON by default (EF/46). Harmless when a
             // switch ignores DSCP; a bad value fails open to unmarked.
             dscp: DscpConfig::default(),
 
-            // dantesync#114: loud NO-DANTE-CLOCK alarm every 60 s while unlocked.
+            // dsync#114: loud NO-PTP-CLOCK alarm every 60 s while unlocked.
             clock_alarm_interval_s: default_clock_alarm_interval_s(),
 
-            // dantesync#117: the PTP phase lock is the default; "legacy" restores the old path.
+            // dsync#117: the PTP phase lock is the default; "legacy" restores the old path.
             clock_discipline: default_clock_discipline(),
 
-            // dantesync#88: 50 ms step bound, 5 s announce lead.
+            // dsync#88: 50 ms step bound, 5 s announce lead.
             date_offset: DateOffsetConfig::default(),
         }
     }

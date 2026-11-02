@@ -38,16 +38,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: dantesync
-            asset_name: dantesync-linux-amd64
-            tray_artifact_name: dantesync-tray
-            tray_asset_name: dantesync-tray-linux-amd64
+            artifact_name: dsync
+            asset_name: dsync-linux-amd64
+            tray_artifact_name: dsync-tray
+            tray_asset_name: dsync-tray-linux-amd64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: dantesync.exe
-            asset_name: dantesync-windows-amd64.exe
-            tray_artifact_name: dantesync-tray.exe
-            tray_asset_name: dantesync-tray-windows-amd64.exe
+            artifact_name: dsync.exe
+            asset_name: dsync-windows-amd64.exe
+            tray_artifact_name: dsync-tray.exe
+            tray_asset_name: dsync-tray-windows-amd64.exe
 
     steps:
       - name: Checkout code
@@ -93,7 +93,7 @@ jobs:
               Start-Sleep -Seconds (30 * $attempt)
             }
           }
-          if (-not $ok) { Write-Error "Npcap SDK unavailable after 5 attempts (npcap.com throttles GitHub runner IPs -- dantesync issue 66)"; exit 1 }
+          if (-not $ok) { Write-Error "Npcap SDK unavailable after 5 attempts (npcap.com throttles GitHub runner IPs -- dsync issue 66)"; exit 1 }
           Expand-Archive npcap-sdk.zip -DestinationPath npcap-sdk -Force
           echo "LIB=$PWD\npcap-sdk\Lib\x64;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
@@ -107,9 +107,9 @@ jobs:
 
       - name: Build Main (Linux)
         if: runner.os == 'Linux'
-        run: cargo build --release --bin dantesync --target ${{ matrix.target }} --verbose
+        run: cargo build --release --bin dsync --target ${{ matrix.target }} --verbose
 
-      # dantesync#132: the Linux tray links gtk, so its dev packages are installed only
+      # dsync#132: the Linux tray links gtk, so its dev packages are installed only
       # here; the daemon above is built without the `tray` feature and never links gtk.
       - name: Install Linux tray dependencies
         if: runner.os == 'Linux'
@@ -117,11 +117,11 @@ jobs:
 
       - name: Build Tray (Linux)
         if: runner.os == 'Linux'
-        run: cargo build --release --features tray --bin dantesync-tray --target ${{ matrix.target }} --verbose
+        run: cargo build --release --features tray --bin dsync-tray --target ${{ matrix.target }} --verbose
 
       - name: Build Main & Tray (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --release --features tray --bin dantesync --bin dantesync-tray --target ${{ matrix.target }} --verbose
+        run: cargo build --release --features tray --bin dsync --bin dsync-tray --target ${{ matrix.target }} --verbose
 
       - name: Rename Artifacts (Linux)
         if: runner.os == 'Linux'

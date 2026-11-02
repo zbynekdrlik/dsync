@@ -1,4 +1,4 @@
-//! dantesync#134 — fast boot sync: the PTP loop never waits for the boot NTP reading.
+//! dsync#134 — fast boot sync: the PTP loop never waits for the boot NTP reading.
 //!
 //! Before 1.19 `main` measured the boot NTP offset (`run_ntp_sync`, a blocking burst) BEFORE the
 //! PTP loop started: 12 s on strih-pp to an internet upstream at boot (25.10.2026), with nothing
@@ -31,7 +31,7 @@ pub type BootNtpResult = std::result::Result<NtpMeasurement, BootNtpError>;
 pub struct BootNtpError {
     pub message: String,
     /// The server answered "clock unsynchronized" (LI = 3): a master whose own wall is not placed
-    /// yet (dantesync#134 re-review: a follower asks again a few seconds later).
+    /// yet (dsync#134 re-review: a follower asks again a few seconds later).
     pub server_unsynchronized: bool,
 }
 
@@ -66,7 +66,7 @@ pub(in crate::controller) const BOOT_NTP_WAIT: Duration = Duration::from_secs(60
 
 /// A boot reading kept for a deferred boot step is used up to this old (the wall was not stepped
 /// since: the saved state skipped it); older, the step is measured again on a thread.
-/// dantesync#134 re-review: a follower whose master answers "unsynchronized" asks again this
+/// dsync#134 re-review: a follower whose master answers "unsynchronized" asks again this
 /// often, at most [`BOOT_UNSYNC_RETRIES`] times (~1 min).
 pub(in crate::controller) const BOOT_UNSYNC_RETRY: Duration = Duration::from_secs(5);
 pub(in crate::controller) const BOOT_UNSYNC_RETRIES: usize = 12;
@@ -79,7 +79,7 @@ pub(in crate::controller) struct BootNtpWait {
     pub(in crate::controller) since: Instant,
 }
 
-/// `main`'s way to measure a boot NTP reading again on a thread (dantesync#134 review: a deferred
+/// `main`'s way to measure a boot NTP reading again on a thread (dsync#134 review: a deferred
 /// boot step must never measure inside the loop).
 pub type BootNtpSpawner = Box<dyn FnMut() -> Receiver<BootNtpResult>>;
 
@@ -110,7 +110,7 @@ where
     /// Every loop iteration: apply the boot NTP reading once it has arrived; give up waiting after
     /// [`BOOT_NTP_WAIT`].
     pub fn service_boot_ntp(&mut self) {
-        // dantesync#134 re-review: a reading refused by an unsynchronized master, asked again.
+        // dsync#134 re-review: a reading refused by an unsynchronized master, asked again.
         if let Some(at) = self.date_sync.restart.boot_retry_at {
             if self.on_fleet_date_line() {
                 info!("[NTP] boot reading not asked again: this node is on the fleet date line");
@@ -160,7 +160,7 @@ where
                     && self.date_sync.restart.boot_ntp_spawner.is_some()
                     && self.date_sync.restart.boot_retries < BOOT_UNSYNC_RETRIES =>
             {
-                // dantesync#134 re-review: the master answers LI = 3 while its own wall is not
+                // dsync#134 re-review: the master answers LI = 3 while its own wall is not
                 // placed (seconds) — ask again shortly instead of starting on the raw wall.
                 self.date_sync.restart.boot_retries += 1;
                 info!(
@@ -216,7 +216,7 @@ where
         };
         self.record_ntp_success(offset_us, &measurement);
         if offset.as_millis() > BOOT_STEP_THRESHOLD_MS && self.skip_boot_step_for(offset_us) {
-            // dantesync#126: the NTP master restores its saved fleet date offset at the first PTP
+            // dsync#126: the NTP master restores its saved fleet date offset at the first PTP
             // windows instead — a restart must not move the fleet date. The reading is kept: a
             // rejected restore takes its boot step from it (review of PR 135).
             info!(
@@ -271,7 +271,7 @@ where
         true
     }
 
-    /// dantesync#134 review — the master's wall is placed: on its fleet line (a restored or new
+    /// dsync#134 review — the master's wall is placed: on its fleet line (a restored or new
     /// session it is aligned with), or its boot reading handled with nothing left to decide (no
     /// saved state waiting, no boot step due).
     pub(in crate::controller) fn master_wall_placed(&self) -> bool {
@@ -284,7 +284,7 @@ where
         if on_line {
             return true;
         }
-        // dantesync#134 re-review: a session this master has never yet been on (a restore whose
+        // dsync#134 re-review: a session this master has never yet been on (a restore whose
         // join step failed and waits for its backoff) is not placed, whatever else is done. Once
         // placed, "nothing pending" holds (a later PTP outage keeps serving).
         if ds.authority.is_some() && !ds.restart.wall_placed_once {
@@ -295,14 +295,14 @@ where
             && !ds.restart.boot_step_due
     }
 
-    /// dantesync#134 re-review: every master loop iteration — remember the first placement.
+    /// dsync#134 re-review: every master loop iteration — remember the first placement.
     pub(in crate::controller) fn note_master_placement(&mut self) {
         if !self.date_sync.restart.wall_placed_once && self.master_wall_placed() {
             self.date_sync.restart.wall_placed_once = true;
         }
     }
 
-    /// dantesync#134: this node's wall is on the fleet date line already — the master runs its
+    /// dsync#134: this node's wall is on the fleet date line already — the master runs its
     /// authority (restored or new), or a follower adopted the master's D.
     fn on_fleet_date_line(&self) -> bool {
         self.date_sync.enabled

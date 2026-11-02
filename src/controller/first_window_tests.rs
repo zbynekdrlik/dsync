@@ -1,4 +1,4 @@
-//! dantesync#142 — a window without a previous offset is not a measurement.
+//! dsync#142 — a window without a previous offset is not a measurement.
 //!
 //! The rate servo differentiates the window offset: the first window after warmup, and the first
 //! after any measurement reset (a clock step, a PTP outage), has nothing to differentiate against.
@@ -30,10 +30,7 @@ fn controller() -> Ctl {
 
 /// One window 0.5 s after the previous one (4 Syncs at 8 Hz), with the offset `offset_us`.
 fn window(c: &mut Ctl, offset_us: f64) {
-    if c.rate.last_offset_us.is_some() {
-        c.rate.last_offset_time = Some(Instant::now() - Duration::from_millis(500));
-    }
-    c.apply_self_tuning_servo(offset_us);
+    c.servo_window_after(offset_us, 0.5);
 }
 
 #[test]

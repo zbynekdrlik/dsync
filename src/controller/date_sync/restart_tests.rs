@@ -1,4 +1,4 @@
-//! dantesync#126 — the controller wiring of a master restart that keeps the fleet date: the
+//! dsync#126 — the controller wiring of a master restart that keeps the fleet date: the
 //! saved state skips the boot step and keeps the master off its NTP step path until the first
 //! PTP lock, is restored there (same D, same seq) or rejected (the boot step then runs from the
 //! loop, a new session), is saved whenever it changes; and a follower holds the fleet date through
@@ -72,7 +72,7 @@ fn first_lock(c: &mut Ctl, gm: [u8; 6], anchor: i64) {
     c.rate.is_locked = true;
     c.date_sync.pending_median_ns = Some(anchor);
     c.date_sync.pending_t1_ns = wall_now_ns() - anchor;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     assert_eq!(c.date_sync.core.anchor_ns(), Some(anchor), "the first lock");
 }
 
@@ -230,7 +230,7 @@ fn the_boot_step_is_skipped_only_while_a_readable_saved_state_waits_126() {
     }
 }
 
-/// dantesync#129 (slice 0): the saved grandmaster UUID is report-only. A master that comes back
+/// dsync#129 (slice 0): the saved grandmaster UUID is report-only. A master that comes back
 /// under another UUID (another port of one clock) on the same time base restores the fleet date;
 /// a grandmaster with another uptime is refused by the time base (the persist tests).
 #[test]
