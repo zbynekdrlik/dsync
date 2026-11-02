@@ -6,6 +6,29 @@ Entries before 1.25.0 keep the names of their time (the project was renamed in 1
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0] - 2026-11-02
+
+### Changed
+
+- `dsync-ptp` loads the Npcap runtime (`wpcap.dll`) at RUN time on Windows (#136, dstack): the
+  `pcap` crate (link-time `wpcap`) is replaced by `dsync_ptp::wpcap`, which loads
+  `%SystemRoot%\System32\Npcap\wpcap.dll` (then the default search) with `LoadLibraryExW` and
+  resolves the functions with `GetProcAddress`. An application that links `dsync-ptp` needs no
+  Npcap SDK to build and no `/DELAYLOAD` linker flag, and starts on a PC without Npcap. The
+  service and CI no longer need the SDK either (the delay-load `build.rs` files are gone).
+- `Follower::start` returns a typed `dsync_ptp::follower::FollowerError` (#136): `NpcapMissing`
+  (Windows without Npcap), `PermissionDenied` (Linux binding 319/320 without
+  `CAP_NET_BIND_SERVICE` or root), `InterfaceNotFound` (the interface is absent or has no IPv4)
+  or `Other`. It implements `std::error::Error`, so `?` into `anyhow` still compiles.
+
+### Added
+
+- `dsync-ptp-probe-windows-amd64.exe` in the release (#136): a follower beside the local service.
+  `--interface <name|IPv4> [--seconds N] [--service host:port]`. It prints, every second, the
+  follower's lock, the follower's PTP time minus the service's (µs) and the service's [41], then
+  the time to lock and the max / p99 |diff|. Exit 0 within the lock bound (50 µs), 1 never locked /
+  no comparison / p99 over the bound, 2 a start error (the `FollowerError` kind is printed).
+
 ## [1.26.0] - 2026-11-02
 
 ### Added
