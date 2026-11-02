@@ -242,8 +242,12 @@ jobs:
           rc=$?
           set -e
           if [ "$rc" -eq 3 ]; then
-            echo "::error title=Restore queued::dsync-gate-install --restore exit 3: a production took the rig lease during the gate. Restore queued, root timer applies it after the lease ends; no human action needed. Until then the gate candidate is the running dantesync on companion."
-            exit 1
+            # The helper GUARANTEES a queued restore (root timer, about a minute after the lease
+            # ends; a new install meanwhile refuses with exit 6), so the measurement stands and the
+            # Verdict still runs. Failing here made every gate red whenever camera-box took the
+            # lease mid-hour (runs 41372498483, 41384428027), with nothing wrong in dsync.
+            echo "::warning title=Restore queued::dsync-gate-install --restore exit 3: the rig lease was taken during the gate. Restore queued, root timer applies it after the lease ends; no human action needed. Until then the gate candidate is the running dantesync on companion."
+            exit 0
           fi
           if [ "$rc" -ne 0 ]; then
             echo "::error title=Restore failed, candidate may still be installed::dsync-gate-install --restore exit $rc"

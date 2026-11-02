@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the candidate daemon through `dsync-gate-install`, which refuses while the rig lease is held.
   Then it runs dstack's `dante-stack-dev clock` (v0.4.33, sha256-pinned) for one hour against the
   box's own time server, samples `/status` every 10 s, and always puts the previous binary back.
-  A pass is exactly one `Ready`, zero re-anchors and zero holdovers over a complete log. See
+  A pass is exactly one `Ready`, zero re-anchors and zero holdovers over a complete log. A restore
+  the helper queued under a held lease only warns, and the verdict still runs. See
   `docs/dante-gate.md`.
 - `/status.ptp_phase_engaged_on_ppm` and `/status.ptp_phase_boot_reseed_ppm` (#146): the frequency
   the first engagement started on, and its once-only re-seed.

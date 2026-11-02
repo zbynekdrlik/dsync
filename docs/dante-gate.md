@@ -141,7 +141,9 @@ to be free. Then gate the tree again:
 
 - The helper queued the restore. A root timer applies it about a minute after the lease ends, so
   no human action is needed.
-- The job fails with "restore queued".
+- The step only warns ("restore queued") and the Verdict still runs on the full measurement: the
+  helper guarantees the queued restore. Failing here turned every hour red when camera-box took the
+  lease mid-run (runs 41372498483, 41384428027), with nothing wrong in dsync.
 - Until the restore runs, a new gate run gets exit 6 ("previous restore still queued").
 
 ## Known side effects (camera-box conditions)
