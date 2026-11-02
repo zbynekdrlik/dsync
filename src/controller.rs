@@ -2049,15 +2049,18 @@ where
     /// #114: sample the current Dante-clock health for the alarm decision.
     fn sample_clock_health(&self) -> ClockHealth {
         let ptp_stale = self.ptp_stale_at(Instant::now());
-        // mode ∈ {LOCK, NANO} — the genuinely PTP-locked modes.
-        let mode_locked = self.in_nano_mode || self.is_locked;
+        // mode ∈ {LOCK, NANO} — the genuinely PTP-locked modes. dantesync#146: under the phase
+        // lock an engaged phase lock that has not held [41] for 2 min is not locked
+        // (`alarm_sees_lock`; legacy: never set, the rate lock as before).
+        let locked = self.alarm_sees_lock();
+        let mode_locked = self.in_nano_mode || locked;
         // A grandmaster source is present AND permitted by the (resolved) allowlist.
         let gm_allowed = match self.current_sync_source_ip {
             Some(ip) => self.gm_allowlist.allows(ip),
             None => false,
         };
         ClockHealth {
-            is_locked: self.is_locked,
+            is_locked: locked,
             mode_locked,
             gm_allowed,
             ptp_stale,

@@ -16,6 +16,12 @@
 use super::*;
 use crate::lock_gate::{GateEvent, LOCK_BOUND_NS, UNLOCK_BOUND_NS, UNLOCK_WINDOWS};
 
+/// dantesync#146: an engaged phase lock whose [41] has been 0 this long is a lost clock for the
+/// #114 alarm. Longer than a cold boot's pull (30-55 s) and a 25 ppm grandmaster frequency step's
+/// drop (~60 s), so neither alarms; a reference the phase lock cannot hold (a grandmaster sending
+/// garbage, a sub-minimum frequency step that keeps `e` past 150 µs for minutes) does.
+pub(in crate::controller) const PHASE_UNSAFE_ALARM_AFTER: Duration = Duration::from_secs(120);
+
 impl DateSync {
     /// The phase lock wrote `word`: remember its deviation from the learned frequency (0 when the
     /// rate servo's word applies).
@@ -73,6 +79,21 @@ where
         let engaged = self.date_sync.core.engaged();
         let event = self.date_sync.lock_gate.on_window(engaged, error_ns);
         log_gate_event(event);
+        self.date_sync.unsafe_since = match (engaged, self.date_sync.lock_gate.locked()) {
+            (true, false) => self.date_sync.unsafe_since.or(Some(Instant::now())),
+            _ => None,
+        };
+    }
+
+    /// dantesync#146: what the #114 clock alarm reads as "locked". Under the phase lock the rate
+    /// lock is held while engaged, so it alone would never say a broken reference is lost: an
+    /// engaged phase lock that has not held [41] for [`PHASE_UNSAFE_ALARM_AFTER`] is not locked.
+    pub(in crate::controller) fn alarm_sees_lock(&self) -> bool {
+        self.is_locked
+            && self
+                .date_sync
+                .unsafe_since
+                .map_or(true, |t| t.elapsed() < PHASE_UNSAFE_ALARM_AFTER)
     }
 
     /// Tests about something else (staleness, the re-join) that need a node REPORTING its lock:
@@ -99,8 +120,9 @@ where
     }
 
     /// The phase lock disengaged outside a window (the PTP-offline edge): [41] clears at once.
-    pub(super) fn clear_reported_lock(&mut self) {
+    pub(in crate::controller) fn clear_reported_lock(&mut self) {
         self.date_sync.word_deviation_ppm = [0.0; 2];
+        self.date_sync.unsafe_since = None;
         let event = self.date_sync.lock_gate.reset();
         log_gate_event(event);
     }

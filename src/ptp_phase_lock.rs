@@ -117,6 +117,18 @@ pub const DISCONTINUITY_NS: i64 = 1_000_000_000;
 /// next authority poll sees its `D` differ and joins; the master rebases the fleet offset.
 pub const REANCHOR_ON_ENGAGE_NS: i64 = 1_000_000;
 
+/// dantesync#146 — while ENGAGED, a JUMP of the error the PI tracks (`e` minus a running pull) by
+/// more than [`REANCHOR_ON_ENGAGE_NS`] from one window to the next, that then stays beyond that
+/// bound for this many consecutive windows (3 s), is a phase jump (another writer set the clock,
+/// the grandmaster's time base jumped by less than [`DISCONTINUITY_NS`]), not something to slew:
+/// the clamped PI would run ~40-140 ppm off the tick for minutes. `D` is re-anchored on the
+/// current offset (`Realigned`, exactly what a re-engagement that far off does) and the
+/// integrator goes back to its value before the jump. Only a JUMP arms it: an error that GROWS
+/// past the bound is an unlearned frequency (a hand-over far off, a step), which the boot re-seed,
+/// the frequency-step follow or the PI retire — re-aligning it would only repeat. Before #146 the
+/// rate servo's unlock produced that re-engagement; an engaged phase lock now holds the rate lock.
+pub const REALIGN_ENGAGED_WINDOWS: usize = 6;
+
 /// dantesync#134 — the FIRST engagement after the early anchor (the box anchored `D` at its first
 /// window and placed the fleet date on it while the rate servo was still acquiring) keeps that
 /// anchor up to this far off it (ns), and retires the acquisition drift along the pull reference
@@ -235,6 +247,12 @@ pub struct PhaseLockCore {
     boot_fit_open: bool,
     /// dantesync#146: the once-only re-seed of that engagement, when it happened.
     boot_reseed: Option<BootFit>,
+    /// dantesync#146: consecutive engaged windows beyond the re-align bound, and the integrator
+    /// before the first of them.
+    far_windows: usize,
+    i_before_far_ppm: f64,
+    /// dantesync#146: the tracked error (ns) of the last engaged window, to tell a jump.
+    last_tracked_ns: Option<f64>,
 }
 
 impl PhaseLockCore {
@@ -442,7 +460,38 @@ impl PhaseLockCore {
             }
         };
 
-        let e_ns = median_diff_ns.wrapping_sub(anchor);
+        let mut e_ns = median_diff_ns.wrapping_sub(anchor);
+        // dantesync#146: a phase jump while engaged is re-aligned, not slewed.
+        if ptp_locked && self.engaged && event == AnchorEvent::None {
+            let tracked_ns = e_ns as f64 - self.pull_us * 1_000.0;
+            let bound = REANCHOR_ON_ENGAGE_NS as f64;
+            let jumped = self
+                .last_tracked_ns
+                .is_some_and(|prev| (tracked_ns - prev).abs() > bound);
+            self.last_tracked_ns = Some(tracked_ns);
+            if tracked_ns.abs() <= bound {
+                self.far_windows = 0;
+            } else if self.far_windows > 0 || jumped {
+                if self.far_windows == 0 {
+                    self.i_before_far_ppm = self.i_ppm;
+                }
+                self.far_windows += 1;
+            }
+            if self.far_windows >= REALIGN_ENGAGED_WINDOWS {
+                self.far_windows = 0;
+                self.i_ppm = self.i_before_far_ppm;
+                self.anchor_ns = Some(median_diff_ns);
+                event = AnchorEvent::Realigned {
+                    old_ns: anchor,
+                    new_ns: median_diff_ns,
+                };
+                e_ns = 0;
+                self.last_tracked_ns = None;
+            }
+        } else {
+            self.far_windows = 0;
+            self.last_tracked_ns = None;
+        }
         self.last_error_ns = Some(e_ns);
 
         // dantesync#146: the acquisition's open-loop phase, for the first engagement's frequency.
@@ -910,6 +959,49 @@ mod tests {
         assert_eq!(c.boot_fit_points(), 0, "closed after the re-seed");
         assert_eq!(c.freq_steps(), 0, "a re-seed is not a frequency step");
         assert!(p.e_ns.abs() < 50_000.0, "e {} ns", p.e_ns);
+    }
+
+    #[test]
+    fn a_phase_jump_while_engaged_is_realigned_after_six_windows_146() {
+        let mut c = PhaseLockCore::new();
+        let mut p = Plant::new(12.0, 1, -12.0);
+        run(&mut c, &mut p, 1_200, -12.0);
+        let learned = c.integrator_ppm();
+        // 5 windows 3 ms off: slewed (a transient), no re-anchor …
+        let jump: i64 = 3_000_000;
+        for n in 0..(REALIGN_ENGAGED_WINDOWS - 1) {
+            let out = c.on_window(D + jump + p.e_ns.round() as i64, true, 0.0, DT);
+            assert_eq!(out.event, AnchorEvent::None, "window {n}");
+        }
+        // … the 6th re-anchors on the current offset, the integrator back where it was.
+        let out = c.on_window(D + jump + p.e_ns.round() as i64, true, 0.0, DT);
+        assert!(
+            matches!(out.event, AnchorEvent::Realigned { old_ns, .. } if old_ns == D),
+            "{:?}",
+            out.event
+        );
+        assert_eq!(out.error_ns, Some(0));
+        assert_eq!(c.integrator_ppm(), learned, "no windup kept from the jump");
+        // One window back inside the bound restarts the count.
+        let mut c = PhaseLockCore::new();
+        let mut p = Plant::new(12.0, 1, -12.0);
+        run(&mut c, &mut p, 1_200, -12.0);
+        for _ in 0..20 {
+            for _ in 0..(REALIGN_ENGAGED_WINDOWS - 1) {
+                c.on_window(D + jump, true, 0.0, DT);
+            }
+            assert_eq!(c.on_window(D, true, 0.0, DT).event, AnchorEvent::None);
+        }
+        assert_eq!(c.anchor_ns(), Some(D));
+        // An error that GROWS past the bound (an unlearned frequency, 100 ppm here) is never a
+        // jump: no re-align, the PI / the frequency-step follow own it.
+        let mut c = PhaseLockCore::new();
+        c.on_window(D, true, 0.0, DT);
+        for n in 1..120i64 {
+            let out = c.on_window(D + n * 50_000, true, 0.0, DT);
+            assert_eq!(out.event, AnchorEvent::None, "window {n}");
+        }
+        assert_eq!(c.anchor_ns(), Some(D));
     }
 
     #[test]

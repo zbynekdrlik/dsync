@@ -134,8 +134,17 @@ fn the_drift_file_is_saved_only_while_locked_every_ten_minutes_142() {
     assert!(c.freq_seed.next_save.is_none());
     assert!(!path.exists());
 
-    // Locked: the first save is one interval after the lock, not at once.
+    // dantesync#146: the rate servo's lock alone is not "locked" — [41] (the phase within the
+    // bound) is; an engaged phase lock holds the rate lock while it still slews.
     c.is_locked = true;
+    c.tick_drift_file();
+    assert!(
+        c.freq_seed.next_save.is_none(),
+        "rate-locked only: no timer"
+    );
+
+    // Locked: the first save is one interval after the lock, not at once.
+    c.lock_reported_for_test();
     c.tick_drift_file();
     let due = c.freq_seed.next_save.expect("armed at the lock");
     assert!(due > Instant::now() + DRIFT_SAVE_INTERVAL - Duration::from_secs(5));
@@ -155,6 +164,7 @@ fn the_drift_file_is_saved_only_while_locked_every_ten_minutes_142() {
     assert!(c.freq_seed.next_save.is_none());
     c.ptp_offline = false;
     c.is_locked = false;
+    c.clear_reported_lock();
     c.tick_drift_file();
     assert_eq!(
         drift_file::load_seed(&path, now_s(), 500.0)
@@ -175,6 +185,13 @@ fn shutdown_saves_only_a_locked_frequency_142() {
     assert!(!path.exists(), "not locked: nothing saved");
 
     c.is_locked = true;
+    c.save_drift_file_at_shutdown();
+    assert!(
+        !path.exists(),
+        "rate-locked only, [41] not set (#146): nothing saved"
+    );
+
+    c.lock_reported_for_test();
     c.ptp_offline = true;
     c.save_drift_file_at_shutdown();
     assert!(!path.exists(), "PTP offline: not a locked value");
@@ -190,6 +207,7 @@ fn shutdown_saves_only_a_locked_frequency_142() {
 fn a_controller_without_a_drift_file_never_writes_one_142() {
     let (mut c, _) = controller();
     c.is_locked = true;
+    c.lock_reported_for_test();
     c.tick_drift_file();
     c.save_drift_file_at_shutdown();
     assert!(c.freq_seed.next_save.is_none());
@@ -306,6 +324,7 @@ fn a_failing_save_warns_once_and_recovers_142() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (mut c, _) = controller();
     c.is_locked = true;
+    c.lock_reported_for_test();
     c.drift_baseline_ppm = 20.0;
     // A directory that does not exist (a read-only root answers EROFS the same way: no file).
     let missing = dir.path().join("no-such-dir").join("drift.json");

@@ -158,11 +158,12 @@ where
 
     /// dantesync#142: after each window — note the word it wrote (for the seed judge), and while
     /// LOCKED save the learned frequency every [`DRIFT_SAVE_INTERVAL`] (the first one an interval
-    /// after the lock).
+    /// after the lock). dantesync#146: "locked" is the REPORTED lock ([41]): under the phase lock
+    /// the rate lock is held while engaged, so it no longer says the frequency has settled.
     pub(super) fn tick_drift_file(&mut self) {
         self.freq_seed.word_before = self.freq_seed.word_last;
         self.freq_seed.word_last = self.applied_freq_ppm;
-        if !self.is_locked || self.ptp_offline || self.freq_seed.path.is_none() {
+        if !self.reported_lock() || self.ptp_offline || self.freq_seed.path.is_none() {
             self.freq_seed.next_save = None;
             return;
         }
@@ -180,7 +181,7 @@ where
     /// dantesync#142: at shutdown, save the learned frequency when LOCKED (else the file keeps
     /// the last locked value). `main` calls it after the sync loop ends.
     pub fn save_drift_file_at_shutdown(&mut self) {
-        if self.is_locked && !self.ptp_offline {
+        if self.reported_lock() && !self.ptp_offline {
             self.save_drift_file("at shutdown");
         } else {
             info!("[FREQ-SEED] not locked at shutdown: the drift file keeps its last locked value");

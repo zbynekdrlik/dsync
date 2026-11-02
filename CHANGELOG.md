@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sets `[41]` 31-43 s after the phase lock engaged (it took minutes), a good seed 4-8.5 s after
   "Sync established" (Linux / moderate Windows jitter); no flap after the first lock in any boot,
   date step or seed up to 15 ppm off.
+- A phase jump while the phase lock is engaged (another writer set the clock, a sub-second jump of
+  the grandmaster's time) is re-aligned after 3 s instead of slewed for minutes (#146).
+- The drift file is saved, and the clock alarm reads the node as locked, only while `[41]` is set
+  (#146): the alarm fires when an engaged phase lock has not held `[41]` for 2 minutes.
 
 ### Changed
 

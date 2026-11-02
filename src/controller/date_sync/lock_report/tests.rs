@@ -133,3 +133,54 @@ fn an_engaged_phase_lock_holds_the_rate_lock_through_an_unstable_window_146() {
         "legacy: the rate lock as before"
     );
 }
+
+#[test]
+fn an_unstable_measured_window_does_not_unlock_an_engaged_phase_lock_146() {
+    // Through the real window path: two windows whose offset moves 100 us in 0.5 s (200 us/s),
+    // the phase lock engaged. Without the hold the lock count drops (gradual unlock).
+    let mut c = controller(phase_lock_config());
+    c.is_locked = true;
+    c.lock_stable_count = LOCK_STABLE_COUNT;
+    c.date_sync.core.on_window(0, true, 0.0, 0.5);
+    for (k, offset_us) in [0.0, 100.0, 200.0].into_iter().enumerate() {
+        if c.last_offset_us.is_some() {
+            c.last_offset_time = Some(Instant::now() - Duration::from_millis(500));
+        }
+        c.date_sync.pending_median_ns = Some(0);
+        c.date_sync.pending_t1_ns = (k as i64 + 1) * 500_000_000;
+        c.apply_self_tuning_servo(offset_us);
+    }
+    assert!(c.date_sync.core.engaged());
+    assert!(c.is_locked, "still rate-locked");
+    assert_eq!(
+        c.lock_stable_count, LOCK_STABLE_COUNT,
+        "the count did not move"
+    );
+}
+
+#[test]
+fn the_clock_alarm_sees_an_engaged_phase_lock_without_41_for_two_minutes_as_lost_146() {
+    let mut c = controller(phase_lock_config());
+    c.is_locked = true;
+    c.date_sync.core.on_window(0, true, 0.0, 0.5);
+    // Engaged, [41] not (yet) set: the boot pull. Not lost within the grace …
+    c.judge_reported_lock(Some(400_000));
+    assert!(c.date_sync.unsafe_since.is_some());
+    assert!(c.alarm_sees_lock());
+    // … lost beyond it (a reference the phase lock cannot hold).
+    c.date_sync.unsafe_since = Some(Instant::now() - PHASE_UNSAFE_ALARM_AFTER);
+    assert!(!c.alarm_sees_lock());
+    let health = c.sample_clock_health();
+    assert!(!health.is_locked && !health.mode_locked);
+    // [41] set again: healthy at once.
+    for _ in 0..LOCK_WINDOWS {
+        c.judge_reported_lock(Some(0));
+    }
+    assert_eq!(c.date_sync.unsafe_since, None);
+    assert!(c.alarm_sees_lock());
+    // Legacy never arms it.
+    let mut l = controller(legacy());
+    l.is_locked = true;
+    assert!(l.alarm_sees_lock());
+    assert!(l.sample_clock_health().is_locked);
+}

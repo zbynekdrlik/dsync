@@ -28,7 +28,10 @@ Under the default `system.clock_discipline = "ptp_phase_lock"` it is the phase e
   clears it once; it is set again once `e` is back within 50 µs (about a minute).
 - A cold boot (no `drift.json`) sets it about 30-45 s after the phase lock engages (simulation;
   τ·ln(|e0| / 50 µs) of the boot pull with τ = 20 s, so longer for a larger acquisition drift: 0.7 ms
-  is ~53 s); a boot with a good drift file 4-9 s after "Sync established".
+  is ~53 s); a boot with a good drift file 4-9 s after "Sync established" on Linux or a moderate
+  Windows jitter (up to ~27 s at a pessimistic 30 µs per-sample jitter).
+- A phase jump (another program set the clock, a sub-second jump of the grandmaster's time) clears
+  it 2 s later; the phase lock re-anchors 3 s after the jump and it is set again ~4 s after it.
 - `/status.mode` reads `LOCK` or `NANO` only while `[41]` is 1.
 
 Under `"legacy"` it is the rate servo's lock (5 windows with |rate| < 5 µs/s), as before 1.23.

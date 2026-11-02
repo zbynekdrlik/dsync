@@ -1351,6 +1351,20 @@ start. What was learned:
   fitting through the engagement and re-seeds ONCE at 20 s when off by ≥ 0.5 ppm and 3 σ, the
   phase left retired along the pull. Without that re-seed a 4 ppm-off hand-over took `e` past
   150 µs: a [41] flap.
+- **Holding the rate lock removed the old way back from a phase JUMP (re-review of #146).** A
+  lock loss used to re-engage `Realigned` (> 1 ms off); engaged, nothing disengages any more, so
+  a 5 ms-500 ms jump (another writer, a sub-second time-base jump) was slewed at ~40-140 ppm for
+  up to 93 minutes. The core now re-aligns itself: a one-window JUMP of the tracked error (`e` −
+  pull) by more than `REANCHOR_ON_ENGAGE_NS`, still beyond it for `REALIGN_ENGAGED_WINDOWS` (6)
+  windows → `Realigned`, the integrator back to its pre-jump value. Sim: [41] back 4 s after the
+  jump. Only a jump arms it: armed on any error beyond 1 ms, the e2e's blind 100 ppm hand-over
+  re-aligned again and again (the error GROWS back after each re-anchor; [41] flapped 3 times)
+  — a growing error is an unlearned frequency, for the re-seed / step follow / PI. And two readers of the rate lock
+  had to move to the PHASE: the drift-file save (`reported_lock`, else a still-slewing integrator
+  is saved) and the #114 clock alarm (`alarm_sees_lock`: engaged without [41] for 120 s = lost,
+  longer than a cold boot's pull and a 25 ppm step's drop). Any FUTURE reader of `is_locked` must
+  ask the same: does it mean "the rate servo acquired" (engagement, NTP thresholds) or "the clock
+  is good" ([41])?
 - **The #134 trade-off stays:** no re-anchor at the first engagement (a SECOND fleet date step), so
   a cold boot pays τ·ln(|e0| / 50 µs) of pull before [41]: 31-43 s after the engagement in the
   model (e0 ≈ 275 µs), ~53 s for gen3's 0.7 ms.
@@ -1358,7 +1372,7 @@ start. What was learned:
   window, seeded jitter):** cold gen3 [41] at 58-77.5 s after "Sync established" (engaged at
   27-36 s, |e| at [41] 31-48 µs); a good seed 4-8.5 s at 1/10 µs jitter, 10-27 s at a pessimistic
   30 µs (the rate servo's integrator walks a few ppm under that noise; the re-seed and the PI trim
-  it); seeds 7-15 ppm off 8-68 s; no flap after the first lock in any boot, a ±date step, or
+  it); seeds 7-15 ppm off 4-68 s; no flap after the first lock in any boot, a ±date step, or
   noise; GM steps −25 ppm (and +10 at 1/10 µs) drop [41] once and return; +4 ppm (under
   `FSTEP_MIN_PPM`, not re-seeded) at 30 µs drops it for ~4 min while the PI takes it out.
 - **A sim that feeds the rate servo a constant offset never sees this.** The 1372 controller test
@@ -1370,8 +1384,9 @@ start. What was learned:
   allows one drop + one return only for a followed step (`freq_steps`) or a BLIND rate lock (the
   smoothed rate exactly 0.0 up to the first lock: never a real measurement). A span under 0.1 s
   counting toward LOCK at all is the #142 class (a window without its own rate is not a
-  measurement); it is recorded on #146 as a follow-up (fixing it needs the e2e harness reworked:
-  its spans carry no measurement at all).
+  measurement); it is recorded on #146 as a follow-up candidate (fixing it needs the e2e harness
+  reworked: its spans carry no measurement at all). So the e2e is NOT no-flap evidence (9 of its
+  10 audits lock blind); the no-flap proof is `lock_sim_tests.rs`.
 - **Coverage-timing (#142 lesson) kept:** all sim scenarios run serially in ONE `#[test]`
   (0.5 s in debug).
 

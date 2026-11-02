@@ -156,6 +156,8 @@ pub(super) struct DateSync {
     pub(super) restart: restart::RestartState,
     /// dantesync#146 — the reported lock (DSYX [41]) under the phase lock (`lock_report.rs`).
     pub(super) lock_gate: crate::lock_gate::PhaseLockGate,
+    /// dantesync#146 — since when the engaged phase lock has not held [41] (the clock alarm).
+    pub(super) unsafe_since: Option<Instant>,
     /// dantesync#146 — the phase lock's last two words minus its integrator (ppm), oldest first:
     /// the deviation the rate servo's measurement is decoupled from (0 = the rate servo's word).
     pub(super) word_deviation_ppm: [f64; 2],
@@ -239,6 +241,7 @@ impl DateSync {
             restart: restart::RestartState::new(config),
             lock_gate: crate::lock_gate::PhaseLockGate::new(),
             word_deviation_ppm: [0.0; 2],
+            unsafe_since: None,
         }
     }
 

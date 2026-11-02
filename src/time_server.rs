@@ -42,7 +42,8 @@
 //!   PTP goes stale (no allowed Sync / Follow_Up for 10 s, dantesync#112). After the first lock
 //!   neither a boot's phase pull nor a date step moves it; a grandmaster frequency step large
 //!   enough to take `e` past 150 µs (a 25 ppm step: ~450 µs) clears it once, and it is set again
-//!   once `e` is back within 50 µs.
+//!   once `e` is back within 50 µs. A phase jump while engaged clears it and the phase lock
+//!   re-aligns within 3 s (dantesync#146 `REALIGN_ENGAGED_WINDOWS`).
 //!
 //! Under `"legacy"` it is the rate servo's lock (5 windows with |rate| < 5 µs/s), as before 1.23.
 //! The tray and the IPC read the same `/status.is_locked`: one definition.
