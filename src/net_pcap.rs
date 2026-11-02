@@ -1,6 +1,6 @@
 //! The Windows Npcap NTP transport (dantesync#53). The PTP capture and the shared pcap helpers
 //! (device lookup, the #58 runtime guard, HostHighPrec captures) moved to the `dsync-ptp` crate
-//! (dantesync#136) and are re-exported here, so `crate::net_pcap::…` paths are unchanged.
+//! (dsync#136) and are re-exported here, so `crate::net_pcap::…` paths are unchanged.
 
 pub use dsync_ptp::net_pcap::*;
 

@@ -81,7 +81,8 @@ mod sockets {
     #[test]
     fn two_followers_share_the_port_pair_and_each_anchors_on_every_message() {
         // An unprivileged port pair of this test's own (the process id spreads parallel runs).
-        let base = 40_000 + (std::process::id() % 10_000) as u16 * 2;
+        // Below Linux's ephemeral range (32768-60999), so no outgoing socket can hold it.
+        let base = 20_000 + (std::process::id() % 5_000) as u16 * 2;
         let a = follower(base);
         let b = follower(base);
         let stop = Arc::new(AtomicBool::new(false));
@@ -102,6 +103,7 @@ mod sockets {
         let (sa, sb) = (ca.state(), cb.state());
         // Every Sync reached both (the kernel's multicast fan-out to every SO_REUSEADDR member).
         assert!(sa.windows >= 5 && sb.windows >= 5, "{:?} / {:?}", sa, sb);
+        assert!(sa.windows.abs_diff(sb.windows) <= 1, "{:?} / {:?}", sa, sb);
         assert_eq!(sa.gm_uuid, Some([0, 0x1d, 0xc1, 1, 1, 1]));
         assert!(sa.date_offset_ns.is_some());
         // Both anchored on the same messages: their PTP times agree to well under a ms already
@@ -117,7 +119,7 @@ mod sockets {
     }
 }
 
-/// A follower is pinned to the interface it is given (dantesync#131): one that does not exist is
+/// A follower is pinned to the interface it is given (dsync#131): one that does not exist is
 /// an error naming it, never another NIC.
 #[test]
 fn starting_on_a_missing_interface_names_it_and_joins_nothing() {
@@ -159,4 +161,131 @@ fn a_reader_handle_answers_nothing_before_the_anchor() {
     let s = c.state();
     assert!(!s.locked && !s.holdover);
     assert_eq!(s.windows, 0);
+}
+
+/// A scripted receive path: queued datagrams with their wall stamps.
+struct Script(std::collections::VecDeque<(Vec<u8>, i64)>);
+
+impl PtpNetwork for Script {
+    #[allow(clippy::type_complexity)]
+    fn recv_packet(
+        &mut self,
+    ) -> Result<
+        Option<(
+            Vec<u8>,
+            usize,
+            std::time::SystemTime,
+            Option<std::net::Ipv4Addr>,
+        )>,
+    > {
+        Ok(self.0.pop_front().map(|(data, wall_ns)| {
+            let len = data.len();
+            let ts = std::time::UNIX_EPOCH + Duration::from_nanos(wall_ns as u64);
+            (data, len, ts, None)
+        }))
+    }
+    fn rejoin(&mut self) -> Result<crate::network::RejoinOutcome> {
+        Err(anyhow::anyhow!("scripted"))
+    }
+}
+
+/// Readings of a world whose wall runs `wall_minus_mono` ahead of the raw counter, 1 ms apart.
+fn readings(
+    start_mono: i64,
+    wall_minus_mono: impl Fn(usize) -> i64,
+) -> impl FnMut() -> mono::TimeBaseReading {
+    let mut n = 0usize;
+    move || {
+        n += 1;
+        mono::TimeBaseReading {
+            mono_ns: start_mono + n as i64 * 1_000_000,
+            wall_minus_mono_ns: wall_minus_mono(n),
+        }
+    }
+}
+
+const WALL_MINUS_MONO: i64 = 1_789_000_000_000_000_000;
+
+/// Two Syncs queued while the thread stalled, the wall stepped +300 ms between their receive
+/// and the next pass: both carry pre-step stamps, both would be converted 300 ms off with the
+/// post-step reading. The whole pass is dropped; the next pass is converted normally.
+#[test]
+fn a_receive_pass_that_sees_a_wall_step_drops_every_packet_queued_across_it() {
+    use crate::ptp_tx::{self, Sender};
+    let sender = Sender {
+        source_uuid: [0, 0x1d, 0xc1, 7, 7, 7],
+        grandmaster_uuid: [0, 0x1d, 0xc1, 7, 7, 7],
+    };
+    let mut core = core::FollowerCore::new(GmAllowlist::default(), 0);
+    let mut rx = Receiver {
+        stamps: StampConverter::new(),
+        warned_at: None,
+    };
+    rx.stamps.observe(mono::TimeBaseReading {
+        mono_ns: 0,
+        wall_minus_mono_ns: WALL_MINUS_MONO,
+    });
+    let stamp = WALL_MINUS_MONO + 500_000;
+    let mut net = Script(
+        vec![
+            (ptp_tx::sync(&sender, 1, 1_000), stamp),
+            (ptp_tx::sync(&sender, 2, 2_000), stamp + 125_000_000),
+        ]
+        .into(),
+    );
+    // Every reading of this pass is after the step.
+    let mut after_step = readings(1_000_000, |_| WALL_MINUS_MONO + 300_000_000);
+    assert!(
+        !rx.pass(&mut net, &mut core, &mut after_step),
+        "nothing was taken"
+    );
+    assert_eq!(core.straddled(), 2, "both queued Syncs dropped");
+    assert_eq!(core.model().gm_uuid, None, "neither reached the pipeline");
+
+    // The next pass (no step since the last reading) is taken.
+    let mut net = Script(vec![(ptp_tx::sync(&sender, 3, 3_000), stamp + 300_000_000)].into());
+    let mut steady = readings(10_000_000, |_| WALL_MINUS_MONO + 300_000_000);
+    assert!(rx.pass(&mut net, &mut core, &mut steady));
+    assert_eq!(core.straddled(), 2);
+    assert_eq!(core.model().gm_uuid, Some(sender.grandmaster_uuid));
+}
+
+/// A receive thread that ended is never reported locked, even with a locked model published.
+#[test]
+fn a_clock_whose_receive_thread_is_gone_reports_holdover_never_lock() {
+    let model = model::ClockModel {
+        anchored: true,
+        locked: true,
+        ..Default::default()
+    };
+    let (lock, _writer) = SeqLock::new(model.to_words());
+    let clock = PtpClock {
+        model: lock,
+        heartbeat: Arc::new(AtomicI64::new(mono::mono_now_ns())),
+    };
+    assert!(clock.state().locked && clock.alive());
+    // Stuck: no beat for longer than the stale bound.
+    clock.heartbeat.store(
+        mono::mono_now_ns() - STALE_AFTER_NS - 1_000_000,
+        Ordering::Release,
+    );
+    let s = clock.state();
+    assert!(!s.locked && s.holdover);
+    // Dead.
+    clock.heartbeat.store(DEAD, Ordering::Release);
+    assert!(!clock.alive());
+    assert!(!clock.state().locked);
+    assert!(
+        clock.now_ptp_ns().is_some(),
+        "the time itself runs on in holdover"
+    );
+}
+
+#[test]
+fn dropping_the_follower_ends_its_thread_and_the_clock_says_so() {
+    let f = Follower::with_network(Script(Default::default()), &FollowerConfig::default()).unwrap();
+    let c = f.clock();
+    assert!(c.alive());
+    drop(f);
+    assert!(!c.alive());
 }

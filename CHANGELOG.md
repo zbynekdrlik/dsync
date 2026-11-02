@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The library form (#136, owner ruling 2026-11-02: "build it"). `crates/dsync-ptp` is a workspace
-  crate that applications link to lock to Dante PTP in their own process.
+  crate that applications link to lock to the grandmaster in their own process.
   - `dsync_ptp::follower::Follower` runs the service's own pipeline on a virtual clock. That
     pipeline is the rate servo, the phase lock and the DSYX [41] lock gate. The virtual clock runs
     over the raw monotonic counter.

@@ -83,7 +83,7 @@ sd-notify = "0.4"
 
 [dev-dependencies]
 mockall = "0.12"
-dsync-ptp = { path = "crates/dsync-ptp", version = "1.24.0", features = ["mock"] }
+dsync-ptp = { path = "crates/dsync-ptp", version = "1.24.0", features = ["mock", "sim"] }
 tempfile = "3.10"
 
 [[bin]]

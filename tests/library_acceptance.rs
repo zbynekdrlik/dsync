@@ -1,4 +1,4 @@
-//! dantesync#136 — the acceptance test of the library form (dstack's wish): the dsync service and
+//! dsync#136 — the acceptance test of the library form (dstack's wish): the dsync service and
 //! two in-process library followers on ONE PC agree on PTP time within the lock bound (50 µs).
 //!
 //! Real sockets, real kernel receive stamps, the real code on both sides:
@@ -41,6 +41,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LOOPBACK: Ipv4Addr = Ipv4Addr::LOCALHOST;
 const LOCK_BOUND_NS: i64 = 50_000;
+const UNLOCK_BOUND_NS: i64 = 150_000;
 /// A cold service locks in ~60-80 s ([41] after the boot pull, #146); the follower is the same law.
 const LOCK_DEADLINE: Duration = Duration::from_secs(240);
 /// How long the three are compared once all report a lock.
@@ -175,7 +176,8 @@ fn grandmaster(base: u16, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> 
 
 #[test]
 fn the_service_and_two_library_followers_on_one_pc_agree_within_the_lock_bound_136() {
-    let base = 41_000 + (std::process::id() % 9_000) as u16 * 2;
+    // Below Linux's ephemeral range (32768-60999), and apart from the crate test's 20000-29999.
+    let base = 30_000 + (std::process::id() % 1_000) as u16 * 2;
     let stop = Arc::new(AtomicBool::new(false));
 
     // The two library followers.
@@ -277,10 +279,15 @@ fn the_service_and_two_library_followers_on_one_pc_agree_within_the_lock_bound_1
         "service vs follower {}ns",
         worst_sf
     );
+    // One kernel stamp per datagram reaches every receiver: two followers run the same law on the
+    // same stamps and differ only by float rounding of their different virtual-clock origins.
+    assert!(worst_ff <= 1_000, "follower vs follower {}ns", worst_ff);
+    // Not only agreeing with each other: every clock sits on the grandmaster's line, behind it
+    // by the loopback receive latency plus at most the phase error the [41] UNLOCK bound allows.
     assert!(
-        worst_ff <= LOCK_BOUND_NS,
-        "follower vs follower {}ns",
-        worst_ff
+        worst_line <= UNLOCK_BOUND_NS,
+        "{}ns off the grandmaster line",
+        worst_line
     );
     assert_eq!(s1.gm_uuid, Some([0, 0x1d, 0xc1, 0x13, 0x60, 0x01]));
     assert_eq!((s1.epoch, s1.holdovers), (0, 0));

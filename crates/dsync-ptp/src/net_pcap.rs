@@ -66,6 +66,7 @@ fn join_multicast(iface_ip: Ipv4Addr) -> Result<UdpSocket> {
 /// of crashing the process. This also hardens a real deployed box: if
 /// Npcap's runtime is ever missing/corrupted there, dantesync now degrades
 /// gracefully instead of crashing outright.
+#[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn wpcap_runtime_available() -> bool {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
@@ -101,6 +102,7 @@ pub fn wpcap_runtime_available() -> bool {
 /// name-based selection (`find_device`, PTP) and NTP-server-reachability
 /// selection (`find_device_for_ntp_server`, dantesync#53 continuation) go
 /// through this, so neither path can bypass the guard.
+#[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn list_devices_guarded() -> Result<Vec<Device>> {
     // #58: check BEFORE the first delay-loaded pcap:: call (Device::list(),
     // right below), not after -- see `wpcap_runtime_available()`.
@@ -121,6 +123,7 @@ pub fn list_devices_guarded() -> Result<Vec<Device>> {
 /// transport (dantesync#53) uses `find_device_for_ntp_server` instead
 /// (selection by NTP-server reachability, not by inherited PTP interface
 /// name — see that function's doc comment for why).
+#[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn find_device(interface_name: &str) -> Result<Device> {
     let devices = list_devices_guarded()?;
     devices
@@ -175,6 +178,7 @@ pub fn find_device(interface_name: &str) -> Result<Device> {
 /// the caller joins the multicast group on it (review 🔵: on a multi-IP NIC the
 /// device's first IPv4 could differ from the trusted one). `(device, None)` for
 /// the fallback path, where the caller joins on the device's first IPv4.
+#[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn find_ptp_capture_device(
     gm_allowlist: &crate::gm_filter::GmAllowlist,
     fallback_name: &str,
@@ -250,6 +254,7 @@ pub fn find_ptp_capture_device(
 ///
 /// Shared by the PTP capture path (below) and the NTP kernel-timestamped
 /// transport (dantesync#53).
+#[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn device_ipv4(device: &Device) -> Result<Ipv4Addr> {
     device
         .addresses
@@ -271,6 +276,7 @@ pub fn device_ipv4(device: &Device) -> Result<Ipv4Addr> {
 /// Shared by the PTP capture path (below) and the NTP kernel-timestamped
 /// transport (dantesync#53) — both need the same precise-timestamp capture
 /// setup, differing only in which traffic the filter selects.
+#[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn open_hiprec_capture(device: &Device, bpf_filter: &str) -> Result<Capture<Active>> {
     info!("[TS] Requesting HostHighPrec timestamps (KeQuerySystemTimePrecise)");
 
@@ -293,6 +299,7 @@ pub fn open_hiprec_capture(device: &Device, bpf_filter: &str) -> Result<Capture<
 ///
 /// Shared by the PTP capture path (below) and the NTP kernel-timestamped
 /// transport (dantesync#53).
+#[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn pcap_ts_to_systemtime(ts_sec: i64, ts_usec: i64) -> SystemTime {
     let duration = Duration::new(ts_sec as u64, (ts_usec * 1000) as u32);
     UNIX_EPOCH + duration

@@ -1,8 +1,8 @@
-//! The follower's PTP pipeline, pure (dantesync#136): packets with explicit stamps in, the clock
+//! The follower's PTP pipeline, pure (dsync#136): packets with explicit stamps in, the clock
 //! model out. No thread, no socket, no clock read — the thread ([`super::Follower`]) is glue, and
 //! a simulation drives this deterministically.
 //!
-//! It is the service's pipeline (`PtpController` in the dantesync crate) on a virtual clock:
+//! It is the service's pipeline (`PtpController` in the service crate) on a virtual clock:
 //!
 //! 1. A Sync is kept with its receive stamp; the Follow_Up with the same sequence id and source
 //!    gives `t1` (the grandmaster's precise send time). `t2` = the virtual clock at the Sync's
@@ -28,6 +28,7 @@
 use super::model::{ClockModel, VirtualClock};
 use crate::gm_filter::GmAllowlist;
 use crate::lock_gate::PhaseLockGate;
+use crate::phase_window;
 use crate::ptp::{PtpV1Control, PtpV1FollowUpBody, PtpV1Header, PtpV1SyncMessageBody};
 use crate::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
 use crate::ptp_rejoin::REJOIN_AFTER;
@@ -41,7 +42,8 @@ pub const WINDOW_SAMPLES: usize = 4;
 
 /// The least grandmaster time between two samples of a window (the service's effective default:
 /// `filters.min_delta_ns` = 1 ms on Linux; 0 on Windows, where the controller falls back to
-/// 100 ms). Dante sends a Sync every 250 ms, so both take every Sync.
+/// 100 ms). The grandmaster sends a Sync every 250 ms (syncInterval −2), so both take every
+/// Sync; the simulations send 8 per second.
 #[cfg(not(windows))]
 pub const MIN_SAMPLE_SPACING_NS: i64 = 1_000_000;
 #[cfg(windows)]
@@ -203,12 +205,17 @@ impl FollowerCore {
         PacketVerdict::TimeMessage
     }
 
-    /// The wall clock was stepped between a packet's receive and its conversion to the raw
-    /// counter: that packet is dropped by the caller; the Syncs waiting for their Follow_Up are
-    /// dropped here (their pairing would straddle the step).
+    /// The wall clock was stepped since the last receive: the Syncs waiting for their Follow_Up
+    /// are dropped (their pairing would straddle the step). The packets of the receive pass that
+    /// saw it are dropped by the caller ([`FollowerCore::note_straddling_packet`]).
     pub fn on_wall_step(&mut self) {
-        self.straddled += 1 + self.pending.len() as u64;
+        self.straddled += self.pending.len() as u64;
         self.pending.clear();
+    }
+
+    /// A packet whose stamp may be on either side of a wall step was dropped.
+    pub fn note_straddling_packet(&mut self) {
+        self.straddled += 1;
     }
 
     /// The clock tick: the staleness edge (holdover).
@@ -235,12 +242,8 @@ impl FollowerCore {
             self.holdovers = self.holdovers.saturating_add(1);
         }
         self.drop_measurement();
-        self.gate.reset();
-        self.deviation.clear();
-        self.core.on_ptp_outage();
-        if self.core.engaged() {
-            self.core.disengage();
-            let word = self.core.integrator_ppm();
+        let outage = phase_window::on_outage(&mut self.core, &mut self.gate, &mut self.deviation);
+        if let Some(word) = outage.held_ppm {
             self.rate.drift_baseline_ppm = word;
             self.clock.set_rate(mono_now_ns, word);
         }
@@ -256,8 +259,7 @@ impl FollowerCore {
         self.window.clear();
         self.prev_t1_ns = 0;
         self.last_window_t1_ns = None;
-        self.rate.last_offset_us = None;
-        self.rate.last_offset_time = None;
+        self.rate.reset_measurement();
     }
 
     /// The PTP sender may carry another time base: re-anchor `D_v` on the next window, never
@@ -281,22 +283,8 @@ impl FollowerCore {
             None => self.sync_source = Some(source),
             _ => {}
         }
-        if self.pending.len() >= MAX_PENDING_SYNCS {
-            let newest = p.mono_rx_ns;
-            self.pending
-                .retain(|_, s| newest.saturating_sub(s.mono_rx_ns) < 5_000_000_000);
-            if self.pending.len() >= MAX_PENDING_SYNCS {
-                return;
-            }
-        }
-        self.pending.insert(
-            header.sequence_id,
-            PendingSync {
-                mono_rx_ns: p.mono_rx_ns,
-                wall_rx_ns: p.wall_rx_ns,
-                source_uuid: source,
-            },
-        );
+        // A new grandmaster is a new time base: judged BEFORE this Sync is kept, so the change
+        // never drops the new grandmaster's first Sync.
         if let Ok(body) = PtpV1SyncMessageBody::parse(&p.data[PtpV1Header::SIZE..]) {
             let uuid = body.grandmaster_clock_uuid;
             match self.gm_uuid {
@@ -315,6 +303,22 @@ impl FollowerCore {
                 _ => {}
             }
         }
+        if self.pending.len() >= MAX_PENDING_SYNCS {
+            let newest = p.mono_rx_ns;
+            self.pending
+                .retain(|_, s| newest.saturating_sub(s.mono_rx_ns) < 5_000_000_000);
+            if self.pending.len() >= MAX_PENDING_SYNCS {
+                return;
+            }
+        }
+        self.pending.insert(
+            header.sequence_id,
+            PendingSync {
+                mono_rx_ns: p.mono_rx_ns,
+                wall_rx_ns: p.wall_rx_ns,
+                source_uuid: source,
+            },
+        );
     }
 
     fn on_follow_up(&mut self, header: &PtpV1Header, data: &[u8]) {
@@ -353,7 +357,7 @@ impl FollowerCore {
         let wall_minus_v = wall[wall.len() / 2];
         self.windows += 1;
 
-        // The shared rate servo, in the service's order (dantesync PtpController).
+        // The shared rate servo, in the service's order (the service's PtpController).
         let OffsetMeasurement {
             measured,
             dt_secs,
@@ -368,7 +372,7 @@ impl FollowerCore {
             raw_rate_ppm
         };
         let rate_ppm = if measured {
-            self.rate.measure(raw_rate_ppm, MonoNs(mono_ns))
+            self.rate.measure(raw_rate_ppm, || MonoNs(mono_ns))
         } else {
             self.rate.smoothed_rate_ppm
         };
@@ -377,14 +381,10 @@ impl FollowerCore {
         }
         let ServoWord { word_ppm, .. } = self.rate.word(rate_ppm, measured, self.core.engaged());
 
-        // The shared phase lock: dt in grandmaster time.
-        let dt = self
-            .last_window_t1_ns
-            .map(|prev| t1_ns.wrapping_sub(prev) as f64 / 1e9)
-            .unwrap_or(dt_secs);
-        self.last_window_t1_ns = Some(t1_ns);
+        // The shared phase lock and its window glue (`crate::phase_window`, as the service).
+        let dt = phase_window::window_dt(&mut self.last_window_t1_ns, t1_ns, dt_secs);
         let was_engaged = self.core.engaged();
-        let locked = self.rate.is_locked && !self.stale;
+        let locked = phase_window::engage_on(self.rate.is_locked, self.stale);
         let out = self.core.on_window(median, locked, word_ppm, dt);
         match out.event {
             AnchorEvent::None => {}
@@ -409,22 +409,21 @@ impl FollowerCore {
                 );
             }
         }
-        self.gate.on_window(self.core.engaged(), out.error_ns);
-        self.deviation
-            .note(out.freq_ppm, self.core.integrator_ppm());
-        let applied = match out.freq_ppm {
-            Some(word) => {
-                // Keep the rate servo's baseline on the learned frequency (bumpless hand-back).
-                self.rate.drift_baseline_ppm = self.core.integrator_ppm();
-                word
-            }
-            None => {
-                if was_engaged {
-                    self.rate.drift_baseline_ppm = self.core.integrator_ppm();
-                }
-                word_ppm
-            }
-        };
+        let close = phase_window::close_window(
+            &self.core,
+            &mut self.gate,
+            &mut self.deviation,
+            &out,
+            was_engaged,
+            word_ppm,
+        );
+        if let Some(event) = close.gate_event {
+            info!("[FOLLOWER] lock gate: {:?}", event);
+        }
+        if let Some(baseline) = close.baseline_ppm {
+            self.rate.drift_baseline_ppm = baseline;
+        }
+        let applied = close.word_ppm;
         self.clock.set_rate(mono_ns, applied);
         self.date_offset_ns = self.core.anchor_ns().map(|d| wall_minus_v.wrapping_add(d));
         debug!(

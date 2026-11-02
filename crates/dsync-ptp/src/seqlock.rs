@@ -1,31 +1,65 @@
-//! A single-writer sequence lock over a fixed array of 64-bit words (dantesync#136): how the
-//! follower thread publishes its clock model to any number of real-time readers without a lock.
+//! A single-writer, double-buffered sequence lock over a fixed array of 64-bit words
+//! (dsync#136): how the follower thread publishes its clock model to any number of real-time
+//! readers without a lock — and without a reader ever waiting for the writer.
 //!
-//! The writer makes the sequence ODD, stores the words, and makes it EVEN again (Release). A reader
-//! loads the sequence (Acquire), the words, then the sequence again: an odd or changed sequence
-//! means a write overlapped, and it reads again. The words are atomics, so an overlapping read is
-//! never undefined behaviour — it is only discarded. The writer runs at the PTP window rate
-//! (~2 Hz), so a reader retries at most once in practice; it never blocks, allocates or calls the
-//! OS.
+//! Two slots, each with its own sequence. The writer fills the INACTIVE slot (its sequence odd
+//! while it writes, even again after, Release) and then makes it the active one (Release). A
+//! reader loads the active index (Acquire), copies that slot's words between two reads of its
+//! sequence, and retries only if that slot was written meanwhile — which needs the writer to have
+//! completed a whole write AND started the next one during the copy. So a reader that preempts
+//! the writer mid-write (an RT audio thread at SCHED_FIFO on the writer's core) never spins on
+//! it: it reads the other, complete slot. The words are atomics, so an overlapping copy is never
+//! undefined behaviour — it is only discarded. No allocation, no lock, no OS call.
 //!
 //! Single writer: [`SeqWriter`] is the only way to write and is not `Clone`.
 
-use std::sync::atomic::{fence, AtomicU64, Ordering};
+use std::sync::atomic::{fence, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-/// The shared words and their sequence.
 #[derive(Debug)]
-pub struct SeqLock<const N: usize> {
+struct Slot<const N: usize> {
     seq: AtomicU64,
     words: [AtomicU64; N],
+}
+
+impl<const N: usize> Slot<N> {
+    fn new(init: [u64; N]) -> Self {
+        Slot {
+            seq: AtomicU64::new(0),
+            words: init.map(AtomicU64::new),
+        }
+    }
+
+    /// A consistent copy, or `None` when a write overlapped.
+    fn try_read(&self) -> Option<[u64; N]> {
+        let s1 = self.seq.load(Ordering::Acquire);
+        if s1 & 1 == 1 {
+            return None;
+        }
+        let mut out = [0u64; N];
+        for (o, w) in out.iter_mut().zip(self.words.iter()) {
+            *o = w.load(Ordering::Relaxed);
+        }
+        fence(Ordering::Acquire);
+        (self.seq.load(Ordering::Relaxed) == s1).then_some(out)
+    }
+}
+
+/// The shared slots.
+#[derive(Debug)]
+pub struct SeqLock<const N: usize> {
+    active: AtomicUsize,
+    slots: [Slot<N>; 2],
+    writes: AtomicU64,
 }
 
 impl<const N: usize> SeqLock<N> {
     /// A lock holding `init`, and the one writer for it.
     pub fn new(init: [u64; N]) -> (Arc<Self>, SeqWriter<N>) {
         let lock = Arc::new(SeqLock {
-            seq: AtomicU64::new(0),
-            words: init.map(AtomicU64::new),
+            active: AtomicUsize::new(0),
+            slots: [Slot::new(init), Slot::new(init)],
+            writes: AtomicU64::new(0),
         });
         let writer = SeqWriter {
             lock: Arc::clone(&lock),
@@ -33,22 +67,12 @@ impl<const N: usize> SeqLock<N> {
         (lock, writer)
     }
 
-    /// A consistent copy of the words (never a mix of two writes).
+    /// A consistent copy of the last completed write (never a mix of two writes).
     pub fn read(&self) -> [u64; N] {
         loop {
-            let s1 = self.seq.load(Ordering::Acquire);
-            if s1 & 1 == 1 {
-                std::hint::spin_loop();
-                continue;
-            }
-            let mut out = [0u64; N];
-            for (o, w) in out.iter_mut().zip(self.words.iter()) {
-                *o = w.load(Ordering::Relaxed);
-            }
-            fence(Ordering::Acquire);
-            let s2 = self.seq.load(Ordering::Relaxed);
-            if s1 == s2 {
-                return out;
+            let i = self.active.load(Ordering::Acquire);
+            if let Some(words) = self.slots[i & 1].try_read() {
+                return words;
             }
             std::hint::spin_loop();
         }
@@ -56,7 +80,7 @@ impl<const N: usize> SeqLock<N> {
 
     /// How many writes completed.
     pub fn writes(&self) -> u64 {
-        self.seq.load(Ordering::Acquire) / 2
+        self.writes.load(Ordering::Acquire)
     }
 }
 
@@ -70,13 +94,17 @@ impl<const N: usize> SeqWriter<N> {
     /// Publish `words` (every reader sees all of them or none).
     pub fn write(&mut self, words: [u64; N]) {
         let lock = &*self.lock;
-        let s = lock.seq.load(Ordering::Relaxed);
-        lock.seq.store(s.wrapping_add(1), Ordering::Relaxed);
+        let next = (lock.active.load(Ordering::Relaxed) + 1) & 1;
+        let slot = &lock.slots[next];
+        let s = slot.seq.load(Ordering::Relaxed);
+        slot.seq.store(s.wrapping_add(1), Ordering::Relaxed);
         fence(Ordering::Release);
-        for (w, v) in lock.words.iter().zip(words) {
+        for (w, v) in slot.words.iter().zip(words) {
             w.store(v, Ordering::Relaxed);
         }
-        lock.seq.store(s.wrapping_add(2), Ordering::Release);
+        slot.seq.store(s.wrapping_add(2), Ordering::Release);
+        lock.active.store(next, Ordering::Release);
+        lock.writes.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -91,7 +119,22 @@ mod tests {
         assert_eq!(lock.read(), [1, 2, 3]);
         w.write([4, 5, 6]);
         assert_eq!(lock.read(), [4, 5, 6]);
-        assert_eq!(lock.writes(), 1);
+        w.write([7, 8, 9]);
+        assert_eq!(lock.read(), [7, 8, 9]);
+        assert_eq!(lock.writes(), 2);
+    }
+
+    /// A reader that runs while a write is half done (the writer preempted between its stores)
+    /// reads the other, complete slot at once: it never waits for the writer.
+    #[test]
+    fn a_write_in_progress_never_blocks_a_reader() {
+        let (lock, mut w) = SeqLock::new([0u64; 2]);
+        w.write([1, 1]);
+        // Freeze a write half way: the inactive slot's sequence odd, one word stored.
+        let next = (lock.active.load(Ordering::Relaxed) + 1) & 1;
+        lock.slots[next].seq.fetch_add(1, Ordering::Relaxed);
+        lock.slots[next].words[0].store(2, Ordering::Relaxed);
+        assert_eq!(lock.read(), [1, 1], "the complete slot, no spin");
     }
 
     /// Every write keeps all words equal; a torn read would see two different values.

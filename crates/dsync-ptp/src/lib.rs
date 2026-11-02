@@ -1,8 +1,8 @@
-//! # dsync-ptp — the Dante PTPv1 code of dsync, shared by the service and in-process followers
+//! # dsync-ptp — the PTPv1 code of dsync, shared by the service and in-process followers
 //!
-//! dantesync#136 (owner ruling 2026-11-02, "build it"): dsync is the single maintainer of the Dante
-//! PTP code. The `dantesync` service (which disciplines the whole PC's clock) and every application
-//! that locks to Dante PTP in its own process use THIS crate, so a fix lands once for both.
+//! dsync#136 (owner ruling 2026-11-02, "build it"): dsync is the single maintainer of the PTPv1
+//! code. The dsync service (which disciplines the whole PC's clock) and every application
+//! that locks to the audio network's PTP in its own process use THIS crate, so a fix lands once for both.
 //!
 //! - The PTP code the service runs: the PTPv1 wire format ([`ptp`]), the receive paths ([`net`],
 //!   `net_linux` on unix, `net_pcap` on Windows, behind [`network::PtpNetwork`]), the rate servo
@@ -23,9 +23,13 @@ pub mod lock_gate;
 pub mod mono;
 pub mod net;
 pub mod network;
+pub mod phase_window;
 pub mod ptp;
 pub mod ptp_phase_lock;
 pub mod ptp_rejoin;
+/// Encoding PTPv1 messages: for simulations and tests only (the `sim` feature); the follower never
+/// sends.
+#[cfg(any(test, feature = "sim"))]
 pub mod ptp_tx;
 pub mod rate_servo;
 pub mod seqlock;
@@ -37,5 +41,5 @@ pub mod net_linux;
 #[cfg(windows)]
 pub mod net_pcap;
 
-/// This crate's version: always the dantesync service version it was released with.
+/// This crate's version: always the dsync service version it was released with.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

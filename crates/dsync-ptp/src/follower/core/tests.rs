@@ -148,9 +148,19 @@ fn run_to_lock(world: &mut World, core: &mut FollowerCore, max_s: i64) -> f64 {
     world.t as f64 / 1e9
 }
 
+/// A statistic of seeded noise: run several seeds and judge the worst
+/// (`.claude/rules/clock-discipline-and-testing.md`).
+const SEEDS: [u64; 4] = [0x5eed_0001, 0x5eed_0011, 0x5eed_0021, 0x5eed_0031];
+
 #[test]
 fn a_cold_follower_locks_and_holds_the_grandmaster_line_within_the_lock_bound() {
-    let mut world = World::new(0x5eed_0001, 5_000.0);
+    for seed in SEEDS {
+        cold_lock_run(seed);
+    }
+}
+
+fn cold_lock_run(seed: u64) {
+    let mut world = World::new(seed, 5_000.0);
     let mut core = new_core(&world);
     assert_eq!(
         core.model().ptp_at(world.mono(0)),
@@ -210,7 +220,13 @@ fn a_cold_follower_locks_and_holds_the_grandmaster_line_within_the_lock_bound() 
 /// service is the root crate's `tests/library_acceptance.rs`).
 #[test]
 fn two_followers_on_one_pc_agree_within_the_lock_bound() {
-    let mut world = World::new(0x5eed_0002, 10_000.0);
+    for seed in SEEDS {
+        two_followers_run(seed ^ 0x2);
+    }
+}
+
+fn two_followers_run(seed: u64) {
+    let mut world = World::new(seed, 10_000.0);
     let mut a = new_core(&world);
     let mut b = new_core(&world);
     while !(a.model().locked && b.model().locked) {
@@ -224,7 +240,12 @@ fn two_followers_on_one_pc_agree_within_the_lock_bound() {
         let (pa, pb) = (a.model().ptp_at(m).unwrap(), b.model().ptp_at(m).unwrap());
         worst = worst.max((pa - pb).abs());
     }
-    assert!(worst <= LOCK_BOUND_NS, "followers {}ns apart", worst);
+    assert!(
+        worst <= LOCK_BOUND_NS,
+        "seed {:#x}: followers {}ns apart",
+        seed,
+        worst
+    );
 }
 
 /// The service steps the wall (a nightly date step): the receive stamps move with it, but the
@@ -354,8 +375,8 @@ fn a_sync_pending_across_a_wall_step_is_dropped() {
     core.on_packet(p(&follow_up));
     assert_eq!(
         core.straddled(),
-        2,
-        "the packet itself and the pending Sync"
+        1,
+        "the pending Sync (the receive pass drops its own packets)"
     );
     assert!(core.window.is_empty(), "nothing paired");
 }

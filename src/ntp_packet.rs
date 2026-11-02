@@ -192,7 +192,7 @@ pub fn compute_offset_rtt_us(t1_us: i64, t2_us: i64, t3_us: i64, t4_us: i64) -> 
 /// Parse an Ethernet(14) + IPv4(20, no options) + UDP(8) frame as captured by
 /// pcap: returns (source IPv4, destination port, UDP payload slice).
 ///
-/// dantesync#136: the frame parser moved to the shared `dsync-ptp` crate (the PTP capture uses
+/// dsync#136: the frame parser moved to the shared `dsync-ptp` crate (the PTP capture uses
 /// it too); re-exported so `ntp_packet::parse_udp_frame` is unchanged.
 pub use dsync_ptp::frame::parse_udp_frame;
 

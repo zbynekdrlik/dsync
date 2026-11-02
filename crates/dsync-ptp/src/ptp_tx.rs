@@ -1,8 +1,8 @@
-//! Encoding a PTPv1 Sync and Follow_Up as a Dante grandmaster sends them (dantesync#136): for
+//! Encoding a PTPv1 Sync and Follow_Up as the audio network's grandmaster sends them (dsync#136): for
 //! simulations and the acceptance test's fake grandmaster. The follower and the service NEVER send
 //! (one-way model); nothing in the receive path uses this module.
 //!
-//! The layout is the one [`crate::ptp`] parses and `tests/fixtures/ptpv1/` proves on real Dante
+//! The layout is the one [`crate::ptp`] parses and `tests/fixtures/ptpv1/` proves on real grandmaster
 //! bytes: a 40-byte header, a 124-byte Sync, a 52-byte Follow_Up.
 
 /// What identifies the sender and the grandmaster in each message.
@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn an_encoded_sync_parses_as_the_service_reads_a_real_one() {
         let b = sync(&SENDER, 513, 12_345_678_901);
-        assert_eq!(b.len(), 124, "a Dante Sync is 124 bytes");
+        assert_eq!(b.len(), 124, "a real Sync is 124 bytes");
         assert!(is_time_message(&b));
         let h = PtpV1Header::parse(&b).unwrap();
         assert_eq!(h.message_type, PtpV1Control::Sync);
@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn an_encoded_follow_up_carries_its_sequence_and_precise_time() {
         let b = follow_up(&SENDER, 513, 12_345_678_901);
-        assert_eq!(b.len(), 52, "a Dante Follow_Up is 52 bytes");
+        assert_eq!(b.len(), 52, "a real Follow_Up is 52 bytes");
         let h = PtpV1Header::parse(&b).unwrap();
         assert_eq!(h.message_type, PtpV1Control::FollowUp);
         let body = PtpV1FollowUpBody::parse(&b[PtpV1Header::SIZE..]).unwrap();
@@ -96,10 +96,10 @@ mod tests {
         assert_eq!(body.precise_origin_timestamp.to_nanos(), 12_345_678_901);
     }
 
-    /// The real Dante Sync of the fixture has the same layout: our encoder's fields sit where the
+    /// The real Sync of the fixture has the same layout: our encoder's fields sit where the
     /// captured packet's do.
     #[test]
-    fn the_encoder_matches_the_real_dante_sync_layout() {
+    fn the_encoder_matches_the_real_sync_fixture_layout() {
         let real: &[u8] = include_bytes!("../tests/fixtures/ptpv1/dante-sync.bin");
         let ours = sync(&SENDER, 1, 0);
         assert_eq!(real.len(), ours.len());

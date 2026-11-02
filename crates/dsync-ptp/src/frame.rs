@@ -1,12 +1,12 @@
 //! Parsing an Ethernet + IPv4 + UDP frame as Npcap captures it: shared by the PTP capture
 //! (`net_pcap`) and the service's pcap NTP transport (moved from the service's `ntp_packet`,
-//! dantesync#136; its tests stay there, through the service's re-export).
+//! dsync#136; its tests stay there, through the service's re-export).
 
 use std::net::Ipv4Addr;
 
 /// Pure — takes raw captured bytes, no `pcap` crate types — so it is
 /// testable without a capture device. Shared by the PTP (`net_pcap.rs`) and
-/// NTP (dantesync#53) Windows Npcap capture paths, which otherwise
+/// NTP (dsync#53) Windows Npcap capture paths, which otherwise
 /// duplicated this exact parsing.
 ///
 /// #53 GREEN: validates length, EtherType (IPv4 = 0x0800), and IP protocol

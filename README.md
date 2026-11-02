@@ -29,9 +29,9 @@ A high-precision PTP (Precision Time Protocol) synchronization tool optimized fo
   `libayatana-appindicator3-1`, `libxdo3`. The NO DANTE CLOCK alarm is notified by the daemon
   itself (`notify-send`), so the Linux tray shows no notifications.
 
-## Library: an in-process Dante PTP follower (`dsync-ptp`)
+## Library: an in-process PTPv1 follower (`dsync-ptp`)
 
-Applications that must lock to the Dante grandmaster in their own process use the library
+Applications that must lock to the grandmaster in their own process use the library
 crate `crates/dsync-ptp`. It holds the service's own PTP code: the PTPv1 parser, the receive
 paths, the rate servo, the phase lock and the lock gate. A fix lands once for both.
 

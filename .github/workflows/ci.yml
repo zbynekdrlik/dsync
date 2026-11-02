@@ -100,7 +100,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Run Clippy
-        # dantesync#136: --workspace lints the dsync-ptp library crate too.
+        # dsync#136: --workspace lints the dsync-ptp library crate too.
         run: cargo clippy --workspace -- -D warnings -A dead_code
 
       # dantesync#132: the tray bin needs the `tray` feature (gtk + tray-icon on Linux),
@@ -140,7 +140,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libgtk-3-dev libpcap-dev
 
       - name: Run unit tests
-        # dantesync#136: --workspace runs the dsync-ptp library crate's tests too.
+        # dsync#136: --workspace runs the dsync-ptp library crate's tests too.
         run: cargo test --workspace --lib --verbose
 
       - name: Run integration tests
@@ -360,7 +360,7 @@ jobs:
       # on already-covered code, so a stretch with no test ending and no thread starting (dantesync
       # issue 119 CI run 36274688463: 61 s) is not a hang. The coverage threshold is unchanged.
       - name: Generate coverage
-        # dantesync#136: --workspace keeps the moved PTP code (crates/dsync-ptp) in the coverage.
+        # dsync#136: --workspace keeps the moved PTP code (crates/dsync-ptp) in the coverage.
         run: cargo tarpaulin --workspace --out xml --output-dir coverage --verbose --timeout 300
 
       - name: Upload to Codecov

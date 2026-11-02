@@ -874,7 +874,7 @@ fn the_cli_interface_overrides_the_config_131() {
     assert_eq!(SystemConfig::default().pinned_interface(None), None);
 }
 
-/// dantesync#136: the in-process follower (`dsync_ptp::follower`) runs the service's sample
+/// dsync#136: the in-process follower (`dsync_ptp::follower`) runs the service's sample
 /// windows, so its constants must be the service's defaults; and the crate is released with the
 /// service, under the same version (consumers pin the crate by the service's tag).
 #[test]

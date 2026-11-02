@@ -257,7 +257,7 @@ const MAX_DELTA_NS: i64 = 2_000_000_000; // 2s - reject obviously invalid deltas
 //   - Auto-adaptive drift learning
 // ==========================================================================
 
-// dantesync#136: the gains, the NANO thresholds, `DRIFT_MAX_PPM` and `LOCK_STABLE_COUNT` live with
+// dsync#136: the gains, the NANO thresholds, `DRIFT_MAX_PPM` and `LOCK_STABLE_COUNT` live with
 // the extracted rate servo (`dsync_ptp::rate_servo`).
 
 // ==========================================================================
@@ -714,7 +714,7 @@ where
     // ==========================================================================
     // P-term creates oscillation, drift baseline is learned from average correction
     // ==========================================================================
-    /// dantesync#136: the rate servo's whole state (drift baseline, lock, gain modes, the rate
+    /// dsync#136: the rate servo's whole state (drift baseline, lock, gain modes, the rate
     /// measurement, the spike filter and the jitter estimator), shared with the in-process
     /// follower through `dsync_ptp::rate_servo`.
     rate: RateServo<Instant>,
@@ -966,7 +966,7 @@ where
             applied_freq_ppm: 0.0,
             warmup_start: now,
             warmup_complete: false,
-            // Self-tuning servo state (dantesync#136: the shared rate servo)
+            // Self-tuning servo state (dsync#136: the shared rate servo)
             rate: RateServo::new(),
             // NTP UTC tracking - enabled on BOTH platforms
             // PTP (Dante) controls frequency only, NTP maintains UTC alignment
@@ -1672,8 +1672,7 @@ where
         // Set grace period to skip PTP samples for 2s after step
         self.last_ntp_step = Some(Instant::now());
         // Reset drift tracking to avoid false spike from step
-        self.rate.last_offset_us = None;
-        self.rate.last_offset_time = None;
+        self.rate.reset_measurement();
         // Reset prev timestamps so min_delta filter works correctly after grace period
         self.prev_t1_ns = 0;
         self.prev_t2_ns = 0;
@@ -2536,7 +2535,7 @@ where
             }
         }
 
-        // dantesync#136: step 1 of the shared rate servo (`dsync_ptp::rate_servo`): the window's
+        // dsync#136: step 1 of the shared rate servo (`dsync_ptp::rate_servo`): the window's
         // raw rate `d(offset)/dt` (dantesync#142: none without a previous offset), and the offset
         // kept for the next window.
         let crate::rate_servo::OffsetMeasurement {
@@ -2589,7 +2588,7 @@ where
         };
 
         let rate_ppm = if measured {
-            self.rate.measure(raw_rate_ppm, Instant::now())
+            self.rate.measure(raw_rate_ppm, Instant::now)
         } else {
             // Intended: the unmeasured window keeps the last smoothed rate for its P term (a
             // reset is a step or an outage, not evidence that the rate went to 0). Once the phase
@@ -2614,7 +2613,7 @@ where
         phase_median_ns: Option<i64>,
         dt_secs: f64,
     ) {
-        // dantesync#136: step 4 of the shared rate servo: the gains of the current mode, the
+        // dsync#136: step 4 of the shared rate servo: the gains of the current mode, the
         // integrator and the lock count (dantesync#146: held while the phase lock owns the word).
         let hold_lock = self.phase_lock_holds_rate_lock();
         let crate::rate_servo::ServoWord {
@@ -2916,11 +2915,23 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    // dantesync#136: the rate servo's gains and thresholds (they moved with it).
     use crate::clock::MockSystemClock;
+    // dsync#136: the rate servo's gains and thresholds (they moved with it).
     use crate::rate_servo::*;
     use crate::traits::{MockNtpSource, MockPtpNetwork};
     use mockall::predicate::*;
+
+    /// dsync#136: on Windows the controller's sample spacing is its fallback (the config's 0); the
+    /// in-process follower must sample the same way (Linux is pinned in `config/tests.rs`).
+    #[cfg(windows)]
+    #[test]
+    fn the_follower_library_spaces_samples_like_the_controller_on_windows_136() {
+        assert_eq!(SystemConfig::default().filters.min_delta_ns, 0);
+        assert_eq!(
+            DEFAULT_MIN_T1_DELTA_NS,
+            dsync_ptp::follower::MIN_SAMPLE_SPACING_NS
+        );
+    }
 
     // #679 — the per-sample "[PTP] Drift:... Adj:...ppm" line used to fire on
     // EVERY sample (~once/sec), which was ~65% of the fleet's fixed 50MB

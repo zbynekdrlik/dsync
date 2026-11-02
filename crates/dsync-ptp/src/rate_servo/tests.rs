@@ -5,7 +5,7 @@ fn window(servo: &mut RateServo<MonoNs>, offset_us: f64, at_s: f64, hold: bool) 
     let now = MonoNs((at_s * 1e9) as i64);
     let m = servo.measure_offset(offset_us, now);
     let rate = if m.measured {
-        servo.measure(m.raw_rate_ppm.clamp(-500.0, 500.0), now)
+        servo.measure(m.raw_rate_ppm.clamp(-500.0, 500.0), || now)
     } else {
         servo.smoothed_rate_ppm
     };

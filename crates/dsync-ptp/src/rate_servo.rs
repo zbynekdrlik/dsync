@@ -1,15 +1,15 @@
 //! The PTP RATE servo — the acquisition loop of the dsync service, shared with the in-process
-//! follower (dantesync#136: EXTRACTED from `PtpController`, behaviour-preserving).
+//! follower (dsync#136: EXTRACTED from `PtpController`, behaviour-preserving).
 //!
 //! # The algorithm (unchanged from the service)
 //!
-//! Dante PTP timestamps are device uptime, not UTC: the absolute offset between the local clock
+//! PTPv1 timestamps of the audio network's grandmaster are device uptime, not UTC: the absolute offset between the local clock
 //! and the grandmaster is meaningless for the RATE. What matters is the offset's rate of change:
 //! a stable offset means the frequencies match, a growing one means the local clock runs fast.
 //! Every sample window gives one offset (the window median, µs); this servo:
 //!
 //! 1. measures the rate `d(offset)/dt` against the previous window ([`RateServo::measure_offset`];
-//!    dantesync#142: the first window after a reset has no previous offset and is NOT a
+//!    dsync#142: the first window after a reset has no previous offset and is NOT a
 //!    measurement);
 //! 2. filters it through the MAD spike filter and an adaptive EMA ([`RateServo::measure`]);
 //! 3. moves the gain mode ACQ → PROD → NANO on the smoothed rate's stability
@@ -20,7 +20,7 @@
 //!
 //! Under the PTP phase lock (the default discipline, [`crate::ptp_phase_lock`]) this servo only
 //! ACQUIRES: once it locks, the phase lock takes the frequency word. The service's own hooks run
-//! between the steps above — the legacy `phase_slew` decoupling, the dantesync#142 seed judge, the
+//! between the steps above — the legacy `phase_slew` decoupling, the dsync#142 seed judge, the
 //! #146 decoupling ([`WordDeviation`]) — so the steps are separate methods, called in this order.
 //!
 //! # Time
@@ -95,7 +95,7 @@ impl ServoTime for MonoNs {
 /// The rate measurement of one window ([`RateServo::measure_offset`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OffsetMeasurement {
-    /// The window had a previous offset to differentiate (dantesync#142).
+    /// The window had a previous offset to differentiate (dsync#142).
     pub measured: bool,
     /// Seconds since the previous window (1.0 when there was none).
     pub dt_secs: f64,
@@ -177,7 +177,7 @@ impl<T: ServoTime> RateServo<T> {
             .map(|t| now.secs_since(t))
             .unwrap_or(1.0);
 
-        // dantesync#142: a window without a previous offset (the first after warmup, the first
+        // dsync#142: a window without a previous offset (the first after warmup, the first
         // after any measurement reset: a clock step, a PTP outage) has no rate to measure. It only
         // records the offset: no spike-filter or smoothing input, no gain-mode change, no
         // integrator step and no lock count. Before 1.22 it went on as a measured 0 µs/s, which
@@ -211,9 +211,12 @@ impl<T: ServoTime> RateServo<T> {
         }
     }
 
-    /// Step 2: the rate of a MEASURED window (dantesync#142: never called for a window without a
+    /// Step 2: the rate of a MEASURED window (dsync#142: never called for a window without a
     /// previous offset): the spike filter, the smoothed rate and the accumulated phase error.
-    pub fn measure(&mut self, raw_rate_ppm: f64, now: T) -> f64 {
+    ///
+    /// `now` is read where the controller read its clock before the extraction: after the
+    /// filter, at the accumulation step.
+    pub fn measure(&mut self, raw_rate_ppm: f64, now: impl FnOnce() -> T) -> f64 {
         // =======================================================================
         // ADAPTIVE SPIKE DETECTION
         // =======================================================================
@@ -282,6 +285,7 @@ impl<T: ServoTime> RateServo<T> {
         // Track estimated phase drift between NTP steps for monitoring.
         // Uses smoothed rate (µs/s) integrated over time.
         // =======================================================================
+        let now = now();
         if let Some(last_time) = self.last_phase_accumulation_time {
             let dt = now.secs_since(last_time);
             // rate_ppm is in µs/s, so rate_ppm * dt gives µs of accumulated error
@@ -291,7 +295,7 @@ impl<T: ServoTime> RateServo<T> {
         rate_ppm
     }
 
-    /// Step 3: the servo's gain mode after a MEASURED window (dantesync#142: never moved by a
+    /// Step 3: the servo's gain mode after a MEASURED window (dsync#142: never moved by a
     /// window without a previous offset): NANO entry/exit while locked, then ACQ/PROD.
     pub fn update_modes(&mut self, rate_ppm: f64) {
         // THREE-PHASE CONTROL: ACQ → PROD → NANO based on rate stability
@@ -367,9 +371,9 @@ impl<T: ServoTime> RateServo<T> {
     }
 
     /// Step 4: the frequency word for this window — the gains of the current mode, the integrator
-    /// and the lock count (both only for a MEASURED window, dantesync#142).
+    /// and the lock count (both only for a MEASURED window, dsync#142).
     ///
-    /// `hold_lock` (dantesync#146): the phase lock owns the word, so an unstable window does not
+    /// `hold_lock` (dsync#146): the phase lock owns the word, so an unstable window does not
     /// count toward the UNLOCK — the rate it measures is the frequency the phase lock has not
     /// learned yet, which the phase lock is retiring itself.
     pub fn word(&mut self, rate_ppm: f64, measured: bool, hold_lock: bool) -> ServoWord {
@@ -409,7 +413,7 @@ impl<T: ServoTime> RateServo<T> {
         // Lock state: based on rate stability, not absolute offset
         let rate_stable = abs_rate < 5.0; // Within 5ppm
         if !measured {
-            // dantesync#142: no rate, no lock evidence either way.
+            // dsync#142: no rate, no lock evidence either way.
         } else if rate_stable {
             self.lock_stable_count += 1;
             if self.lock_stable_count >= LOCK_STABLE_COUNT && !self.is_locked {
@@ -420,7 +424,7 @@ impl<T: ServoTime> RateServo<T> {
                 );
             }
         } else if hold_lock {
-            // dantesync#146: the phase lock owns the word.
+            // dsync#146: the phase lock owns the word.
         } else {
             if self.lock_stable_count > 0 {
                 self.lock_stable_count -= 1; // Gradual unlock
@@ -436,6 +440,13 @@ impl<T: ServoTime> RateServo<T> {
         }
     }
 
+    /// Forget the previous window's offset: the next window is no measurement (dsync#142).
+    /// For every measurement reset (a clock step, a PTP outage, a new time base).
+    pub fn reset_measurement(&mut self) {
+        self.last_offset_us = None;
+        self.last_offset_time = None;
+    }
+
     /// The mode name a window reports: NANO, LOCK, or the gain mode's name.
     pub fn status_name(&self, phase_name: &'static str) -> &'static str {
         if self.in_nano_mode {
@@ -448,7 +459,7 @@ impl<T: ServoTime> RateServo<T> {
     }
 }
 
-/// dantesync#146 — the phase lock's own deviation from its learned frequency, removed from the
+/// dsync#146 — the phase lock's own deviation from its learned frequency, removed from the
 /// rate servo's measurement once the phase lock owns the word.
 ///
 /// Once engaged, the rate servo still measures `d(offset)/dt` — and that is the phase lock's

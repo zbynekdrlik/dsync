@@ -288,7 +288,7 @@ DanteSync is a high-precision PTP (Precision Time Protocol) synchronization tool
 
 Since v1.24 (#136) the PTP code lives in the workspace crate `crates/dsync-ptp`: the files below
 marked (crate). The service re-exports them, so `crate::ptp::…` paths are unchanged. Applications
-link the same crate's `follower` to lock to Dante PTP in their own process.
+link the same crate's `follower` to lock to the grandmaster in their own process.
 
 
 - **`main.rs`** - Entry point, CLI parsing, Windows service logic, IPC server setup, and main sync loop orchestration

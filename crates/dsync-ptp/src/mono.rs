@@ -1,5 +1,5 @@
 //! The in-process follower's time base: the PC's RAW monotonic counter, and the conversion of a
-//! software receive stamp (wall clock) onto it (dantesync#136).
+//! software receive stamp (wall clock) onto it (dsync#136).
 //!
 //! # Why the raw counter
 //!

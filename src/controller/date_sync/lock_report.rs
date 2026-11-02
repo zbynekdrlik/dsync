@@ -74,10 +74,22 @@ where
         }
     }
 
-    /// One phase-lock window: the gate's verdict on `e`, logged on a change.
+    /// One phase-lock window's verdict on `e`, outside the window path (the tests' helpers; the
+    /// window path is `phase_window::close_window`).
+    #[cfg(test)]
     pub(super) fn judge_reported_lock(&mut self, error_ns: Option<i64>) {
+        let event = crate::phase_window::judge(
+            &mut self.date_sync.lock_gate,
+            &self.date_sync.core,
+            error_ns,
+        );
+        self.after_reported_lock_judged(event);
+    }
+
+    /// The gate judged a window (`crate::phase_window`): log its change, and track since when an
+    /// engaged phase lock has not held [41] (the clock alarm).
+    pub(super) fn after_reported_lock_judged(&mut self, event: Option<GateEvent>) {
         let engaged = self.date_sync.core.engaged();
-        let event = self.date_sync.lock_gate.on_window(engaged, error_ns);
         log_gate_event(event);
         self.date_sync.unsafe_since = match (engaged, self.date_sync.lock_gate.locked()) {
             (true, false) => self.date_sync.unsafe_since.or(Some(Instant::now())),
@@ -119,7 +131,9 @@ where
         }
     }
 
-    /// The phase lock disengaged outside a window (the PTP-offline edge): [41] clears at once.
+    /// [41] cleared outside a window (the tests' helper; the PTP-offline edge runs
+    /// `phase_window::on_outage`).
+    #[cfg(test)]
     pub(in crate::controller) fn clear_reported_lock(&mut self) {
         self.date_sync.word_deviation.clear();
         self.date_sync.unsafe_since = None;
@@ -128,7 +142,7 @@ where
     }
 }
 
-fn log_gate_event(event: Option<GateEvent>) {
+pub(super) fn log_gate_event(event: Option<GateEvent>) {
     match event {
         None => {}
         Some(GateEvent::Locked { error_ns }) => info!(

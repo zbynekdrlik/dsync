@@ -1,4 +1,4 @@
-//! The in-process Dante PTP follower (dantesync#136): an application locks to the Dante grandmaster
+//! The in-process PTPv1 follower (dsync#136): an application locks to the grandmaster of the audio network
 //! in its own process, with the dsync service's own PTP code, without touching the system clock.
 //!
 //! ```no_run
@@ -9,7 +9,7 @@
 //! if let Some(ptp_ns) = clock.now_ptp_ns() {
 //!     let state = clock.state();
 //!     if state.locked {
-//!         // ptp_ns is Dante PTP time, within the lock bound (50 µs) of the grandmaster line
+//!         // ptp_ns is the grandmaster's PTP time, within the lock bound (50 µs) of the grandmaster line
 //!         let _ = ptp_ns;
 //!     }
 //! }
@@ -28,8 +28,13 @@
 //!   every member (binding 319 needs `CAP_NET_BIND_SERVICE` or root); on Windows each process has
 //!   its own Npcap capture (the Npcap runtime is required, and the app's binary should delay-load
 //!   `wpcap.dll` as the service's `build.rs` does).
-//! - [`PtpClock::now_ptp_ns`] is a lock-free read ([`crate::seqlock`]): one raw counter read and
-//!   one multiply-add, no allocation, no lock, no syscall beyond the counter.
+//! - [`PtpClock::now_ptp_ns`] is a lock-free read that never waits for the writer
+//!   ([`crate::seqlock`], double-buffered): one raw counter read and one multiply-add, no
+//!   allocation, no lock. The counter read is a vDSO call on current Linux kernels
+//!   (`CLOCK_MONOTONIC_RAW` is in the x86-64 vDSO since 5.3; an older kernel makes it a real
+//!   syscall) and `QueryPerformanceCounter` on Windows.
+//! - A receive thread that stops ticking (stuck or panicked) is never reported locked: readers
+//!   see a holdover after [`STALE_AFTER_NS`] without its heartbeat.
 //! - A wall-clock step on the PC (the service's date steps) never reaches the follower's timeline:
 //!   receive stamps are converted to the raw counter after every receive, and a packet received
 //!   across a step is dropped ([`crate::mono::StampConverter`]).
@@ -46,13 +51,13 @@ pub mod model;
 use self::core::{FollowerCore, PacketVerdict, RxPacket};
 use self::model::{ClockModel, MODEL_WORDS};
 use crate::gm_filter::GmAllowlist;
-use crate::mono::{self, Continuity, StampConverter};
+use crate::mono::{self, Continuity, StampConverter, TimeBaseReading};
 use crate::network::PtpNetwork;
 use crate::ptp_rejoin::RejoinSchedule;
 use crate::seqlock::{SeqLock, SeqWriter};
 use anyhow::Result;
-use log::{info, warn};
-use std::sync::atomic::{AtomicBool, Ordering};
+use log::{debug, info, warn};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -65,8 +70,8 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(1);
 /// Where and from whom to follow.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FollowerConfig {
-    /// The interface the Dante grandmaster is on (Linux: its name, `enp2s0`; Windows: the
-    /// adapter's friendly name or GUID). The follower uses only this NIC (dantesync#131).
+    /// The interface the grandmaster is on (Linux: its name, `enp2s0`; Windows: the
+    /// adapter's friendly name or GUID). The follower uses only this NIC (dsync#131).
     pub interface: String,
     /// Accept PTP only from these grandmaster sources (IPs, CIDRs, hostnames; empty = any), the
     /// service's `system.gm_allowlist`.
@@ -125,18 +130,36 @@ impl From<ClockModel> for FollowerState {
 #[derive(Clone, Debug)]
 pub struct PtpClock {
     model: Arc<SeqLock<MODEL_WORDS>>,
+    /// The receive thread's last pass on the raw counter ([`DEAD`] once it ended or panicked):
+    /// a model whose thread stopped ticking is never reported locked.
+    heartbeat: Arc<AtomicI64>,
 }
 
+/// The heartbeat of a receive thread that ended (dropped or panicked).
+const DEAD: i64 = i64::MIN;
+
 impl PtpClock {
-    /// The published model.
+    /// The published model as of the raw-counter instant `mono_ns`: a receive thread silent for
+    /// [`STALE_AFTER_NS`] (stuck or dead) makes it a holdover, never locked.
+    fn model_at(&self, mono_ns: i64) -> ClockModel {
+        let mut model = ClockModel::from_words(self.model.read());
+        let beat = self.heartbeat.load(Ordering::Acquire);
+        if beat == DEAD || mono_ns.saturating_sub(beat) > STALE_AFTER_NS {
+            model.locked = false;
+            model.holdover = model.anchored;
+        }
+        model
+    }
+
+    /// The published model now.
     pub fn model(&self) -> ClockModel {
-        ClockModel::from_words(self.model.read())
+        self.model_at(mono::mono_now_ns())
     }
 
     /// PTP time now (ns); `None` until the follower has anchored on the grandmaster.
     pub fn now_ptp_ns(&self) -> Option<i64> {
         let m = mono::mono_now_ns();
-        self.model().ptp_at(m)
+        self.model_at(m).ptp_at(m)
     }
 
     /// PTP time at a raw-counter instant ([`mono::mono_now_ns`]), e.g. a stamp the app took.
@@ -147,6 +170,11 @@ impl PtpClock {
     /// The state (lock, holdover, grandmaster, offsets, counters).
     pub fn state(&self) -> FollowerState {
         self.model().into()
+    }
+
+    /// The receive thread is running (it has not ended or panicked).
+    pub fn alive(&self) -> bool {
+        self.heartbeat.load(Ordering::Acquire) != DEAD
     }
 }
 
@@ -195,7 +223,11 @@ impl Follower {
         }
         let core = FollowerCore::new(allowlist, mono::mono_now_ns());
         let (lock, writer) = SeqLock::new(core.model().to_words());
-        let clock = PtpClock { model: lock };
+        let heartbeat = Arc::new(AtomicI64::new(mono::mono_now_ns()));
+        let clock = PtpClock {
+            model: lock,
+            heartbeat: Arc::clone(&heartbeat),
+        };
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
             let stop = Arc::clone(&stop);
@@ -205,10 +237,19 @@ impl Follower {
             };
             std::thread::Builder::new()
                 .name("dsync-ptp-follower".into())
-                .spawn(move || run(network, core, publisher, &stop))?
+                .spawn(move || {
+                    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        run(network, core, publisher, &heartbeat, &stop)
+                    }));
+                    // Ended or panicked: readers see no lock from here on.
+                    heartbeat.store(DEAD, Ordering::Release);
+                    if ran.is_err() {
+                        warn!("[FOLLOWER] the receive thread panicked: the clock is in holdover");
+                    }
+                })?
         };
         info!(
-            "[FOLLOWER] following Dante PTP on {:?} (dsync-ptp {})",
+            "[FOLLOWER] following PTPv1 on {:?} (dsync-ptp {})",
             config.interface,
             crate::VERSION
         );
@@ -236,58 +277,25 @@ impl Drop for Follower {
     }
 }
 
-/// The receive thread: drain the packets, convert each stamp onto the raw counter (dropping one
-/// that straddles a wall step), feed the core, tick it, re-join while stale, publish.
+/// The receive thread: a receive pass, the tick, the re-join while stale, the publish, the
+/// heartbeat; every [`POLL_INTERVAL`].
 fn run<N: PtpNetwork>(
     mut network: N,
     mut core: FollowerCore,
     mut publisher: Publisher,
+    heartbeat: &AtomicI64,
     stop: &AtomicBool,
 ) {
-    let mut stamps = StampConverter::new();
-    stamps.observe(mono::read_time_base());
+    let mut rx = Receiver::new();
     let mut schedule = RejoinSchedule::new();
     let mut last_rx = Instant::now();
-    let mut warned_at: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
-        loop {
-            let received = network.recv_packet();
-            let reading = mono::read_time_base();
-            let stepped = matches!(stamps.observe(reading), Continuity::Stepped { .. });
-            if stepped {
-                core.on_wall_step();
-            }
-            match received {
-                Ok(Some((data, size, wall_rx, source_ip))) => {
-                    if stepped {
-                        continue;
-                    }
-                    let wall_rx_ns = match wall_rx.duration_since(std::time::UNIX_EPOCH) {
-                        Ok(d) => d.as_nanos() as i64,
-                        Err(_) => continue,
-                    };
-                    let verdict = core.on_packet(RxPacket {
-                        data: &data[..size.min(data.len())],
-                        mono_rx_ns: reading.to_mono(wall_rx_ns),
-                        wall_rx_ns,
-                        source_ip,
-                    });
-                    if verdict == PacketVerdict::TimeMessage {
-                        last_rx = Instant::now();
-                        schedule.reset();
-                    }
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    if warned_at.map_or(true, |t| t.elapsed() >= Duration::from_secs(30)) {
-                        warn!("[FOLLOWER] receive failed: {}", e);
-                        warned_at = Some(Instant::now());
-                    }
-                    break;
-                }
-            }
+        if rx.pass(&mut network, &mut core, &mut mono::read_time_base) {
+            last_rx = Instant::now();
+            schedule.reset();
         }
-        core.on_tick(mono::mono_now_ns());
+        let now_mono = mono::mono_now_ns();
+        core.on_tick(now_mono);
         let now = Instant::now();
         if schedule.due(last_rx, now) {
             let attempt = schedule.record_attempt(now);
@@ -300,7 +308,86 @@ fn run<N: PtpNetwork>(
             }
         }
         publisher.publish(core.model());
+        heartbeat.store(now_mono, Ordering::Release);
         std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// The receive side of the thread: every receive followed by a reading of both clocks, and the
+/// stamp converted with it.
+struct Receiver {
+    stamps: StampConverter,
+    warned_at: Option<Instant>,
+}
+
+impl Receiver {
+    fn new() -> Self {
+        let mut stamps = StampConverter::new();
+        stamps.observe(mono::read_time_base());
+        Receiver {
+            stamps,
+            warned_at: None,
+        }
+    }
+
+    /// Drain every waiting packet into `core`; `true` when a time message arrived.
+    ///
+    /// A wall step is seen by the first reading after it, which is the first receive of the
+    /// pass that follows it. Every packet of that pass may have been received (and stamped)
+    /// before the step yet be converted after it, so the WHOLE pass is dropped, not only the
+    /// packet that revealed the step: packets queued across a step (a stalled thread) would
+    /// otherwise each be off by the step.
+    fn pass<N: PtpNetwork>(
+        &mut self,
+        network: &mut N,
+        core: &mut FollowerCore,
+        read: &mut impl FnMut() -> TimeBaseReading,
+    ) -> bool {
+        let mut stepped = false;
+        let mut time_message = false;
+        loop {
+            let received = network.recv_packet();
+            let reading = read();
+            if let Continuity::Stepped { by_ns } = self.stamps.observe(reading) {
+                debug!(
+                    "[FOLLOWER] the wall clock stepped {:+}ns: this pass is dropped",
+                    by_ns
+                );
+                core.on_wall_step();
+                stepped = true;
+            }
+            match received {
+                Ok(Some((data, size, wall_rx, source_ip))) => {
+                    if stepped {
+                        core.note_straddling_packet();
+                        continue;
+                    }
+                    let Ok(since_epoch) = wall_rx.duration_since(std::time::UNIX_EPOCH) else {
+                        continue;
+                    };
+                    let wall_rx_ns = since_epoch.as_nanos() as i64;
+                    let verdict = core.on_packet(RxPacket {
+                        data: &data[..size.min(data.len())],
+                        mono_rx_ns: reading.to_mono(wall_rx_ns),
+                        wall_rx_ns,
+                        source_ip,
+                    });
+                    time_message |= verdict == PacketVerdict::TimeMessage;
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    if self
+                        .warned_at
+                        .map_or(true, |t| t.elapsed() >= Duration::from_secs(30))
+                    {
+                        warn!("[FOLLOWER] receive failed: {}", e);
+                        self.warned_at = Some(Instant::now());
+                    }
+                    break;
+                }
+            }
+        }
+        time_message
     }
 }
 
@@ -324,7 +411,7 @@ fn open_network(config: &FollowerConfig) -> Result<impl PtpNetwork + Send + 'sta
     )
 }
 
-/// The pinned interface's IPv4 now (a link-local one counts: a Dante segment without DHCP).
+/// The pinned interface's IPv4 now (a link-local one counts: an audio network segment without DHCP).
 fn pinned_ip(name: &str) -> Result<std::net::Ipv4Addr> {
     use crate::net::PinnedLookup;
     match crate::net::pinned_interface(name) {

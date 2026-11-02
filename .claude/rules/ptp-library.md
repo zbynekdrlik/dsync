@@ -5,9 +5,9 @@ paths:
   - "Cargo.toml"
 ---
 
-# The library form: `crates/dsync-ptp` and the in-process follower (dantesync#136, v1.24)
+# The library form: `crates/dsync-ptp` and the in-process follower (dsync#136, v1.24)
 
-The owner ruled on 2026-11-02 ("build it"): dsync is the single maintainer of the Dante PTP code,
+The owner ruled on 2026-11-02 ("build it"): dsync is the single maintainer of the PTPv1 code,
 and apps lock to it in their own process. A fix in dsync must reach the embedded part. The design
 comment on #136 has the full architecture and the crates that were rejected, with evidence:
 statime and rtime-ptp are PTPv2-only, and statime also needs a delay exchange and has no Windows
@@ -59,7 +59,8 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
 - The published PTP time is `V − D_v`. This is the same quantity as the service's `wall − D`:
   both hold `t2 − t1` at their anchor, so both trail the grandmaster by the same receive latency.
 - **Every receiver on one PC gets the SAME kernel stamp.** Multicast delivery clones one skb.
-  Two followers fed the same packets are bit-identical: the acceptance test reads 0.0 µs apart.
+  Two followers fed the same packets differ only by float rounding (their virtual clocks have
+  different origins): the acceptance test reads 0.0 µs apart and asserts ≤ 1 µs.
   So the follower-vs-service spread is the algorithm's difference, not receive jitter. It reads
   27 µs worst and 14 µs mean in the 30 s right after all three lock, while the boot pulls run.
 - Stamp conversion (`mono::StampConverter`):

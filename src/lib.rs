@@ -1,4 +1,4 @@
-// dantesync#136: the PTP code (wire format, receive paths, servo, phase lock, lock gate, filters)
+// dsync#136: the PTP code (wire format, receive paths, servo, phase lock, lock gate, filters)
 // lives in the shared `dsync-ptp` crate; re-exported so every `crate::ptp::…` path is unchanged.
 pub mod atomic_file;
 pub mod clock;
@@ -19,6 +19,7 @@ pub mod ntp_packet;
 pub mod ntp_server;
 pub mod phase_slew;
 pub mod pinned_wait;
+pub use dsync_ptp::phase_window;
 pub use dsync_ptp::ptp;
 pub use dsync_ptp::ptp_phase_lock;
 pub use dsync_ptp::ptp_rejoin;

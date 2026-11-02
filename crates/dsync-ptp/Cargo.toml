@@ -1,9 +1,9 @@
 [package]
 name = "dsync-ptp"
-# Kept equal to the dantesync service version (a test in the service pins it).
+# Kept equal to the dsync service version (a test in the service pins it).
 version = "1.24.0"
 edition = "2021"
-description = "Dante PTPv1 follower: the PTP code of the dsync service, and an in-process follower on a virtual clock"
+description = "PTPv1 follower: the PTP code of the dsync service, and an in-process follower on a virtual clock"
 license = "MIT"
 repository = "https://github.com/zbynekdrlik/dsync"
 rust-version = "1.70"
@@ -11,6 +11,9 @@ rust-version = "1.70"
 [features]
 # `MockPtpNetwork` (mockall) for the tests of a crate that consumes `PtpNetwork` (the service).
 mock = ["dep:mockall"]
+# `ptp_tx`: a PTPv1 Sync/Follow_Up encoder for simulations and tests (the service's acceptance
+# test). The follower never sends; a consumer leaves this off.
+sim = []
 
 [dependencies]
 anyhow = "1.0"

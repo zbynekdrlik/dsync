@@ -1,4 +1,4 @@
-//! The follower's virtual clock and the snapshot it publishes (dantesync#136).
+//! The follower's virtual clock and the snapshot it publishes (dsync#136).
 //!
 //! The virtual clock `V` runs over the raw monotonic counter `m`:
 //! `V(m) = v₀ + (m − m₀) · (1 + f·10⁻⁶)`. The servo's frequency word `f` (ppm) is the only input;
