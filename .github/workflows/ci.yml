@@ -147,7 +147,7 @@ jobs:
         run: cargo test --workspace --test '*' --verbose
         timeout-minutes: 10
 
-      # dsync#98: the Dante gate's verdict + release check (scripts/dante_gate.py).
+      # dsync#98: the Dante gate's verdict + release check (scripts/stability_gate.py).
       - name: Run script tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
@@ -391,11 +391,11 @@ jobs:
       # gate on companion) tested this exact tree. The merge commit has a new SHA but, with master an
       # ancestor of dev, the same tree as dev's gated head. Only push / workflow_dispatch gate runs
       # count (a schedule run measures nothing). No match = no tag; gate the tree (after the merge:
-      # `gh workflow run gate.yml --ref master`) and re-run this job. See docs/dante-gate.md.
+      # `gh workflow run gate.yml --ref master`) and re-run this job. See docs/stability-gate.md.
       - name: Require a green Dante gate on this tree
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/dante_gate.py release-check --repo "$GITHUB_REPOSITORY" --tree "$(git rev-parse 'HEAD^{tree}')"
+        run: python3 scripts/stability_gate.py release-check --repo "$GITHUB_REPOSITORY" --tree "$(git rev-parse 'HEAD^{tree}')"
 
       - name: Extract version and create tag
         run: |

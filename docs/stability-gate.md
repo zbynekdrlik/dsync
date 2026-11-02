@@ -1,23 +1,27 @@
-# Dante stability gate (#98)
+# Stability gate (#98)
 
-Owner decision, 2026-11-01: every release passes a Dante stability gate on real hardware first.
+Owner decision, 2026-11-01: every release passes a stability gate on real hardware first.
 Part 1 (this file) is live. Part 2 waits on the owner (see below).
 
 ## Where and who
 
 - Box: `companion` (companion-snv). The owner chose it on 2026-11-02; mbc was dropped because it
   carries the final stream mastering.
-- Runner: labels `dante-gate` and `companion`, with no default labels. It runs as `dsync-runner`
+- Runner: labels `dsync-gate` and `companion`, with no default labels. It runs as `dsync-runner`
   (Nice 10, CPUWeight 20, MemoryMax 4G). airuleset provisioned it (airuleset#1280).
 - Root access is one helper, `/usr/local/sbin/dsync-gate-install`:
-  - `<binary>` installs the candidate and restarts `dantesync`. A plain install does NOT protect
+  - The helper drives the daemon's unit on companion. That is still the pre-1.25
+    `dantesync.service` with the legacy state dir `/etc/dantesync` until camera-box switches it to
+    `dsync.service` (#147). The renamed binary resolves the legacy dir in place, so the helper
+    calls below are unchanged.
+  - `<binary>` installs the candidate and restarts the daemon. A plain install does NOT protect
     `drift.json`; the gate never uses it.
-  - `--cold <binary>` (airuleset, 2026-11-02; the gate's install): stops `dantesync` first (the
-    daemon saves `drift.json` on stop), moves `/etc/dantesync/drift.json` to
+  - `--cold <binary>` (airuleset, 2026-11-02; the gate's install): stops the daemon first (it
+    saves `drift.json` on stop), moves the legacy state dir's `drift.json` to
     `drift.json.gate-prev` (with no file it writes a `drift.json.gate-none` marker), installs the
     candidate and starts it with no frequency seed. A second `--cold` before `--restore` removes
     the candidate's copy and keeps the first saved seed.
-  - `--restore` stops `dantesync`, puts the previous binary back and the saved seed (or removes the
+  - `--restore` stops the daemon, puts the previous binary back and the saved seed (or removes the
     candidate's `drift.json` when there was none), then starts it.
   - All checks run before anything moves; the exit codes are the same for `--cold`.
   - Exit 3 means the rig lease is held (a production). The helper refuses, and so does the gate.
@@ -36,6 +40,9 @@ Part 1 (this file) is live. Part 2 waits on the owner (see below).
 
 ## Workflow: `.github/workflows/gate.yml`
 
+Its name is "Stability Gate". The file keeps the name `gate.yml` (#147): the release coupling below
+looks gate runs up by that file name, so older and newer runs stay one series.
+
 Triggers:
 
 - `push` to `dev`. This is how a release candidate gets gated.
@@ -43,7 +50,7 @@ Triggers:
   default 02:00 UTC), so the hour measures steady state.
   - A scheduled run always checks out the default branch, so the cron job only dispatches
     `gate.yml` on `dev`.
-  - It dispatches nothing when dev's head already passed. Every gate run restarts `dantesync` on
+  - It dispatches nothing when dev's head already passed. Every gate run restarts the daemon on
     companion.
   - A `schedule` run is never release evidence.
 - `workflow_dispatch`, for example `gh workflow run gate.yml --ref dev`.
@@ -53,7 +60,7 @@ Triggers:
 **The real control against fork PRs is the repo setting, not this file.**
 
 - A fork PR runs its own copy of the workflows. `ci.yml` runs on `pull_request`, so a fork could
-  write `runs-on: [dante-gate, companion]` into it.
+  write `runs-on: [dsync-gate, companion]` into it.
 - What stops it: fork PR workflows need a maintainer's approval on `zbynekdrlik/dsync`. airuleset
   set this when it provisioned the runner (airuleset#1280, 2026-11-02).
 - Never approve a fork PR's workflow run that touches `.github/`.
@@ -63,10 +70,10 @@ Triggers:
 
 Jobs:
 
-1. **build** (`ubuntu-latest`): builds the daemon with `cargo build --release --bin dantesync`, the
+1. **build** (`ubuntu-latest`): builds the daemon with `cargo build --release --bin dsync`, the
    same as `release.yml`. It downloads dstack's pinned `dante-stack-dev-v0.4.33-linux-x86_64` and
    fails unless its sha256 is `1ce9bf89720cf4ef7df6a722e5f7bef1df775771832cd772590addc5d1458a76`.
-2. **gate** (companion, concurrency group `dante-gate`, `cancel-in-progress: false`, timeout 90
+2. **gate** (companion, concurrency group `dsync-gate`, `cancel-in-progress: false`, timeout 90
    min):
    - checks the sha256 again;
    - installs the candidate COLD through the helper (`--cold`): no `drift.json` seed, so every run
@@ -78,7 +85,7 @@ Jobs:
    - uploads `clock.jsonl`, `clock.stderr` and `status.jsonl` as the `gate-logs` artifact;
    - runs `--restore` last whenever an install was attempted, also after a failure or a cancel.
      It does not run after an install refusal (exit 3 or 6), because nothing was installed.
-3. **verdict** (`ubuntu-latest`): `scripts/dante_gate.py verdict gate-logs/clock.jsonl --polls
+3. **verdict** (`ubuntu-latest`): `scripts/stability_gate.py verdict gate-logs/clock.jsonl --polls
    3600`.
 
 GitHub keeps one pending run per concurrency group. A third run that queues behind a running gate
@@ -96,17 +103,17 @@ the whole run:
 - **zero `Holdover`**: no poll with `holdover` = 1, except a StepNear poll;
 - `StepNear` (`sample` 3, a date step within 2 s) is fine. dstack's tracker turns every unusable
   poll after the anchor into Holdover, StepNear included (`Tracker::feed` in
-  `crates/dante-stack/src/clock.rs`, v0.4.33). So a holdover on a StepNear poll is counted apart and
+  its clock module, v0.4.33). So a holdover on a StepNear poll is counted apart and
   passes. A slew (`sample` 4) holdover fails. The other sample codes are only counted in the
   report;
 - **a complete log**: exactly 3600 parseable poll records, and the tool exits 0.
 
-Tests: `scripts/test_dante_gate.py`, run in CI's Test job (`python3 -m unittest discover -s scripts
+Tests: `scripts/test_stability_gate.py`, run in CI's Test job (`python3 -m unittest discover -s scripts
 -p 'test_*.py'`).
 
 ## Release coupling
 
-`auto-release` in `ci.yml` runs `scripts/dante_gate.py release-check` before it creates a tag. It
+`auto-release` in `ci.yml` runs `scripts/stability_gate.py release-check` before it creates a tag. It
 takes every local commit whose tree equals the master commit's tree (`git log --all --format='%H
 %T'`) and looks each one up (`gate.yml` runs with `head_sha=<sha>`). It passes only on a
 successful run started by `push` or `workflow_dispatch`.
@@ -148,14 +155,14 @@ to be free. Then gate the tree again:
 
 ## Known side effects (camera-box conditions)
 
-- Companion (the application) is never restarted, only `dantesync` through the helper.
+- Companion (the application) is never restarted, only the daemon through the helper.
 - No run during a production: the rig lease (exit 3) and the night schedule cover this.
-- The `dantesync` restart may page camera-box's `dantesync-clock-alert-watchdog`. This is known and
+- The daemon restart may page camera-box's `dantesync-clock-alert-watchdog`. This is known and
   accepted. The gate leaves the watchdog alone.
 
 ## Part 2 (open, waits on the owner)
 
-Part 2 reads real Dante receivers' heartbeat records (`224.0.0.233:8708`, records `0x8003` and
+Part 2 reads real audio-network receivers' heartbeat records (`224.0.0.233:8708`, records `0x8003` and
 `0x8004`). It needs 0 new late, and a per-second peak under the flow latency minus 100 µs. It also
 needs a receiver subscription on a device that is not ours, so it goes through dstack to the owner
 first. It is tracked on #98.

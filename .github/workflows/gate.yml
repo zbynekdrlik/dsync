@@ -1,9 +1,11 @@
-name: Dante Gate
+name: Stability Gate
 
-# dsync #98 (part 1): every release passes a Dante stability gate on real hardware first.
-# Full description, pass rule and recovery: docs/dante-gate.md.
+# dsync #98 (part 1): every release passes a stability gate on real hardware first.
+# Full description, pass rule and recovery: docs/stability-gate.md.
+# dsync #147: the workflow FILE stays gate.yml: ci.yml's release check looks runs up by that
+# file name (scripts/stability_gate.py GATE_WORKFLOW), so old and new runs stay one series.
 #
-# SECURITY: this repository is public and the gate job runs on a self-hosted runner on the Dante
+# SECURITY: this repository is public and the gate job runs on a self-hosted runner on the audio
 # network. It must NEVER run on `pull_request` or `pull_request_target`: a fork PR would run its
 # own code on companion. Only `push` to dev (write access), the nightly schedule and a manual
 # dispatch (write access) start it.
@@ -34,9 +36,9 @@ jobs:
   # A scheduled run always checks out the default branch (master). The nightly gate must test the
   # release candidate on dev, so it dispatches this workflow on dev: that run's head_sha is then the
   # commit it tested, which is what ci.yml's release check matches on. A schedule run itself is
-  # never release evidence (scripts/dante_gate.py accepts only push / workflow_dispatch runs).
+  # never release evidence (scripts/stability_gate.py accepts only push / workflow_dispatch runs).
   # When dev's head already passed the gate it dispatches nothing: every gate run restarts
-  # dantesync on companion and may page camera-box's clock watchdog.
+  # the daemon on companion and may page camera-box's clock watchdog.
   nightly:
     name: Dispatch nightly gate on dev
     if: github.event_name == 'schedule'
@@ -87,7 +89,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libgtk-3-dev libpcap-dev
 
       - name: Build daemon (release)
-        run: cargo build --release --bin dantesync
+        run: cargo build --release --bin dsync
 
       - name: Download and verify the measurement tool
         run: |
@@ -100,14 +102,14 @@ jobs:
       # toolchain of that day. Record what was gated so a release can be compared to it.
       - name: Stage candidate
         run: |
-          cp target/release/dantesync candidate/dantesync
+          cp target/release/dsync candidate/dsync
           {
             echo "### Gate candidate"
             echo '```'
-            ./candidate/dantesync --version
+            ./candidate/dsync --version
             rustc -V
             echo "commit $GITHUB_SHA, tree $(git rev-parse 'HEAD^{tree}')"
-            echo "sha256 $(sha256sum candidate/dantesync | cut -d' ' -f1)"
+            echo "sha256 $(sha256sum candidate/dsync | cut -d' ' -f1)"
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -121,11 +123,11 @@ jobs:
   gate:
     name: Gate on companion
     needs: build
-    runs-on: [dante-gate, companion]
+    runs-on: [dsync-gate, companion]
     timeout-minutes: 90
     # One run on the rig at a time; a running gate is never cancelled by a newer push.
     concurrency:
-      group: dante-gate
+      group: dsync-gate
       cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@v4
@@ -136,24 +138,27 @@ jobs:
       - name: Verify the candidate and the tool
         run: |
           echo "$DSTACK_SHA256  candidate/$DSTACK_ASSET" | sha256sum -c -
-          chmod +x candidate/dantesync "candidate/$DSTACK_ASSET"
-          ./candidate/dantesync --version
-          echo "candidate sha256: $(sha256sum candidate/dantesync | cut -d' ' -f1)"
+          chmod +x candidate/dsync "candidate/$DSTACK_ASSET"
+          ./candidate/dsync --version
+          echo "candidate sha256: $(sha256sum candidate/dsync | cut -d' ' -f1)"
 
-      # dsync-gate-install (airuleset, 2026-11-02) installs the binary and restarts dantesync. Exit 3
+      # dsync-gate-install (airuleset, 2026-11-02) installs the binary and restarts the daemon's unit. Exit 3
       # means the rig lease is held (a production), exit 6 that an earlier restore is still queued,
       # exit 5 a bad file. Every refusal fails the gate; none is retried or overridden.
       # --cold (dsync #146, ROZHODNUTÉ #98 2026-11-02): every run gates the COLD path. The helper
-      # stops dantesync (which saves its drift.json), moves /etc/dantesync/drift.json aside (or
+      # stops the daemon (which saves its drift.json), moves the legacy state dir's drift.json aside (or
       # marks that there was none), installs the candidate and starts it with no frequency seed;
       # --restore puts the binary AND the seed back. A seeded start alone does not prove the cold
       # boot (the #146 LOCK flap needed the cold path to show).
+      # dsync #147: companion still runs the pre-1.25 unit and state dir until camera-box switches
+      # it; the candidate resolves that legacy dir IN PLACE (src/state_dir.rs), so --cold still moves
+      # aside the box's only drift.json. The helper call itself is unchanged.
       - name: Install candidate
         id: install
         run: |
           echo "attempted=1" >> "$GITHUB_OUTPUT"
           set +e
-          sudo -n "$GATE_INSTALL" --cold "$PWD/candidate/dantesync"
+          sudo -n "$GATE_INSTALL" --cold "$PWD/candidate/dsync"
           rc=$?
           set -e
           if [ "$rc" -eq 3 ]; then
@@ -174,7 +179,7 @@ jobs:
             echo "::error title=Install failed::dsync-gate-install exit $rc"
             exit 1
           fi
-          echo "candidate installed cold (no drift.json seed), dantesync restarted"
+          echo "candidate installed cold (no drift.json seed), daemon restarted"
 
       - name: Measure (dante-stack-dev clock + /status sampling)
         run: |
@@ -234,7 +239,7 @@ jobs:
       # or a cancel. Not after a refusal (exit 3 lease held, exit 6 restore queued): nothing was
       # installed. Under a held lease `--restore` exits 3 but QUEUES the restore: a root timer
       # applies it about a minute after the lease ends (airuleset, 2026-11-02).
-      - name: Restore previous dantesync
+      - name: Restore previous dsync
         if: always() && steps.install.outputs.attempted == '1' && steps.install.outputs.install_refused != '1'
         run: |
           set +e
@@ -246,14 +251,14 @@ jobs:
             # ends; a new install meanwhile refuses with exit 6), so the measurement stands and the
             # Verdict still runs. Failing here made every gate red whenever camera-box took the
             # lease mid-hour (runs 41372498483, 41384428027), with nothing wrong in dsync.
-            echo "::warning title=Restore queued::dsync-gate-install --restore exit 3: the rig lease was taken during the gate. Restore queued, root timer applies it after the lease ends; no human action needed. Until then the gate candidate is the running dantesync on companion."
+            echo "::warning title=Restore queued::dsync-gate-install --restore exit 3: the rig lease was taken during the gate. Restore queued, root timer applies it after the lease ends; no human action needed. Until then the gate candidate is the running daemon on companion."
             exit 0
           fi
           if [ "$rc" -ne 0 ]; then
             echo "::error title=Restore failed, candidate may still be installed::dsync-gate-install --restore exit $rc"
             exit 1
           fi
-          echo "previous dantesync restored"
+          echo "previous dsync restored"
 
   verdict:
     name: Verdict
@@ -268,4 +273,4 @@ jobs:
           path: gate-logs
 
       - name: Apply the pass rule
-        run: python3 scripts/dante_gate.py verdict gate-logs/clock.jsonl --polls "$GATE_SECONDS"
+        run: python3 scripts/stability_gate.py verdict gate-logs/clock.jsonl --polls "$GATE_SECONDS"
