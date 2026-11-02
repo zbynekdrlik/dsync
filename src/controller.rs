@@ -52,6 +52,10 @@ mod ntp_check;
 #[cfg(test)]
 mod first_window_tests;
 
+/// The rate servo's window span is grandmaster time (#147 lane, #146 follow-up 1).
+#[cfg(test)]
+mod window_span_tests;
+
 /// dsync#146 (the #142 coverage-timing lesson, round 2): the heavy closed-loop simulations
 /// and the one wall-clock-timing test of this binary take this lock, so they never run beside
 /// each other. Under CI's tarpaulin (one ptrace tracer for every thread) the #142 and #146 sims
