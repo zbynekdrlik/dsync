@@ -16,7 +16,7 @@ addresses, transports and credentials are not in this repository: they are in
 3. **One canary node first, never the NTP master.** Check both its `/status` on port 8898 and
    that the clock still syncs: the journal shows the normal `[PTP] PROD` then `[PTP] LOCK`
    progression (30-40 s after a restart is normal), then (1.23+) `[LOCK] === LOCKED === DSYX [41] = 1`
-   once the phase error is within 50 µs (seconds later with a drift file, ~35-55 s later without
+   once the phase error is within 50 µs (seconds later with a drift file, ~30-55 s later without
    one). Go on only once the canary is locked.
 4. **The rest of the fleet, the NTP master placed as the release notes below require.** The
    NTP master is the node every other node's `ntp_server` points at.

@@ -1333,9 +1333,14 @@ start. What was learned:
   servo still measures `d(offset)/dt`, which IS the phase lock's deliberate deviation: the P term
   and the boot pull's `−r/τ` (35 ppm for 0.7 ms). Its count decays (only ~5-20 right after a lock,
   so a few windows), it unlocks, the core disengages and DROPS the pull; the re-engagement is not
-  the first, so no pull, and the ~100 s PI retires the rest over minutes. Fix (the #97 decoupling
-  shape, `controller/date_sync/lock_report.rs`): every measured rate minus (word − integrator),
-  averaged over the two words in force across the window. Unengaged: bit-identical.
+  the first, so no pull, and the ~100 s PI retires the rest over minutes. Two fixes
+  (`controller/date_sync/lock_report.rs`): every measured rate minus (word − integrator), averaged
+  over the two words in force across the window (the #97 decoupling shape: honest telemetry and
+  NANO), AND once engaged an unstable window no longer counts toward the rate UNLOCK
+  (`phase_lock_holds_rate_lock`; only the PTP-offline edge disengages). The decoupling ALONE was
+  not enough (review of #146): the decoupled residual is the frequency the phase lock has not
+  learned yet, which it is retiring itself; with a seed 7-15 ppm off (the #142 judge keeps them)
+  it drained the fresh lock count and dropped [41] 7 s after setting it. Legacy: bit-identical.
 - **The pull only follows `e` when the integrator starts on the right frequency.** The rate servo
   locks at |rate| < 5 µs/s, so its word can be several ppm off; each ppm walks `e` ~37 µs off the
   pull (the critically damped PI's peak, ~100 s later). The sim stalled at −117 µs for minutes with
@@ -1347,24 +1352,26 @@ start. What was learned:
   phase left retired along the pull. Without that re-seed a 4 ppm-off hand-over took `e` past
   150 µs: a [41] flap.
 - **The #134 trade-off stays:** no re-anchor at the first engagement (a SECOND fleet date step), so
-  a cold boot pays τ·ln(|e0| / 50 µs) of pull before [41]: ~35 s after the engagement in the
+  a cold boot pays τ·ln(|e0| / 50 µs) of pull before [41]: 31-43 s after the engagement in the
   model (e0 ≈ 275 µs), ~53 s for gen3's 0.7 ms.
 - **Sim (`controller/date_sync/lock_sim*.rs`, the whole controller closed loop, 4 Syncs per 0.5 s
-  window, seeded jitter):** cold gen3 [41] at 58-78 s after "Sync established" (engaged at 27-36 s,
-  |e| at [41] 31-48 µs); seeded 4-8.5 s at 1/10 µs jitter, 10-27 s at a pessimistic 30 µs (the rate
-  servo's integrator walks a few ppm under that noise; the re-seed and the PI trim it); no flap
-  after the first lock in any boot, a ±date step, or noise; GM steps −25 / +10 ppm drop [41] once
-  and return; +4 ppm (under `FSTEP_MIN_PPM`, not re-seeded) at 30 µs drops it for ~4 min while the
-  PI takes it out.
+  window, seeded jitter):** cold gen3 [41] at 58-77.5 s after "Sync established" (engaged at
+  27-36 s, |e| at [41] 31-48 µs); a good seed 4-8.5 s at 1/10 µs jitter, 10-27 s at a pessimistic
+  30 µs (the rate servo's integrator walks a few ppm under that noise; the re-seed and the PI trim
+  it); seeds 7-15 ppm off 8-68 s; no flap after the first lock in any boot, a ±date step, or
+  noise; GM steps −25 ppm (and +10 at 1/10 µs) drop [41] once and return; +4 ppm (under
+  `FSTEP_MIN_PPM`, not re-seeded) at 30 µs drops it for ~4 min while the PI takes it out.
 - **A sim that feeds the rate servo a constant offset never sees this.** The 1372 controller test
   calls `apply_self_tuning_servo(0.0)`, so the rate servo never saw the phase lock's slew; feed
   BOTH the rate servo's median (µs) and the phase lock's raw `t2 − t1` (ns) from one world.
 - **`tests/simulation_e2e.rs` runs its windows back to back in wall time**: the rate servo's spans
   are under 0.1 s, carry the smoothed rate (0) instead of a measurement and lock blind in the first
   windows, so the phase lock engages on the oscillator's whole 20 ppm. Its `LockAudit` therefore
-  allows one drop + one return when the run re-seeded or followed a step
-  (`/status.ptp_phase_boot_reseed_ppm`, `freq_steps`). A span under 0.1 s counting toward LOCK at
-  all is the #142 class (a window without its own rate is not a measurement) — follow-up candidate.
+  allows one drop + one return only for a followed step (`freq_steps`) or a BLIND rate lock (the
+  smoothed rate exactly 0.0 up to the first lock: never a real measurement). A span under 0.1 s
+  counting toward LOCK at all is the #142 class (a window without its own rate is not a
+  measurement); it is recorded on #146 as a follow-up (fixing it needs the e2e harness reworked:
+  its spans carry no measurement at all).
 - **Coverage-timing (#142 lesson) kept:** all sim scenarios run serially in ONE `#[test]`
   (0.5 s in debug).
 

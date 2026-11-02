@@ -103,3 +103,33 @@ fn the_ptp_offline_edge_clears_the_reported_lock_and_the_deviation_146() {
     // The rate servo's own lock is kept through the outage (#112): only the report clears.
     assert!(c.is_locked);
 }
+
+#[test]
+fn the_ptp_offline_edge_restarts_the_acquisition_fit_146() {
+    // The fit's open-loop phase needs the true `dt`; after an outage the controller has none.
+    let mut c = controller(phase_lock_config());
+    for _ in 0..30 {
+        c.date_sync.core.on_window(0, false, 0.0, 0.5);
+    }
+    assert!(c.date_sync.core.boot_fit_points() > 12);
+    c.on_ptp_offline_edge();
+    assert_eq!(c.date_sync.core.boot_fit_points(), 0);
+}
+
+#[test]
+fn an_engaged_phase_lock_holds_the_rate_lock_through_an_unstable_window_146() {
+    // A seed 7-15 ppm off: the rate the rate servo still measures (decoupled) is the frequency
+    // the phase lock is retiring itself; it must not drain the fresh lock count and disengage it.
+    let mut c = controller(phase_lock_config());
+    c.is_locked = true;
+    assert!(!c.phase_lock_holds_rate_lock(), "not engaged yet");
+    c.date_sync.core.on_window(0, true, 0.0, 0.5);
+    assert!(c.phase_lock_holds_rate_lock());
+    let mut legacy_c = controller(legacy());
+    legacy_c.is_locked = true;
+    legacy_c.date_sync.core.on_window(0, true, 0.0, 0.5);
+    assert!(
+        !legacy_c.phase_lock_holds_rate_lock(),
+        "legacy: the rate lock as before"
+    );
+}

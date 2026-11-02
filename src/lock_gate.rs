@@ -19,9 +19,10 @@
 //! The steady `e` of a 0.5 s window has a standard deviation of 6 µs (max 25) at 10 µs per-sample
 //! jitter and 18 µs (max 74) at a pessimistic 30 µs: 150 µs is 8 σ there, so noise and one bad
 //! window never clear [41], and the hysteresis between 50 and 150 µs means it never chatters. A
-//! grandmaster FREQUENCY step (followed, camera-box issue 1372) moves `e` to −450 µs (25 ppm) or
-//! +178 µs (10 ppm): the 250 µs flow is then late, so [41] drops ONCE and returns once `e` is back
-//! — a real loss, not a flap. A date step leaves `e` unchanged (`D` moves with the wall), and its
+//! grandmaster FREQUENCY step (followed, camera-box issue 1372) moves `e` to about −450 µs
+//! (25 ppm) or +180 µs (10 ppm): past 150 µs for 4 windows [41] drops ONCE and returns once `e` is
+//! back — a real loss (the 250 µs flow is late), not a flap. A peak just past 150 µs may not drop
+//! it (the 10 ppm step at 30 µs jitter did not: never 4 windows in a row). A date step leaves `e` unchanged (`D` moves with the wall), and its
 //! grace has no windows, so it never moves [41].
 //!
 //! Pure (explicit inputs, no I/O, no logging): the controller logs the transitions it returns.

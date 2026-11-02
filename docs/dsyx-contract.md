@@ -26,8 +26,9 @@ Under the default `system.clock_discipline = "ptp_phase_lock"` it is the phase e
   wall and `D` together, so `e` does not change).
 - A grandmaster frequency step large enough to take `e` past 150 µs (a 25 ppm step: about 450 µs)
   clears it once; it is set again once `e` is back within 50 µs (about a minute).
-- A cold boot (no `drift.json`) sets it about 35-55 s after the rate servo's lock; a boot with a
-  good drift file a few seconds after "Sync established".
+- A cold boot (no `drift.json`) sets it about 30-45 s after the phase lock engages (simulation;
+  τ·ln(|e0| / 50 µs) of the boot pull with τ = 20 s, so longer for a larger acquisition drift: 0.7 ms
+  is ~53 s); a boot with a good drift file 4-9 s after "Sync established".
 - `/status.mode` reads `LOCK` or `NANO` only while `[41]` is 1.
 
 Under `"legacy"` it is the rate servo's lock (5 windows with |rate| < 5 µs/s), as before 1.23.

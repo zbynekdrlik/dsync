@@ -237,13 +237,17 @@ impl NtpSource for DriftingNtp {
 /// iteration; the contract is checked on the fly and the flap rule when the audit is dropped (the
 /// end of the test).
 ///
-/// The one allowed exception is a real phase loss the phase lock had to correct: it FOLLOWED a
-/// frequency step (`/status.freq_steps` > 0, the contract's GM-frequency-step case) or re-seeded
-/// its first engagement (`ptp_phase_boot_reseed_ppm`); [41] may then drop once and return once.
-/// These loops hit the second by construction: most run their windows back to back in wall time,
-/// so the rate servo's spans are under 0.1 s, carry its smoothed rate instead of a measurement and
-/// lock it blind in the first windows. The phase lock then engages on the oscillator's whole error
-/// (20 ppm), `e` runs out until the 20 s fit re-seeds it: a real phase loss [41] must report.
+/// Two exceptions allow ONE drop and ONE return, each a real phase loss [41] must report:
+///
+/// - the phase lock FOLLOWED a grandmaster frequency step (`/status.freq_steps` > 0), the
+///   contract's own case;
+/// - the rate servo locked BLIND: its smoothed rate never left exactly 0.0 before the first lock.
+///   Most loops below run their windows back to back in wall time, so every rate span is under
+///   0.1 s and carries the smoothed rate (0) instead of a measurement, and the rate servo "locks"
+///   on no evidence. The phase lock then engages on the oscillator's whole 20 ppm and `e` runs out
+///   past 150 µs until its 20 s fit re-seeds it. A real measurement is never exactly 0.0, so a real
+///   acquisition never takes this exception; the realistic boots are `lock_sim_tests.rs` (no drop
+///   at all). That such spans count toward the lock is a #142-class gap, recorded on #146.
 #[derive(Default)]
 struct LockAudit {
     /// The last window seen: (`e` µs, reported).
@@ -255,7 +259,9 @@ struct LockAudit {
     /// Changes of the reported lock after the first lock: (window, now locked).
     transitions: Vec<(usize, bool)>,
     freq_steps: u32,
-    boot_reseed: bool,
+    /// The smoothed rate was exactly 0.0 at every window up to the first lock.
+    blind_lock: bool,
+    saw_rate: bool,
 }
 
 impl LockAudit {
@@ -266,7 +272,9 @@ impl LockAudit {
     fn sample(&mut self, status: &RwLock<SyncStatus>) {
         let st = status.read().expect("status");
         self.freq_steps = st.freq_steps;
-        self.boot_reseed = st.ptp_phase_boot_reseed_ppm.is_some();
+        if !self.ever_locked && st.smoothed_rate_ppm != 0.0 {
+            self.saw_rate = true;
+        }
         let now = (st.ptp_phase_error_us, st.is_locked);
         // One judgement per phase-lock window: the status changes once per window.
         if self.last == Some(now) {
@@ -288,6 +296,7 @@ impl LockAudit {
                 self.windows
             );
             self.ever_locked = true;
+            self.blind_lock = !self.saw_rate;
         }
         if locked {
             self.beyond = if e_abs > Self::UNLOCK_US {
@@ -311,13 +320,13 @@ impl Drop for LockAudit {
             return;
         }
         let t = &self.transitions;
-        if self.freq_steps == 0 && !self.boot_reseed {
+        if self.freq_steps == 0 && !self.blind_lock {
             assert!(t.is_empty(), "[41] flapped after the first lock: {t:?}");
         } else {
             assert!(
                 t.len() <= 2 && t.first().map_or(true, |&(_, locked)| !locked),
-                "[41] after a followed frequency step or a boot re-seed: one drop and one return \
-                 at most: {t:?}"
+                "[41] after a followed frequency step or a blind rate lock: one drop and one \
+                 return at most: {t:?}"
             );
         }
     }

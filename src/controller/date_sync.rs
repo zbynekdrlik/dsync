@@ -503,8 +503,10 @@ where
         self.prev_t2_ns = 0;
         self.last_offset_us = None;
         self.last_offset_time = None;
-        // dantesync#146: no PTP, no phase lock: [41] clears at once.
+        // dantesync#146: no PTP, no phase lock: [41] clears at once, and the acquisition fit
+        // starts again after the outage (its `dt` across it is not the outage's length).
         self.clear_reported_lock();
+        self.date_sync.core.on_ptp_outage();
         if self.date_sync.core.engaged() {
             self.date_sync.core.disengage();
             let word = self.date_sync.core.integrator_ppm();

@@ -27,13 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and |e| ≤ 50 µs for 3 windows, and cleared at |e| > 150 µs for 4 windows, at a disengagement or
   when PTP goes stale. `/status.mode` says LOCK/NANO only while it is set. The legacy discipline
   keeps the rate-based lock.
-- The boot no longer flaps LOCK → UNLOCK → LOCK (#146; gate run 41372498483 on companion). The rate
-  servo now measures the rate with the phase lock's own deliberate deviation removed (its P term
-  and the boot pull), so the pull no longer reads as a lock loss, disengages the phase lock and is
-  dropped. The first engagement starts on the frequency the acquisition measured (the open-loop
-  phase over up to 20 s), and re-seeds once when that start (the rate servo's word or a shorter fit) was off. In the
-  closed-loop simulation a cold gen3 boot sets `[41]` ~35 s after the rate lock (it took minutes),
-  a seeded one 4-8 s after "Sync established" (Linux / moderate Windows jitter).
+- The boot no longer flaps LOCK → UNLOCK → LOCK (#146; gate run 41372498483 on companion). Once
+  the phase lock owns the frequency word, the rate servo's measurement no longer unlocks it (only
+  the PTP-offline edge disengages it), and that measurement is decoupled from the phase lock's own
+  deliberate deviation (its P term, the boot pull). Before, the boot pull read as a lock loss, the
+  phase lock disengaged and the pull was dropped. The first engagement starts on the frequency the
+  acquisition measured (the open-loop phase over up to 20 s), and re-seeds once when that start
+  (the rate servo's word or a shorter fit) was off. In the closed-loop simulation a cold gen3 boot
+  sets `[41]` 31-43 s after the phase lock engaged (it took minutes), a good seed 4-8.5 s after
+  "Sync established" (Linux / moderate Windows jitter); no flap after the first lock in any boot,
+  date step or seed up to 15 ppm off.
 
 ### Changed
 

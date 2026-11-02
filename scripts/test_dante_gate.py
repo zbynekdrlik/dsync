@@ -270,7 +270,7 @@ class GateWorkflowTests(unittest.TestCase):
         self.assertEqual(len(installs), 1, installs)
         self.assertIn('sudo -n "$GATE_INSTALL" --cold "$PWD/candidate/dantesync"', installs[0])
 
-    def test_the_restore_puts_binary_and_seed_back(self):
+    def test_there_is_exactly_one_restore_call(self):
         restores = [c for c in self.helper_calls if "--restore" in c]
         self.assertEqual(len(restores), 1, restores)
 

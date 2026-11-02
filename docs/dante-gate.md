@@ -28,8 +28,9 @@ Part 1 (this file) is live. Part 2 waits on the owner (see below).
   - Exit 5: a bad file. Exit 0: done (`--restore` on a free lease included).
   - After a restore, `.gate-prev` is removed, so the next install saves the binary that is current
     then.
-  - The held-lease paths have not been exercised live yet (airuleset, 2026-11-02). `--cold` ran
-    live first on the #146 gate run.
+  - The held-lease restore ran live for the first time at 03:40 on 2026-11-02 (the queued
+    restore of run 41372498483). `--cold` has not run live yet: the gate on #146's push is its
+    first run.
 - dsync never deploys to nodes. This job and its helper are dsync's only touch of companion. No
   ssh.
 

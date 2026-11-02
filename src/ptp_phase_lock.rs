@@ -326,6 +326,18 @@ impl PhaseLockCore {
         self.close_boot_fit();
     }
 
+    /// dantesync#146: windows in the acquisition / first-engagement fit (0 = none running).
+    pub fn boot_fit_points(&self) -> usize {
+        self.boot_fit.points()
+    }
+
+    /// dantesync#146: this box lost PTP. The fit's open-loop phase needs the TRUE elapsed time
+    /// between windows, and the controller's `dt` after an outage is a fallback, not the outage's
+    /// length: the fit starts again from the first window after it (review of #146).
+    pub fn on_ptp_outage(&mut self) {
+        self.close_boot_fit();
+    }
+
     /// dantesync#146: the first engagement's fit ends (resolved, or its engagement ended).
     fn close_boot_fit(&mut self) {
         self.boot_fit_open = false;
@@ -864,6 +876,79 @@ mod tests {
                 c.integrator_ppm()
             );
         }
+    }
+
+    /// dantesync#146: a first engagement on a SHORT ring (a seeded boot) with a hand-over 5 ppm off.
+    fn short_ring_engagement(c: &mut PhaseLockCore, p: &mut Plant) {
+        for _ in 0..(ANCHOR_CONFIRM_WINDOWS + 4) {
+            let out = c.on_window(D + p.e_ns.round() as i64, false, 30.0, DT);
+            assert_eq!(out.freq_ppm, None);
+            p.advance(30.0, DT);
+        }
+        let out = c.on_window(D + p.e_ns.round() as i64, true, 30.0, DT);
+        p.advance(out.freq_ppm.expect("engaged"), DT);
+        assert_eq!(c.engaged_on_fit(), None, "too short a ring to start on");
+        assert!(
+            c.boot_fit_points() > 0,
+            "it keeps fitting through the engagement"
+        );
+    }
+
+    #[test]
+    fn a_short_ring_engagement_is_re_seeded_once_on_its_full_fit_146() {
+        let mut c = PhaseLockCore::new();
+        let mut p = Plant::new(-35.0, 1, 30.0);
+        short_ring_engagement(&mut c, &mut p);
+        for _ in 0..120 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, 30.0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        let fit = c
+            .boot_reseed()
+            .expect("re-seeded once the ring spanned 20 s");
+        assert!((fit.freq_ppm - 35.0).abs() < 1.0, "{fit:?}");
+        assert_eq!(c.boot_fit_points(), 0, "closed after the re-seed");
+        assert_eq!(c.freq_steps(), 0, "a re-seed is not a frequency step");
+        assert!(p.e_ns.abs() < 50_000.0, "e {} ns", p.e_ns);
+    }
+
+    #[test]
+    fn a_rebase_during_the_open_fit_closes_it_without_a_re_seed_146() {
+        // A level shift in the open-loop phase (a re-anchor) must never feed the fit.
+        let mut c = PhaseLockCore::new();
+        let mut p = Plant::new(-35.0, 1, 30.0);
+        short_ring_engagement(&mut c, &mut p);
+        for _ in 0..10 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, 30.0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        c.request_rebase();
+        let jump: i64 = 3_600 * 1_000_000_000;
+        let out = c.on_window(D + jump + p.e_ns.round() as i64, true, 30.0, DT);
+        assert!(matches!(out.event, AnchorEvent::Rebased { .. }));
+        assert_eq!(c.boot_fit_points(), 0, "closed on the re-anchor");
+        for _ in 0..120 {
+            let out = c.on_window(D + jump + p.e_ns.round() as i64, true, 30.0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        assert_eq!(
+            c.boot_reseed(),
+            None,
+            "never re-seeded on a ring with a re-anchor in it"
+        );
+    }
+
+    #[test]
+    fn a_ptp_outage_before_the_engagement_restarts_the_acquisition_fit_146() {
+        let mut c = PhaseLockCore::new();
+        for _ in 0..(ANCHOR_CONFIRM_WINDOWS + 20) {
+            c.on_window(D, false, 0.0, DT);
+        }
+        assert!(c.boot_fit_points() > 12);
+        c.on_ptp_outage();
+        assert_eq!(c.boot_fit_points(), 0);
+        c.on_window(D, false, 0.0, DT);
+        assert_eq!(c.boot_fit_points(), 1, "from the first window after it");
     }
 
     #[test]

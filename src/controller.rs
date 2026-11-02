@@ -2900,6 +2900,8 @@ where
                     self.drift_baseline_ppm
                 );
             }
+        } else if self.phase_lock_holds_rate_lock() {
+            // dantesync#146: the phase lock owns the word; see `phase_lock_holds_rate_lock`.
         } else {
             if self.lock_stable_count > 0 {
                 self.lock_stable_count -= 1; // Gradual unlock
@@ -3095,11 +3097,13 @@ where
             status.smoothed_rate_ppm = self.smoothed_rate_ppm;
             status.mode = if stale {
                 ptp_liveness::PTP_STALE_MODE.to_string()
-            } else if self.in_nano_mode && reported_lock {
+            } else if self.in_nano_mode && (reported_lock || !self.date_sync.enabled) {
+                // Legacy: NANO exactly as before 1.23 (it may outlive the rate lock by a window).
                 "NANO".to_string()
             } else if reported_lock {
                 "LOCK".to_string()
-            } else if self.in_production_mode || self.is_locked {
+            } else if self.in_production_mode || (self.date_sync.enabled && self.is_locked) {
+                // Under the phase lock a rate lock not yet within the phase bound is PROD.
                 "PROD".to_string()
             } else {
                 "ACQ".to_string()

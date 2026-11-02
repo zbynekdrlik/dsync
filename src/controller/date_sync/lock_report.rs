@@ -46,6 +46,17 @@ where
         }
     }
 
+    /// True while the phase lock owns the frequency word: the rate servo's unstable window then
+    /// does not count toward its UNLOCK, so it never disengages the phase lock. Even decoupled,
+    /// the rate it measures is the frequency the phase lock has not learned YET, which the phase
+    /// lock is retiring itself (its PI, a boot re-seed, a followed frequency step). Read as a lock
+    /// loss it drained a fresh lock count in a few windows: a seed 7-15 ppm off (kept by the #142
+    /// judge) disengaged the phase lock 7 s after [41] was set (review of #146). Engaged, only the
+    /// PTP-offline edge disengages it (`on_ptp_offline_edge`); what [41] reports is the phase.
+    pub(in crate::controller) fn phase_lock_holds_rate_lock(&self) -> bool {
+        self.date_sync.enabled && self.date_sync.core.engaged()
+    }
+
     /// The lock this node REPORTS: under the phase lock the [`crate::lock_gate`] verdict; under
     /// the legacy discipline the rate servo's lock, as before. PTP staleness is applied by the
     /// publisher.
@@ -69,6 +80,14 @@ where
     /// count.
     #[cfg(test)]
     pub(in crate::controller) fn lock_reported_for_test(&mut self) {
+        // Only for a fresh core, one already engaged, or one this helper anchored itself (at 0):
+        // the window below bypasses the controller's anchor-event handling, so on a core
+        // anchored elsewhere it could re-anchor unseen.
+        assert!(
+            self.date_sync.core.engaged()
+                || matches!(self.date_sync.core.anchor_ns(), None | Some(0)),
+            "lock_reported_for_test on an anchored, disengaged core"
+        );
         if !self.date_sync.core.engaged() {
             self.date_sync
                 .core
