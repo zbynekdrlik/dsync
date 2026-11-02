@@ -176,6 +176,12 @@ impl Sim {
         }
     }
 
+    /// The world's offset jumps by `us` with no step the controller knows of (another writer set
+    /// the clock, or the grandmaster's time base jumped by less than 1 s).
+    pub(super) fn jump_us(&mut self, us: f64) {
+        self.true_offset_us += us;
+    }
+
     /// A coordinated date step of `delta_ns` through the controller's real step path, then its 2 s
     /// grace (the world runs on, nothing is fed).
     pub(super) fn date_step(&mut self, delta_ns: i64) {

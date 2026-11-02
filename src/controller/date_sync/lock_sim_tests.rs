@@ -221,9 +221,53 @@ fn a_grandmaster_frequency_step_drops_the_lock_at_most_once_146() {
     }
 }
 
+/// A phase jump while engaged (another writer set the clock, a sub-second time-base jump) is a
+/// real loss: [41] drops once, the core re-anchors on the current offset (`Realigned`, as a
+/// re-engagement more than 1 ms off always did) and [41] returns within seconds — never minutes
+/// of slewing ~140 ppm off the tick (re-review of #146: with the rate lock held while engaged,
+/// nothing re-aligned any more).
+fn a_phase_jump_while_engaged_is_re_aligned_in_seconds_146() {
+    for jitter in JITTERS_US {
+        for jump_us in [5_000.0, -100_000.0, 500_000.0] {
+            let label = format!("phase jump {jump_us} us, {jitter} us jitter");
+            let mut s = Sim::new(NATURAL_PPM, Some(LEARNED_PPM), SEEDS[2], jitter);
+            s.run(600);
+            assert!(
+                s.log.last().expect("log").reported,
+                "{label}: locked before"
+            );
+            let at = s.n;
+            s.jump_us(jump_us);
+            s.run(240);
+            assert_contract(&label, &s);
+            let back = s.log[at..]
+                .iter()
+                .skip_while(|o| o.reported)
+                .find(|o| o.reported)
+                .map(|o| (o.n - at) as f64 * WINDOW_S);
+            let trans = s.transitions_after_first_lock();
+            println!("[#146 sim] {label}: [41] back {back:?} s after the jump, {trans:?}");
+            assert!(
+                back.is_some_and(|b| b <= 20.0),
+                "{label}: [41] back {back:?} s after the jump"
+            );
+            assert!(
+                trans.len() <= 2,
+                "{label}: one drop and one return: {trans:?}"
+            );
+            assert_eq!(
+                s.c.date_sync.core.freq_steps(),
+                0,
+                "{label}: a jump is not a frequency step"
+            );
+        }
+    }
+}
+
 #[test]
 fn closed_loop_simulation_of_the_reported_lock_146() {
     a_boot_reports_lock_only_within_the_bound_and_never_flaps_146();
     a_date_step_never_moves_the_lock_146();
     a_grandmaster_frequency_step_drops_the_lock_at_most_once_146();
+    a_phase_jump_while_engaged_is_re_aligned_in_seconds_146();
 }
