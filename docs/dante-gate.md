@@ -10,8 +10,16 @@ Part 1 (this file) is live. Part 2 waits on the owner (see below).
 - Runner: labels `dante-gate` and `companion`, with no default labels. It runs as `dsync-runner`
   (Nice 10, CPUWeight 20, MemoryMax 4G). airuleset provisioned it (airuleset#1280).
 - Root access is one helper, `/usr/local/sbin/dsync-gate-install`:
-  - `<binary>` installs the candidate and restarts `dantesync`.
-  - `--restore` puts the previous binary back.
+  - `<binary>` installs the candidate and restarts `dantesync`. A plain install does NOT protect
+    `drift.json`; the gate never uses it.
+  - `--cold <binary>` (airuleset, 2026-11-02; the gate's install): stops `dantesync` first (the
+    daemon saves `drift.json` on stop), moves `/etc/dantesync/drift.json` to
+    `drift.json.gate-prev` (with no file it writes a `drift.json.gate-none` marker), installs the
+    candidate and starts it with no frequency seed. A second `--cold` before `--restore` removes
+    the candidate's copy and keeps the first saved seed.
+  - `--restore` stops `dantesync`, puts the previous binary back and the saved seed (or removes the
+    candidate's `drift.json` when there was none), then starts it.
+  - All checks run before anything moves; the exit codes are the same for `--cold`.
   - Exit 3 means the rig lease is held (a production). The helper refuses, and so does the gate.
     `--restore` under a held lease also exits 3, but it QUEUES the restore. A root timer applies it
     about a minute after the lease ends.
@@ -20,7 +28,8 @@ Part 1 (this file) is live. Part 2 waits on the owner (see below).
   - Exit 5: a bad file. Exit 0: done (`--restore` on a free lease included).
   - After a restore, `.gate-prev` is removed, so the next install saves the binary that is current
     then.
-  - The held-lease paths have not been exercised live yet (airuleset, 2026-11-02).
+  - The held-lease paths have not been exercised live yet (airuleset, 2026-11-02). `--cold` ran
+    live first on the #146 gate run.
 - dsync never deploys to nodes. This job and its helper are dsync's only touch of companion. No
   ssh.
 
@@ -59,7 +68,9 @@ Jobs:
 2. **gate** (companion, concurrency group `dante-gate`, `cancel-in-progress: false`, timeout 90
    min):
    - checks the sha256 again;
-   - installs the candidate through the helper;
+   - installs the candidate COLD through the helper (`--cold`): no `drift.json` seed, so every run
+     gates the cold boot (owner via #98, 2026-11-02: a seeded start alone does not prove it; the
+     #146 LOCK flap showed only on the cold path);
    - runs `dante-stack-dev clock --seconds 3600` against the box's own time server
      (127.0.0.1:31900). It only reads, and never opens UDP 319 or 320;
    - samples `http://127.0.0.1:8898/status` every 10 s;

@@ -15,7 +15,9 @@ addresses, transports and credentials are not in this repository: they are in
 2. **Verify the assets once** against their `.sha256` files before any node gets them.
 3. **One canary node first, never the NTP master.** Check both its `/status` on port 8898 and
    that the clock still syncs: the journal shows the normal `[PTP] PROD` then `[PTP] LOCK`
-   progression (30-40 s after a restart is normal). Go on only once the canary is locked.
+   progression (30-40 s after a restart is normal), then (1.23+) `[LOCK] === LOCKED === DSYX [41] = 1`
+   once the phase error is within 50 µs (seconds later with a drift file, ~35-55 s later without
+   one). Go on only once the canary is locked.
 4. **The rest of the fleet, the NTP master placed as the release notes below require.** The
    NTP master is the node every other node's `ntp_server` points at.
 5. **Final proof:** every node's `/status` returns 200 with `is_locked: true`.

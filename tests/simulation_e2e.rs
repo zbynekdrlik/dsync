@@ -229,6 +229,100 @@ impl NtpSource for DriftingNtp {
     }
 }
 
+// --- dantesync#146: the reported lock (DSYX [41]) audited on every run ---
+
+/// `/status.is_locked` under the phase lock is set only after the phase error `e` has been within
+/// 50 µs for 3 windows (so it is set at |e| ≤ 50 µs), never stays set through 4 windows beyond
+/// 150 µs, and never flaps once set. Every simulation below feeds this audit after every loop
+/// iteration; the contract is checked on the fly and the flap rule when the audit is dropped (the
+/// end of the test).
+///
+/// The one allowed exception is a real phase loss the phase lock had to correct: it FOLLOWED a
+/// frequency step (`/status.freq_steps` > 0, the contract's GM-frequency-step case) or re-seeded
+/// its first engagement (`ptp_phase_boot_reseed_ppm`); [41] may then drop once and return once.
+/// These loops hit the second by construction: most run their windows back to back in wall time,
+/// so the rate servo's spans are under 0.1 s, carry its smoothed rate instead of a measurement and
+/// lock it blind in the first windows. The phase lock then engages on the oscillator's whole error
+/// (20 ppm), `e` runs out until the 20 s fit re-seeds it: a real phase loss [41] must report.
+#[derive(Default)]
+struct LockAudit {
+    /// The last window seen: (`e` µs, reported).
+    last: Option<(Option<f64>, bool)>,
+    /// Consecutive windows beyond the unlock bound while reported.
+    beyond: usize,
+    ever_locked: bool,
+    windows: usize,
+    /// Changes of the reported lock after the first lock: (window, now locked).
+    transitions: Vec<(usize, bool)>,
+    freq_steps: u32,
+    boot_reseed: bool,
+}
+
+impl LockAudit {
+    const LOCK_US: f64 = 50.0;
+    const UNLOCK_US: f64 = 150.0;
+    const UNLOCK_WINDOWS: usize = 4;
+
+    fn sample(&mut self, status: &RwLock<SyncStatus>) {
+        let st = status.read().expect("status");
+        self.freq_steps = st.freq_steps;
+        self.boot_reseed = st.ptp_phase_boot_reseed_ppm.is_some();
+        let now = (st.ptp_phase_error_us, st.is_locked);
+        // One judgement per phase-lock window: the status changes once per window.
+        if self.last == Some(now) {
+            return;
+        }
+        self.windows += 1;
+        let was = self.last.is_some_and(|(_, l)| l);
+        self.last = Some(now);
+        let (e, locked) = now;
+        let e_abs = e.map_or(f64::INFINITY, f64::abs);
+        if locked != was && self.ever_locked {
+            self.transitions.push((self.windows, locked));
+        }
+        if locked && !was {
+            assert!(
+                e_abs <= Self::LOCK_US,
+                "[41] set at |e| {e_abs} us > {} us (window {})",
+                Self::LOCK_US,
+                self.windows
+            );
+            self.ever_locked = true;
+        }
+        if locked {
+            self.beyond = if e_abs > Self::UNLOCK_US {
+                self.beyond + 1
+            } else {
+                0
+            };
+            assert!(
+                self.beyond < Self::UNLOCK_WINDOWS,
+                "[41] = 1 for {} windows beyond {} us (e {e:?})",
+                self.beyond,
+                Self::UNLOCK_US
+            );
+        }
+    }
+}
+
+impl Drop for LockAudit {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        let t = &self.transitions;
+        if self.freq_steps == 0 && !self.boot_reseed {
+            assert!(t.is_empty(), "[41] flapped after the first lock: {t:?}");
+        } else {
+            assert!(
+                t.len() <= 2 && t.first().map_or(true, |&(_, locked)| !locked),
+                "[41] after a followed frequency step or a boot re-seed: one drop and one return \
+                 at most: {t:?}"
+            );
+        }
+    }
+}
+
 // --- The Test Runner ---
 
 /// Results from simulation run with rate-based servo metrics
@@ -261,6 +355,7 @@ fn run_simulation(
     });
 
     let status = Arc::new(RwLock::new(SyncStatus::default()));
+    let mut lock_audit = LockAudit::default();
 
     let network = StatefulNetwork {
         physics: physics.clone(),
@@ -276,7 +371,7 @@ fn run_simulation(
 
     // Save window_size before config is moved into controller
     let window_size = config.filters.sample_window_size;
-    let mut controller = PtpController::new(clock, network, ntp, status, config);
+    let mut controller = PtpController::new(clock, network, ntp, status.clone(), config);
 
     let steps = duration_secs * 16; // 8 packets/sec * 2 (Sync+FU)
     let mut max_offset_steady = 0.0;
@@ -292,6 +387,7 @@ fn run_simulation(
 
     for i in 0..steps {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
 
         // Minimal delay at servo decision points (when sample window completes)
         sample_count += 1;
@@ -470,6 +566,7 @@ fn test_rate_convergence_stability() {
     });
 
     let status = Arc::new(RwLock::new(SyncStatus::default()));
+    let mut lock_audit = LockAudit::default();
 
     let network = StatefulNetwork {
         physics: physics.clone(),
@@ -483,11 +580,12 @@ fn test_rate_convergence_stability() {
     };
     let clock = SimClockRef(physics.clone());
 
-    let mut controller = PtpController::new(clock, network, ntp, status, config);
+    let mut controller = PtpController::new(clock, network, ntp, status.clone(), config);
 
     // Run convergence phase - 20ppm drift needs adequate time to converge
     for _ in 0..15000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
     }
 
     // Collect steady-state data for rate analysis
@@ -496,6 +594,7 @@ fn test_rate_convergence_stability() {
 
     for i in 0..200 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
         let phys = physics.engine.borrow();
         let offset = phys.offset_ns + phys.step_offset_ns;
         let adj = phys.current_adj_ppm;
@@ -582,6 +681,7 @@ fn test_auto_adaptive_drift_rates() {
         });
 
         let status = Arc::new(RwLock::new(SyncStatus::default()));
+        let mut lock_audit = LockAudit::default();
 
         let network = StatefulNetwork {
             physics: physics.clone(),
@@ -595,11 +695,12 @@ fn test_auto_adaptive_drift_rates() {
         };
         let clock = SimClockRef(physics.clone());
 
-        let mut controller = PtpController::new(clock, network, ntp, status, config);
+        let mut controller = PtpController::new(clock, network, ntp, status.clone(), config);
 
         // Convergence phase - longer for higher drift rates
         for _ in 0..convergence_iters {
             controller.process_loop_iteration().unwrap();
+            lock_audit.sample(&status);
         }
 
         // Collect steady-state data and calculate rates
@@ -608,6 +709,7 @@ fn test_auto_adaptive_drift_rates() {
 
         for _ in 0..100 {
             controller.process_loop_iteration().unwrap();
+            lock_audit.sample(&status);
             let phys = physics.engine.borrow();
             let offset = phys.offset_ns + phys.step_offset_ns;
 
@@ -657,6 +759,7 @@ fn test_ptp_rate_stable_during_ntp_drift() {
     });
 
     let status = Arc::new(RwLock::new(SyncStatus::default()));
+    let mut lock_audit = LockAudit::default();
 
     let network = StatefulNetwork {
         physics: physics.clone(),
@@ -674,11 +777,12 @@ fn test_ptp_rate_stable_during_ntp_drift() {
     };
     let clock = SimClockRef(physics.clone());
 
-    let mut controller = PtpController::new(clock, network, ntp, status, config);
+    let mut controller = PtpController::new(clock, network, ntp, status.clone(), config);
 
     // Initial convergence phase
     for _ in 0..5000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
     }
 
     // Extended run with NTP drift - measure PTP rate stability
@@ -687,6 +791,7 @@ fn test_ptp_rate_stable_during_ntp_drift() {
 
     for _ in 0..5000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
 
         let phys = physics.engine.borrow();
         let offset = phys.offset_ns + phys.step_offset_ns;
@@ -747,6 +852,7 @@ fn test_nano_mode_achievable_with_low_jitter() {
     });
 
     let status = Arc::new(RwLock::new(SyncStatus::default()));
+    let mut lock_audit = LockAudit::default();
 
     let network = StatefulNetwork {
         physics: physics.clone(),
@@ -766,6 +872,7 @@ fn test_nano_mode_achievable_with_low_jitter() {
     // NANO requires 15+ samples of drift < 0.5 µs/s after achieving LOCK
     for _ in 0..30000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
     }
 
     // Check final status
@@ -810,6 +917,7 @@ fn test_high_jitter_affects_rate_variance() {
     });
 
     let status = Arc::new(RwLock::new(SyncStatus::default()));
+    let mut lock_audit = LockAudit::default();
 
     let network = StatefulNetwork {
         physics: physics.clone(),
@@ -828,6 +936,7 @@ fn test_high_jitter_affects_rate_variance() {
     // Convergence phase
     for _ in 0..10000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
     }
 
     // Measure rate variance during high jitter period
@@ -836,6 +945,7 @@ fn test_high_jitter_affects_rate_variance() {
 
     for _ in 0..1000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
         let phys = physics.engine.borrow();
         let offset = phys.offset_ns + phys.step_offset_ns;
 
@@ -882,6 +992,7 @@ fn test_mode_stability_during_extended_operation() {
     });
 
     let status = Arc::new(RwLock::new(SyncStatus::default()));
+    let mut lock_audit = LockAudit::default();
 
     let network = StatefulNetwork {
         physics: physics.clone(),
@@ -900,6 +1011,7 @@ fn test_mode_stability_during_extended_operation() {
     // Convergence phase
     for _ in 0..15000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
     }
 
     // Collect mode history during steady state
@@ -910,6 +1022,7 @@ fn test_mode_stability_during_extended_operation() {
 
     for _ in 0..3000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
         let mode = status.read().unwrap().mode.clone();
         *mode_counts.entry(mode.clone()).or_insert(0) += 1;
 
@@ -962,6 +1075,7 @@ fn test_accumulated_phase_tracking() {
     });
 
     let status = Arc::new(RwLock::new(SyncStatus::default()));
+    let mut lock_audit = LockAudit::default();
 
     let network = StatefulNetwork {
         physics: physics.clone(),
@@ -980,6 +1094,7 @@ fn test_accumulated_phase_tracking() {
     // Run convergence phase to reach stable lock
     for _ in 0..10000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
     }
 
     // Check initial accumulated phase (should be some value from convergence)
@@ -992,6 +1107,7 @@ fn test_accumulated_phase_tracking() {
     // Run more iterations and observe accumulation
     for _ in 0..1000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
     }
 
     let final_phase = status.read().unwrap().accumulated_phase_us;
@@ -1021,6 +1137,7 @@ fn test_accumulated_phase_resets_on_ntp_step() {
     });
 
     let status = Arc::new(RwLock::new(SyncStatus::default()));
+    let mut lock_audit = LockAudit::default();
 
     let network = StatefulNetwork {
         physics: physics.clone(),
@@ -1041,6 +1158,7 @@ fn test_accumulated_phase_resets_on_ntp_step() {
     // Run until NTP step threshold might be reached
     for _ in 0..15000 {
         controller.process_loop_iteration().unwrap();
+        lock_audit.sample(&status);
     }
 
     // The accumulated phase tracking test verifies the field exists and is updated

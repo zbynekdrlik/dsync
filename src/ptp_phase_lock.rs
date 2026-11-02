@@ -72,7 +72,12 @@
 //!
 //! Pure (explicit inputs, no I/O, no logging) so the controller and the bench run the same code.
 
+pub mod boot_fit;
 pub mod freq_step;
+
+pub use boot_fit::{
+    BootFit, BootFreqFit, BOOT_FIT_MAX_SIGMA_PPM, BOOT_FIT_WINDOW_S, BOOT_RESEED_MIN_PPM,
+};
 
 pub use freq_step::{
     fit_line, fit_ring, split_test, FreqStepDetector, FreqStepEstimate, LineFit, RingFit,
@@ -222,6 +227,14 @@ pub struct PhaseLockCore {
     /// dantesync#134: the unlocked first anchor being confirmed — the first window's median and
     /// how many agreeing windows so far.
     anchor_candidate: Option<(i64, usize)>,
+    /// dantesync#146: the open-loop phase of the acquisition (anchored, never engaged), and the
+    /// frequency the first engagement started from when it was measured there.
+    boot_fit: BootFreqFit,
+    engaged_on_fit: Option<BootFit>,
+    /// dantesync#146: the first engagement started on a short ring and is still fitting.
+    boot_fit_open: bool,
+    /// dantesync#146: the once-only re-seed of that engagement, when it happened.
+    boot_reseed: Option<BootFit>,
 }
 
 impl PhaseLockCore {
@@ -274,6 +287,17 @@ impl PhaseLockCore {
         self.last_freq_step
     }
 
+    /// dantesync#146: the acquisition fit the first engagement started its integrator on
+    /// (`None`: it started on the rate servo's word).
+    pub fn engaged_on_fit(&self) -> Option<BootFit> {
+        self.engaged_on_fit
+    }
+
+    /// dantesync#146: the first engagement's integrator re-seeded once its ring was full.
+    pub fn boot_reseed(&self) -> Option<BootFit> {
+        self.boot_reseed
+    }
+
     /// The phase (µs) still being retired after the last followed step; 0 when none.
     pub fn pull_us(&self) -> f64 {
         self.pull_us
@@ -299,6 +323,13 @@ impl PhaseLockCore {
     pub fn disengage(&mut self) {
         self.engaged = false;
         self.drop_step_state();
+        self.close_boot_fit();
+    }
+
+    /// dantesync#146: the first engagement's fit ends (resolved, or its engagement ended).
+    fn close_boot_fit(&mut self) {
+        self.boot_fit_open = false;
+        self.boot_fit.reset();
     }
 
     /// The frequency-step ring and a running pull belong to one continuous engagement in one time
@@ -402,12 +433,22 @@ impl PhaseLockCore {
         let e_ns = median_diff_ns.wrapping_sub(anchor);
         self.last_error_ns = Some(e_ns);
 
+        // dantesync#146: the acquisition's open-loop phase, for the first engagement's frequency.
+        if !self.engaged_once && !ptp_locked {
+            if event != AnchorEvent::None {
+                self.boot_fit.reset();
+            }
+            self.boot_fit
+                .observe(e_ns as f64 / 1_000.0, dt_s, rate_servo_freq_ppm);
+        }
+
         if !ptp_locked {
             if self.engaged {
                 // Hand the learned frequency back to the rate servo (the controller copies
                 // `integrator_ppm` into its drift baseline).
                 self.engaged = false;
                 self.drop_step_state();
+                self.close_boot_fit();
             }
             return WindowOutcome {
                 freq_ppm: None,
@@ -419,8 +460,22 @@ impl PhaseLockCore {
 
         if !self.engaged {
             self.engaged = true;
+            // dantesync#146: the first engagement after the early anchor starts on the frequency
+            // the acquisition measured (when good enough), so the boot pull follows `e`.
+            let fit = (first_engagement && event == AnchorEvent::None)
+                .then(|| self.boot_fit.estimate())
+                .flatten();
+            if first_engagement {
+                self.engaged_on_fit = fit;
+                // A short ring keeps fitting through the engagement (re-seeded once when full).
+                self.boot_fit_open = event == AnchorEvent::None && !self.boot_fit.full();
+            }
+            if !self.boot_fit_open {
+                self.boot_fit.reset();
+            }
             self.engaged_once = true;
-            self.i_ppm = rate_servo_freq_ppm.clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+            let start = fit.map_or(rate_servo_freq_ppm, |f| f.freq_ppm);
+            self.i_ppm = start.clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
             self.drop_step_state();
         }
         if event != AnchorEvent::None {
@@ -458,12 +513,46 @@ impl PhaseLockCore {
         };
         self.fstep.note_word(f);
         self.last_freq_ppm = f;
+        if self.boot_fit_open {
+            self.continue_boot_fit(
+                e_raw_us,
+                dt_s,
+                f,
+                event != AnchorEvent::None || freq_step.is_some(),
+            );
+        }
         WindowOutcome {
             freq_ppm: Some(f),
             error_ns: Some(e_ns),
             event,
             freq_step,
         }
+    }
+
+    /// dantesync#146: one window of the first engagement's continued fit (`f` = the word just
+    /// written). Once the ring is full: re-seed the integrator once if the fit says it is off, and
+    /// retire the phase left along the pull reference (no wall step, `D` untouched).
+    fn continue_boot_fit(&mut self, e_us: f64, dt_s: f64, f: f64, disturbed: bool) {
+        if disturbed {
+            // A re-anchor or a followed frequency step owns the frequency from here.
+            self.close_boot_fit();
+            return;
+        }
+        self.boot_fit.observe(e_us, dt_s, f);
+        if !self.boot_fit.full() {
+            return;
+        }
+        if let Some(fit) = self.boot_fit.estimate() {
+            let off = fit.freq_ppm - self.i_ppm;
+            if off.abs() >= BOOT_RESEED_MIN_PPM.max(3.0 * fit.sigma_ppm) {
+                self.i_ppm = fit.freq_ppm.clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+                if e_us.abs() >= FSTEP_PULL_DONE_US {
+                    self.pull_us = e_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+                }
+                self.boot_reseed = Some(fit);
+            }
+        }
+        self.close_boot_fit();
     }
 
     /// Follow a confirmed step: the integrator jumps by the measured error (bounded), and the phase
@@ -708,17 +797,18 @@ mod tests {
             let acq_windows = 80; // 40 s
             let mut anchor = None;
             for n in 0..acq_windows {
-                let out = c.on_window(D + p.e_ns.round() as i64, false, 0.0, DT);
+                // The rate servo stand-in: the word converges on −osc with τ ≈ 20 s, 1.5 ppm
+                // short of it at the lock. The core is told the word the servo applies (the
+                // controller passes its `total_correction`, dantesync#146's acquisition fit reads it).
+                let t = (n + 1) as f64 * DT;
+                let word = -osc * (1.0 - (-t / 20.0).exp()) * 0.97;
+                let out = c.on_window(D + p.e_ns.round() as i64, false, word, DT);
                 if let AnchorEvent::Anchored { anchor_ns } = out.event {
                     assert_eq!(n + 1, ANCHOR_CONFIRM_WINDOWS, "osc {osc}");
                     anchor = Some(anchor_ns);
                 } else {
                     assert_eq!(out.event, AnchorEvent::None, "osc {osc}: window {n}");
                 }
-                // The rate servo stand-in: the word converges on −osc with τ ≈ 20 s, 1.5 ppm
-                // short of it at the lock.
-                let t = (n + 1) as f64 * DT;
-                let word = -osc * (1.0 - (-t / 20.0).exp()) * 0.97;
                 p.advance(word, DT);
             }
             let anchor = anchor.expect("anchored early");
@@ -739,10 +829,11 @@ mod tests {
                     events += 1;
                 }
                 p.advance(out.freq_ppm.expect("engaged"), DT);
-                // The rate servo hands over 3 % short (2.1 ppm at 70 ppm): the PI learns that
-                // through its integrator (~100 s, critically damped — today's engagement does the
-                // same), so the phase is judged from 400 s after the lock.
-                if n >= 800 {
+                // The rate servo hands over 3 % short (2.1 ppm at 70 ppm). Before #146 the PI
+                // learned that through its ~100 s integrator, so the phase was judged from 400 s
+                // after the lock; now the engagement starts on the acquisition's measured
+                // frequency and the pull (τ 20 s) retires the drift: judged from 120 s.
+                if n >= 240 {
                     assert!(
                         off(&p).abs() < 50_000.0,
                         "osc {osc} delay {delay}: |e| {} ns at {} s after the lock",
@@ -752,6 +843,15 @@ mod tests {
                 }
             }
             assert_eq!(events, 0, "osc {osc}: no re-anchor, no second step");
+            let fit = c.engaged_on_fit().expect("started on the acquisition fit");
+            // Within 1.5 ppm: this plant's transport delay (1-2 windows) is not in the fit's model
+            // of the word in force (~0.5 ppm per window of lag on this ramp; the controller's own
+            // timing is in it, `lock_sim.rs`), still
+            // under the rate servo's 3 % hand-over error (2.1 ppm).
+            assert!(
+                (fit.freq_ppm + osc).abs() < 1.5,
+                "osc {osc} delay {delay}: measured {fit:?}"
+            );
             assert_eq!(c.anchor_ns(), Some(anchor), "osc {osc}: the early anchor");
             assert_eq!(
                 c.freq_steps(),

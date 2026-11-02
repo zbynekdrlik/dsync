@@ -542,6 +542,21 @@ pub struct SyncStatus {
     /// first measured windows disagreed with the seed; learned from 0). `null` in a pre-1.22 blob.
     #[serde(default)]
     pub freq_seed_source: Option<String>,
+
+    // ========================================================================
+    // The first engagement's frequency (dantesync#146) — additive.
+    // ========================================================================
+    /// dantesync#146: the frequency (ppm) the phase lock's FIRST engagement started on when the
+    /// acquisition measured it (the open-loop phase over up to 20 s, standard error ≤ 1 ppm);
+    /// `null` when it started on the rate servo's word, and in a pre-1.23 blob.
+    #[serde(default)]
+    pub ptp_phase_engaged_on_ppm: Option<f64>,
+
+    /// dantesync#146: the frequency (ppm) the first engagement was re-seeded on once its fit had
+    /// 20 s (it started on a shorter ring and was off by ≥ 0.5 ppm and 3 σ); `null` when not
+    /// needed, and in a pre-1.23 blob.
+    #[serde(default)]
+    pub ptp_phase_boot_reseed_ppm: Option<f64>,
 }
 
 fn default_clock_alarm_interval_s() -> u64 {
@@ -664,6 +679,9 @@ impl Default for SyncStatus {
             // #142: no drift file read yet
             freq_seed_ppm: None,
             freq_seed_source: None,
+            // #146: no engagement yet
+            ptp_phase_engaged_on_ppm: None,
+            ptp_phase_boot_reseed_ppm: None,
         }
     }
 }

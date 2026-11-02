@@ -2644,6 +2644,17 @@ where
         }
         .clamp(-500.0, 500.0);
 
+        // dantesync#146: once the phase lock owns the word, the rate it measures carries the phase
+        // lock's own deliberate deviation (its P term, the boot pull): removed, so the rate servo
+        // sees only the frequency the phase lock has not learned (`date_sync/lock_report.rs`).
+        // A window without its own rate (no previous offset, a too-short span) is left alone.
+        let raw_rate_ppm = if measured && dt_secs > 0.1 {
+            self.decouple_phase_lock_rate(raw_rate_ppm)
+                .clamp(-500.0, 500.0)
+        } else {
+            raw_rate_ppm
+        };
+
         if !measured {
             debug!(
                 "[Servo] window without a previous offset: offset {:+.1}us recorded, no rate yet",
@@ -3076,17 +3087,19 @@ where
                 .as_secs();
 
             // Extended fields for tray app
-            status.is_locked = self.is_locked && !stale;
+            // dantesync#146: DSYX [41], the tray, the IPC — one definition (`reported_lock`).
+            let reported_lock = self.reported_lock();
+            status.is_locked = reported_lock && !stale;
             // dantesync#142: the frequency seed from the drift file.
             self.publish_freq_seed(&mut status);
             status.smoothed_rate_ppm = self.smoothed_rate_ppm;
             status.mode = if stale {
                 ptp_liveness::PTP_STALE_MODE.to_string()
-            } else if self.in_nano_mode {
+            } else if self.in_nano_mode && reported_lock {
                 "NANO".to_string()
-            } else if self.is_locked {
+            } else if reported_lock {
                 "LOCK".to_string()
-            } else if self.in_production_mode {
+            } else if self.in_production_mode || self.is_locked {
                 "PROD".to_string()
             } else {
                 "ACQ".to_string()

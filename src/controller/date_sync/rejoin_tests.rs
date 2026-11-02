@@ -41,6 +41,8 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
             .withf(|dur, sign| *dur == Duration::from_millis(3) && *sign == -1)
             .returning(|_, _| Ok(()));
         let (mut c, d) = anchored_controller_with(clock, MockNtpSource::new(), true, config(daily));
+        // dantesync#146: the reported lock is the phase lock's, within the bound.
+        c.lock_reported_for_test();
         let rejoins = Arc::new(AtomicU32::new(0));
         let seen = rejoins.clone();
         c.network.expect_rejoin().returning(move || {
@@ -100,6 +102,23 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
             "daily={daily}: the phase lock re-engaged in the same process"
         );
         c.service_date_offset();
+        c.update_shared_status();
+        {
+            let st = c.get_status_shared();
+            let st = st.read().expect("status");
+            assert!(
+                !st.is_locked,
+                "daily={daily}: [41] waits for the bound (dantesync#146)"
+            );
+            assert_eq!(st.mode, "PROD");
+        }
+        // The master's Join moved its wall back onto the fleet line: the next windows read `D`.
+        for k in 1..=crate::lock_gate::LOCK_WINDOWS as i64 {
+            c.last_ntp_step = Some(Instant::now() - Duration::from_secs(3));
+            c.date_sync.pending_median_ns = Some(d);
+            c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + (30 + k) * S;
+            c.apply_self_tuning_servo(0.0);
+        }
         c.update_shared_status();
         let st = c.get_status_shared();
         let st = st.read().expect("status");

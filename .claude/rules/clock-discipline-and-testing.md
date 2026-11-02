@@ -28,6 +28,11 @@ paths:
   - "src/date_offset/slew.rs"
   - "src/date_offset/slew/tests.rs"
   - "src/controller/date_sync/slew.rs"
+  - "src/lock_gate.rs"
+  - "src/controller/date_sync/lock_report.rs"
+  - "src/controller/date_sync/lock_sim.rs"
+  - "src/controller/date_sync/lock_sim_tests.rs"
+  - "src/ptp_phase_lock/boot_fit.rs"
   - "src/controller/date_sync/slew/tests.rs"
   - "src/clock/step.rs"
   - "src/clock/mod.rs"
@@ -1309,3 +1314,57 @@ LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was l
   in ONE `#[test]` (one core, never several), each statistical run stops where its assertion is
   decided (`run_for`: 60 windows to a lock, 6 to a verdict), full runs are 120 windows and the
   statistics 20 runs: 0.5 s single-threaded in debug, from ~20 s.
+
+## dantesync#146 (v1.23) — DSYX [41] is the PHASE lock, and the boot pull is never dropped
+
+dstack gates its media-clock ready on byte [41] alone; gen3 reported LOCK at e ≈ −700 µs and its
+250 µs flow ran late for 3-6 minutes; gate run 41372498483 caught LOCK → PROD → LOCK on a cold
+start. What was learned:
+
+- **[41] is a pure gate on `e` (`src/lock_gate.rs`), not the rate servo's lock.** Set at |e| ≤ 50 µs
+  for 3 engaged windows, cleared at |e| > 150 µs for 4, at a disengagement, while PTP is stale
+  (ROZHODNUTÉ on #146, dstack confirmed; `/status.is_locked`, the tray, the IPC: one definition,
+  `PtpController::reported_lock`; legacy keeps the rate lock). The internal `is_locked` (the rate
+  servo's) still drives the engagement and the NTP thresholds. `/status.mode` says LOCK/NANO only
+  while [41] is set. Rule: [41] = 1 = safe for a 250 µs flow, so a 25 ppm GM step (e ≈ 450 µs)
+  drops it once and it returns once — not a flap. Steady `e` noise: sd 6 µs at 10 µs per-sample
+  jitter, 18 µs at 30 µs: 150 µs is 8 σ.
+- **The rate servo read the phase lock's own correction as a lock loss.** Once engaged, the rate
+  servo still measures `d(offset)/dt`, which IS the phase lock's deliberate deviation: the P term
+  and the boot pull's `−r/τ` (35 ppm for 0.7 ms). Its count decays (only ~5-20 right after a lock,
+  so a few windows), it unlocks, the core disengages and DROPS the pull; the re-engagement is not
+  the first, so no pull, and the ~100 s PI retires the rest over minutes. Fix (the #97 decoupling
+  shape, `controller/date_sync/lock_report.rs`): every measured rate minus (word − integrator),
+  averaged over the two words in force across the window. Unengaged: bit-identical.
+- **The pull only follows `e` when the integrator starts on the right frequency.** The rate servo
+  locks at |rate| < 5 µs/s, so its word can be several ppm off; each ppm walks `e` ~37 µs off the
+  pull (the critically damped PI's peak, ~100 s later). The sim stalled at −117 µs for minutes with
+  the decoupling alone. Fix (`ptp_phase_lock/boot_fit.rs`): the acquisition's OPEN-LOOP phase
+  `p = e − ∫ word dt` (the 1372 detector's quantity, here with the rate servo's word, half/half per
+  window because a median sits mid-window) is fitted over up to 20 s; the first engagement starts
+  on `−slope` when σ ≤ 1 ppm. A short ring (a seeded boot engages seconds after the anchor) keeps
+  fitting through the engagement and re-seeds ONCE at 20 s when off by ≥ 0.5 ppm and 3 σ, the
+  phase left retired along the pull. Without that re-seed a 4 ppm-off hand-over took `e` past
+  150 µs: a [41] flap.
+- **The #134 trade-off stays:** no re-anchor at the first engagement (a SECOND fleet date step), so
+  a cold boot pays τ·ln(|e0| / 50 µs) of pull before [41]: ~35 s after the engagement in the
+  model (e0 ≈ 275 µs), ~53 s for gen3's 0.7 ms.
+- **Sim (`controller/date_sync/lock_sim*.rs`, the whole controller closed loop, 4 Syncs per 0.5 s
+  window, seeded jitter):** cold gen3 [41] at 58-78 s after "Sync established" (engaged at 27-36 s,
+  |e| at [41] 31-48 µs); seeded 4-8.5 s at 1/10 µs jitter, 10-27 s at a pessimistic 30 µs (the rate
+  servo's integrator walks a few ppm under that noise; the re-seed and the PI trim it); no flap
+  after the first lock in any boot, a ±date step, or noise; GM steps −25 / +10 ppm drop [41] once
+  and return; +4 ppm (under `FSTEP_MIN_PPM`, not re-seeded) at 30 µs drops it for ~4 min while the
+  PI takes it out.
+- **A sim that feeds the rate servo a constant offset never sees this.** The 1372 controller test
+  calls `apply_self_tuning_servo(0.0)`, so the rate servo never saw the phase lock's slew; feed
+  BOTH the rate servo's median (µs) and the phase lock's raw `t2 − t1` (ns) from one world.
+- **`tests/simulation_e2e.rs` runs its windows back to back in wall time**: the rate servo's spans
+  are under 0.1 s, carry the smoothed rate (0) instead of a measurement and lock blind in the first
+  windows, so the phase lock engages on the oscillator's whole 20 ppm. Its `LockAudit` therefore
+  allows one drop + one return when the run re-seeded or followed a step
+  (`/status.ptp_phase_boot_reseed_ppm`, `freq_steps`). A span under 0.1 s counting toward LOCK at
+  all is the #142 class (a window without its own rate is not a measurement) — follow-up candidate.
+- **Coverage-timing (#142 lesson) kept:** all sim scenarios run serially in ONE `#[test]`
+  (0.5 s in debug).
+

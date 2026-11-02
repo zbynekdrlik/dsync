@@ -172,6 +172,9 @@ where
         };
         // camera-box issue 1372: the grandmaster frequency steps the phase lock followed.
         status.freq_steps = ds.core.freq_steps();
+        // dantesync#146: the first engagement's measured frequency and its once-only re-seed.
+        status.ptp_phase_engaged_on_ppm = ds.core.engaged_on_fit().map(|f| f.freq_ppm);
+        status.ptp_phase_boot_reseed_ppm = ds.core.boot_reseed().map(|f| f.freq_ppm);
         status.last_freq_step_ppm = ds.core.last_freq_step().map(|s| s.step_ppm);
         status.last_freq_step_ts = ds.last_freq_step_ts;
     }

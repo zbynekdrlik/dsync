@@ -7,6 +7,7 @@ poll, see the tool's `--help`), recorded against dev1's own dantesync on 2026-11
 """
 
 import json
+import os
 import unittest
 
 import dante_gate
@@ -247,6 +248,34 @@ class ReleaseCheckTests(unittest.TestCase):
             raise dante_gate.GhError("not a git repository")
 
         self.assertEqual(dante_gate.main(["release-check", "--repo", "o/r", "--tree", "T2"], run=run), 1)
+
+
+class GateWorkflowTests(unittest.TestCase):
+    """The workflow's own commitments (the rig cannot run in CI, so the text is what is checked)."""
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "gate.yml")
+        with open(path, encoding="utf-8") as f:
+            cls.text = f.read()
+        cls.helper_calls = [
+            line.strip()
+            for line in cls.text.splitlines()
+            if '"$GATE_INSTALL"' in line and not line.strip().startswith("#")
+        ]
+
+    def test_every_install_is_cold_146(self):
+        # dsync #146 / #98 (2026-11-02): every gate run proves the cold boot, never a seeded one.
+        installs = [c for c in self.helper_calls if "--restore" not in c]
+        self.assertEqual(len(installs), 1, installs)
+        self.assertIn('sudo -n "$GATE_INSTALL" --cold "$PWD/candidate/dantesync"', installs[0])
+
+    def test_the_restore_puts_binary_and_seed_back(self):
+        restores = [c for c in self.helper_calls if "--restore" in c]
+        self.assertEqual(len(restores), 1, restores)
+
+    def test_never_on_pull_request(self):
+        self.assertNotRegex(self.text, r"(?m)^\s*pull_request(_target)?\s*:")
 
 
 if __name__ == "__main__":

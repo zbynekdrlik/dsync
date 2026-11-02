@@ -20,7 +20,7 @@ Owner rules from 2026-11-01:
 ## What else acts on the machines
 
 - camera-box operates the fleet today: `DANTESYNC_FLEET`, fleet upgrade, canonical config, clock watchdog, the sudo rule `camera-box-dev1-dantesync-upgrade` and the secret `dantesync-fleet.env`.
-- dstack, iemmixer, fohmixer and songplayer applications depend on the clock through the DSYX contract. They reach you only through dstack.
+- dstack, iemmixer, fohmixer and songplayer applications depend on the clock through the DSYX contract. They reach you only through dstack. The lock bytes' meaning (`[41]`, `[62]` bit 1): `docs/dsyx-contract.md`.
 
 ## How to run a test
 

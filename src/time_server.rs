@@ -21,13 +21,34 @@
 //! - `[32-35]` Drift rate (PPM × 1000, signed i32)
 //! - `[36-39]` Frequency adjustment (PPM × 1000, signed i32)
 //! - `[40]`    Mode: 0=INIT, 1=ACQ, 2=PROD, 3=LOCK, 4=NANO, 5=NTP_ONLY
-//! - `[41]`    Is locked: 0/1
+//! - `[41]`    Is locked: 0/1 — `/status.is_locked`, see "The meaning of [41] and [62]" below
 //! - `[42-47]` Grandmaster UUID (6 bytes)
 //! - `[48-55]` Monotonic frequency (ticks per second, u64)
 //! - `[56-59]` NTP offset (microseconds, signed i32)
 //! - `[60-61]` Accumulated phase drift since last NTP step (microseconds, signed i16)
 //! - `[62]`    Flags: bit 0 = ntp_failed, bit 1 = settled
 //! - `[63]`    Reserved (zero)
+//!
+//! # The meaning of [41] and [62] (dantesync#146)
+//!
+//! **`[41]` = 1 means the clock is safe for a 250 µs Dante flow** (the stack gates its media-clock
+//! ready on this byte alone). Under `system.clock_discipline = "ptp_phase_lock"` (the default) it
+//! is [`crate::lock_gate`]'s verdict on the phase error `e = (t2 − t1) − D`
+//! (`/status.ptp_phase_error_us`):
+//!
+//! - set once the phase lock owns the frequency word and |e| ≤ 50 µs for 3 consecutive windows
+//!   (0.5 s each);
+//! - cleared when |e| > 150 µs for 4 consecutive windows, when the phase lock disengages, or when
+//!   PTP goes stale (no allowed Sync / Follow_Up for 10 s, dantesync#112). After the first lock
+//!   neither a boot's phase pull nor a date step moves it; a grandmaster frequency step large
+//!   enough to take `e` past 150 µs (a 25 ppm step: ~450 µs) clears it once, and it is set again
+//!   once `e` is back within 50 µs.
+//!
+//! Under `"legacy"` it is the rate servo's lock (5 windows with |rate| < 5 µs/s), as before 1.23.
+//! The tray and the IPC read the same `/status.is_locked`: one definition.
+//!
+//! **`[62]` bit 1 (`settled`) only means** that the first PTP Sync was accepted after the warmup
+//! and PTP is not stale. It says nothing about the frequency or the phase: read `[41]` for that.
 //!
 //! # dantesync#88 — the date-offset extension (versioned, opt-in by the REQUEST)
 //!

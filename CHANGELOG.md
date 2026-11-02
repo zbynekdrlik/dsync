@@ -16,6 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   box's own time server, samples `/status` every 10 s, and always puts the previous binary back.
   A pass is exactly one `Ready`, zero re-anchors and zero holdovers over a complete log. See
   `docs/dante-gate.md`.
+- `/status.ptp_phase_engaged_on_ppm` and `/status.ptp_phase_boot_reseed_ppm` (#146): the frequency
+  the first engagement started on, and its once-only re-seed.
+
+### Fixed
+
+- DSYX byte `[41]` (`/status.is_locked`, the tray, the IPC) is 1 only while the clock is safe for a
+  250 µs Dante flow (#146, dstack: gen3 reported LOCK at a phase error of −700 µs and late packets
+  for 3-6 minutes after each boot). Under the phase lock it is set once the phase lock is engaged
+  and |e| ≤ 50 µs for 3 windows, and cleared at |e| > 150 µs for 4 windows, at a disengagement or
+  when PTP goes stale. `/status.mode` says LOCK/NANO only while it is set. The legacy discipline
+  keeps the rate-based lock.
+- The boot no longer flaps LOCK → UNLOCK → LOCK (#146; gate run 41372498483 on companion). The rate
+  servo now measures the rate with the phase lock's own deliberate deviation removed (its P term
+  and the boot pull), so the pull no longer reads as a lock loss, disengages the phase lock and is
+  dropped. The first engagement starts on the frequency the acquisition measured (the open-loop
+  phase over up to 20 s), and re-seeds once when that start (the rate servo's word or a shorter fit) was off. In the
+  closed-loop simulation a cold gen3 boot sets `[41]` ~35 s after the rate lock (it took minutes),
+  a seeded one 4-8 s after "Sync established" (Linux / moderate Windows jitter).
 
 ### Changed
 
