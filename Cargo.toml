@@ -13,6 +13,8 @@ ctrlc = { version = "3.4", features = ["termination"] }
 nix = { version = "0.27", features = ["socket", "net", "uio", "fs", "ioctl"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# dantesync#136: the PTP code shared with the in-process follower library.
+dsync-ptp = { path = "crates/dsync-ptp", version = "1.24.0" }
 
 [package]
 name = "dantesync"
@@ -24,6 +26,10 @@ repository = "https://github.com/zbynekdrlik/dantesync"
 keywords = ["ptp", "dante", "audio", "synchronization", "time"]
 categories = ["network-programming"]
 rust-version = "1.70"
+
+# dantesync#136: the service (this root package) and the PTP library crate consumers pin by tag.
+[workspace]
+members = ["crates/dsync-ptp"]
 
 [profile.release]
 lto = true
@@ -77,6 +83,7 @@ sd-notify = "0.4"
 
 [dev-dependencies]
 mockall = "0.12"
+dsync-ptp = { path = "crates/dsync-ptp", version = "1.24.0", features = ["mock"] }
 tempfile = "3.10"
 
 [[bin]]

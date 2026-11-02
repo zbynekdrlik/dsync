@@ -1,11 +1,11 @@
 ---
 paths:
-  - "src/ptp.rs"
+  - "crates/dsync-ptp/src/ptp.rs"
   - "src/controller/ptp_sender.rs"
   - "src/controller/date_sync/gm_identity_tests.rs"
   - "src/date_offset/persist.rs"
   - "src/date_offset/wire.rs"
-  - "tests/fixtures/ptpv1/**"
+  - "crates/dsync-ptp/tests/fixtures/ptpv1/**"
 ---
 
 # The PTPv1 wire format and the grandmaster identity (dantesync#129)
@@ -13,7 +13,7 @@ paths:
 ## The layout, proven on real Dante bytes
 
 IEEE 1588-2002 (PTPv1). A Dante Sync is 124 bytes, a Follow_Up 52. The header is **40** bytes.
-The real packets are committed in `tests/fixtures/ptpv1/`, with their provenance.
+The real packets are committed in `crates/dsync-ptp/tests/fixtures/ptpv1/`, with their provenance.
 
 | Absolute | Field |
 |---|---|

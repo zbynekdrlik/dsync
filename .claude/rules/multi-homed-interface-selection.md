@@ -1,10 +1,11 @@
 ---
 paths:
-  - "src/net.rs"
-  - "src/net_linux.rs"
+  - "crates/dsync-ptp/src/net.rs"
+  - "crates/dsync-ptp/src/net_linux.rs"
   - "src/net_pcap.rs"
+  - "crates/dsync-ptp/src/net_pcap.rs"
   - "src/net_winsock.rs"
-  - "src/gm_filter.rs"
+  - "crates/dsync-ptp/src/gm_filter.rs"
 ---
 
 # Multi-homed interface selection for the PTP receive path (camera-box issue 1073)

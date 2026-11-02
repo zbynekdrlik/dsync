@@ -3,6 +3,7 @@ paths:
   - "src/dscp.rs"
   - "src/ntp_server.rs"
   - "src/net_pcap.rs"
+  - "crates/dsync-ptp/src/net_pcap.rs"
   - "src/ntp.rs"
 ---
 

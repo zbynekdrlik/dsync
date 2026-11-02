@@ -26,7 +26,7 @@
 //!
 //! Pure: explicit `Instant`s in, decisions out; no I/O, no logging.
 
-use crate::traits::RejoinOutcome;
+use crate::network::RejoinOutcome;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::net::Ipv4Addr;

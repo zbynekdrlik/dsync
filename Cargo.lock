@@ -568,13 +568,14 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "dantesync"
-version = "1.23.0"
+version = "1.24.0"
 dependencies = [
  "anyhow",
  "byteorder",
  "chrono",
  "clap",
  "ctrlc",
+ "dsync-ptp",
  "env_logger",
  "gtk",
  "if-addrs",
@@ -675,6 +676,23 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+
+[[package]]
+name = "dsync-ptp"
+version = "1.24.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "if-addrs",
+ "libc",
+ "log",
+ "mockall",
+ "nix 0.27.1",
+ "pcap",
+ "serde",
+ "socket2 0.5.10",
+ "windows 0.52.0",
+]
 
 [[package]]
 name = "env_logger"

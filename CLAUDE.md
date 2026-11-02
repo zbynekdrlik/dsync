@@ -102,12 +102,12 @@ on either platform skips `publish` — no release with a missing asset).
   `POST /date/step`; v1.19: the fleet date placed at the FIRST PTP window with one step, the boot
   NTP reading off the loop, the first engagement holding the early anchor through the pull) →
   `.claude/rules/clock-discipline-and-testing.md` (auto-loads on
-  `src/ptp_phase_lock.rs` / `src/date_offset.rs` / `src/time_server.rs` / their `tests.rs` /
+  `crates/dsync-ptp/src/ptp_phase_lock.rs` / `src/date_offset.rs` / `src/time_server.rs` / their `tests.rs` /
   `tests/two_clock_bench.rs` / `tests/simulation_e2e.rs`)
-- DSYX [41] = the phase lock within the bound (#146, v1.23 — `src/lock_gate.rs` 50 µs in / 150 µs
+- DSYX [41] = the phase lock within the bound (#146, v1.23 — `crates/dsync-ptp/src/lock_gate.rs` 50 µs in / 150 µs
   out, the rate servo decoupled from the phase lock's own deviation, the boot fit and its once-only
   re-seed, the whole-controller closed-loop sim) → `.claude/rules/clock-discipline-and-testing.md`
-  (auto-loads on `src/lock_gate.rs` / `src/ptp_phase_lock/boot_fit.rs` / `controller/date_sync/lock_*`)
+  (auto-loads on `crates/dsync-ptp/src/lock_gate.rs` / `crates/dsync-ptp/src/ptp_phase_lock/boot_fit.rs` / `controller/date_sync/lock_*`)
 - Cold-boot acquisition + the drift file (#142, v1.22 — a window without a previous offset is not a
   measurement; `drift.json` saved only while LOCKED, the seed judged against the SEED itself on the
   first 4 measured windows; ctrlc `termination` so a systemd stop runs the shutdown save) →
@@ -133,7 +133,7 @@ on either platform skips `publish` — no release with a missing asset).
   per-socket-loopback-address test trick) →
   `.claude/rules/ptp-liveness-rejoin.md` (auto-loads on its `paths:`)
 - PTPv1 wire format + the grandmaster identity (#129 — the 40-byte header proven on real Dante
-  bytes in `tests/fixtures/ptpv1/`, the Follow_Up offset that was right only by accident, the
+  bytes in `crates/dsync-ptp/tests/fixtures/ptpv1/`, the Follow_Up offset that was right only by accident, the
   pre-1.17 misread constant `00:00:00:00:01:00` and its three consumers (the restart restore, the
   report-only follower check, the constant kept on the 31900 wire), report-only sender fields,
   a read-only tcpdump capture on dev1) →
@@ -305,7 +305,7 @@ DanteSync is a high-precision PTP (Precision Time Protocol) synchronization tool
 
 **The default discipline (`system.clock_discipline = "ptp_phase_lock"`, #117 + #88):**
 
-1. **PTP (Dante)** → `adjust_frequency()`: rate AND phase. Once PTP-locked, `src/ptp_phase_lock.rs`
+1. **PTP (Dante)** → `adjust_frequency()`: rate AND phase. Once PTP-locked, `crates/dsync-ptp/src/ptp_phase_lock.rs`
    holds `wall = PTP time + D` with a PI on `e = (t2 − t1) − D`. Every box ticks with the GM and
    shows the same wall time (µs). A GM change re-anchors `D` with no wall step.
 2. **NTP (UTC)** → the fleet date offset `D` only. The NTP master alone reads UTC and is the

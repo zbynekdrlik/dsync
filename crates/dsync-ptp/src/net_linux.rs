@@ -13,8 +13,8 @@
 //! before this nothing ever joined again (only a service restart recovered).
 
 use crate::net::{self, PinnedInterfaceUnavailable, PinnedLookup};
+use crate::network::{PtpNetwork, RejoinOutcome};
 use crate::ptp::{PTP_EVENT_PORT, PTP_GENERAL_PORT};
-use crate::traits::{PtpNetwork, RejoinOutcome};
 use anyhow::Result;
 use log::info;
 use std::io::ErrorKind;
