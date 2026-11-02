@@ -13,7 +13,7 @@ Terse per-issue log of autonomous work on this repo (commits, RED->GREEN test na
   - `eeee35e` — `InFlightGuard` RAII fix so a future panic in `handle_connection` can't leak a connection-cap slot (deep-review finding)
 - PR: #48 (dev->master), merged `fb76f82`, tagged+released as `v1.8.18` (auto-release)
 - Decision: `HttpStatusConfig.enabled` defaults to `true` (unlike `NtpServerConfig`'s opt-in `false`) — read-only, LAN-bound, the whole point is unattended reads working out of the box (documented in config.rs doc comment + PR body)
-- Fleet rollout (canary cam4 first, then rest): cam1-6, imag-nb, strih, stream — all confirmed v1.8.18, `mode: LOCK`, endpoint live. cam3 needed `mount -o remount,rw /` (its root fs is read-only, unlike cam1/2/4). imag-nb needed `sudo -S` with the standard box password (interactive-sudo box). See dantesync#47 comment for the full table + live curl proof.
+- Fleet rollout (canary cam4 first, then rest): cam1-6, imag-nb, strih, stream — all confirmed v1.8.18, `mode: LOCK`, endpoint live. cam3 needed `mount -o remount,rw /` (its root fs is read-only, unlike cam1/2/4). imag-nb needed `sudo -S` with the standard box password (interactive-sudo box). See dsync#47 comment for the full table + live curl proof.
 - Follow-up (dantesync side): none filed — the two Minor review findings (request-line parsing for a cleaner 404; config.json.bak before an overwrite) were explicitly optional per the reviewer's own calibration, left as documented in the `eeee35e` commit message.
 - Follow-up (camera-box side): camera-box#648 (wire `recording-e2e.sh`'s `[0/8]` gate to the new endpoint) — commented that its prerequisite is live, ready to work as its own ticket.
 
@@ -21,7 +21,7 @@ Terse per-issue log of autonomous work on this repo (commits, RED->GREEN test na
 
 - Version bump: `6684bc2` (1.8.20 -> 1.8.21)
 - Design comment (root cause + approach + rejected alternative), posted BEFORE any code:
-  https://github.com/zbynekdrlik/dantesync/issues/53#issuecomment-5099987990
+  https://github.com/zbynekdrlik/dsync/issues/53#issuecomment-5099987990
 - RED: `39e414f` — `ntp::tests::select_lowest_rtt_picks_the_n_lowest_rtt_samples`,
   `summarize_offsets_returns_true_median_and_honest_spread`,
   `summarize_offsets_pathological_scatter_from_53_stays_honest` (the issue's own 22-sample fixture,
@@ -56,7 +56,7 @@ canary evidence before continuing.
 
 - Version bump: `cd7f8c0` (1.8.21 -> 1.8.22)
 - Design comment (root cause + approach + rejected alternative), posted BEFORE any code:
-  https://github.com/zbynekdrlik/dantesync/issues/53#issuecomment-5100359554
+  https://github.com/zbynekdrlik/dsync/issues/53#issuecomment-5100359554
 - RED: `ac52dbd` — new `src/ntp_packet.rs` (NTP<->Unix epoch conversion, client request build,
   server reply parse, RFC 5905 offset/RTT formula, Ethernet+IPv4+UDP frame parsing) — 13 of 15
   fixture tests fail against naive stubs (return 0 / all-zero buffer / accept-anything).
@@ -84,7 +84,7 @@ canary evidence before continuing.
   clean, `cargo clippy -- -D warnings -A dead_code` (CI's exact Linux invocation) clean. The
   Windows-only code (`net_pcap.rs` additions, `ntp.rs` cfg(windows) blocks) additionally
   compile-checked clean (zero new warnings) against `--target x86_64-pc-windows-gnu` and the exact
-  CI Windows build-job invocation (`--bin dantesync --bin dantesync-tray`) — the real MSVC target +
+  CI Windows build-job invocation (`--bin dantesync --bin dsync-tray`) — the real MSVC target +
   Npcap SDK link, and any test EXECUTION on Windows, only happen in CI's own jobs (`build` job
   compile-checks on every PR; `release.yml` runs `cargo test` on Windows but only on a tag push,
   i.e. after merge — this worker never touched a live machine per its dispatch constraints).
@@ -105,7 +105,7 @@ canary evidence before continuing.
   the Linux asset already uploaded in parallel. Release v1.8.22 published a Linux asset with no
   Windows asset at all (run 30333447928) — hit live canarying the camera-box rig's stream box.
 - Design comment posted BEFORE any code commit:
-  https://github.com/zbynekdrlik/dantesync/issues/56#issuecomment-5100617962
+  https://github.com/zbynekdrlik/dsync/issues/56#issuecomment-5100617962
 - Version bump: `5833a70` — 1.8.22 (== master's tag) → 1.8.23 (mandatory first commit).
 - Fix: `0a2d9c2` — dropped the stale `NpcapPtpNetwork::` prefix at all 5 call sites (net_pcap.rs
   lines 412/416/420/424/432); mechanical reference fix, no behavior change. RED reproduced locally
@@ -149,7 +149,7 @@ canary evidence before continuing.
 ## #58: Windows tests execute nowhere -- delay-load wpcap.dll (2026-07-28)
 
 - Root cause + approach posted BEFORE code: gh issue comment
-  https://github.com/zbynekdrlik/dantesync/issues/58#issuecomment-5101073379 (predates commit
+  https://github.com/zbynekdrlik/dsync/issues/58#issuecomment-5101073379 (predates commit
   f1650e3, the first code commit).
 - Version bump: f1650e3 `chore: bump version to 1.8.24` — 1.8.23 already exists as a bare,
   release-less tag on the remote; CI's own version-check job blocks reusing it.
@@ -185,7 +185,7 @@ canary evidence before continuing.
   installer has no silent-install switch at all; even rust-pcap/pcap's own official CI needs a
   paid Npcap OEM subscription (`NPCAP_OEM_USERNAME`/`PASSWORD` secrets) for exactly this — not
   viable here without a purchase.
-- PR #59: https://github.com/zbynekdrlik/dantesync/pull/59 — green, `mergeable: MERGEABLE`,
+- PR #59: https://github.com/zbynekdrlik/dsync/pull/59 — green, `mergeable: MERGEABLE`,
   `mergeStateStatus: CLEAN`, all 7 required checks pass. NOT merged per this session's explicit
   instruction — supervisor merges, releases fresh tag v1.8.24, canaries to the fleet.
 
@@ -193,7 +193,7 @@ canary evidence before continuing.
 
 - Version bump: `fe7f8a6` (1.8.25 -> 1.8.26)
 - Design comment (root cause + approach + rejected alternative), posted BEFORE any code:
-  https://github.com/zbynekdrlik/dantesync/issues/61#issuecomment-5128859083
+  https://github.com/zbynekdrlik/dsync/issues/61#issuecomment-5128859083
 - RED: `14f0be3` — `tests/purge_target.rs`, 18 tests, 17 fail (scripts don't exist yet, no
   `## Local Build Policy` in CLAUDE.md); only `claude_md_keeps_the_npcap_cross_compilation_note`
   passes (pre-existing).
@@ -201,7 +201,7 @@ canary evidence before continuing.
   `purge_target_daemon_live`, unit-tested directly, unlike camera-box's own untested
   purge-target.sh) + `scripts/purge-target.sh` (`purge_target_main`, executed-not-sourced guard
   mirroring cam-disk-guard.sh's #403 convention) + `scripts/install-git-hooks.sh` (pre-push hook).
-  Daemon-live check matches by process NAME (`pgrep -x dantesync|dantesync-tray`), an ABSOLUTE
+  Daemon-live check matches by process NAME (`pgrep -x dantesync|dsync-tray`), an ABSOLUTE
   gate never overridden by `--force`.
 - GREEN: `85ef6dd` — CLAUDE.md: replaced the contradictory `Local Verification` bullet + old
   `## Build Commands` (`cargo build --release`) with an explicit `## Local Build Policy` (Tier 0)
@@ -227,7 +227,7 @@ canary evidence before continuing.
   broader `--all-targets` clippy run surfaces 10 pre-existing `field_reassign_with_default`
   findings in `src/time_server.rs` test code — confirmed identical on `origin/master` via a
   throwaway `git worktree`, unrelated, not touched.
-- PR #63: https://github.com/zbynekdrlik/dantesync/pull/63 — green (7/7 checks), `mergeable:
+- PR #63: https://github.com/zbynekdrlik/dsync/pull/63 — green (7/7 checks), `mergeable:
   MERGEABLE`, `mergeStateStatus: CLEAN`. Merged `1fb8d403` (direct REST PUT — `gh pr merge`'s
   "not up to date" false refusal, same repo GOTCHA as PR #697). Auto-closed #61. Tagged +
   released `v1.8.26` (CI run 30532236993, both linux-amd64 + windows-amd64 + tray assets
@@ -283,11 +283,11 @@ canary evidence before continuing.
   subtracts every step, error accrues at 19 ppm for a simulated hour). **A mock that returns a
   constant cannot exercise any adaptive/statistical code path; for a control loop the mock must
   close the loop.**
-- PR 69: https://github.com/zbynekdrlik/dantesync/pull/69 — green (7/7 checks + Auto Release),
+- PR 69: https://github.com/zbynekdrlik/dsync/pull/69 — green (7/7 checks + Auto Release),
   `mergeable: MERGEABLE`, `mergeStateStatus: CLEAN`. Plain `gh pr merge --merge` worked this time
   (no "not up to date" false refusal). Merged `3983ff77bfe4a8a7ac4c034bc94abe1883268e49`, issue
   auto-closed. Main CI green 8/8, tagged + released `v1.8.29` with the complete asset set.
-- Design-gate workaround worth reusing: pass `-R zbynekdrlik/dantesync` on every `gh issue comment`
+- Design-gate workaround worth reusing: pass `-R zbynekdrlik/dsync` on every `gh issue comment`
   when the session cwd is a sibling repo. The recorder resolves `repo_key` AND its read-back from
   that flag, so the marker lands under the right repo and no `[no-design: ...]` bypass is needed
   (the previous cycle had to bypass). One comment grants at most ONE evidence kind and only the
@@ -364,7 +364,7 @@ canary evidence before continuing.
   own idempotency guard suppressed a step a caller might reasonably assume reran). Released
   `v1.8.31` with the full asset set (linux/windows/tray binaries + sha256, Linux sha256 verified
   locally against the downloaded binary).
-- Design-gate reminder (still true): pass `-R zbynekdrlik/dantesync` on every `gh issue comment`
+- Design-gate reminder (still true): pass `-R zbynekdrlik/dsync` on every `gh issue comment`
   when the session's ambient cwd might not match — confirmed AGAIN this cycle that a `cd dantesync
   && gh issue comment ...` compound command's `cd` is NOT what the design-gate hook's `cwd`
   resolves from (it appears to use the session's own launch directory), so the first two comments
@@ -428,7 +428,7 @@ canary evidence before continuing.
   (no TLS-transient repeat of #71's own Auto-Release gotcha) — verified the actual new
   `release.yml` run each time regardless, per that cycle's own established discipline. Released
   `v1.8.33` with the full asset set, Linux sha256 verified locally.
-- Design-gate `-R zbynekdrlik/dantesync` discipline held clean the whole cycle — no repeat of the
+- Design-gate `-R zbynekdrlik/dsync` discipline held clean the whole cycle — no repeat of the
   #71 cycle's silently-unclassified-comment issue.
 - **No fleet deploy from this worker, by dispatch.** v1.8.33 is released and awaiting the
   supervisor's canary rollout on strih. Canary methodology note carried onto the ticket itself:

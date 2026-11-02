@@ -46,7 +46,7 @@ pub fn get_default_interface() -> Result<(String, Ipv4Addr)> {
     Err(anyhow!("No suitable IPv4 interface found"))
 }
 
-/// dantesync#131 — what the pinned PTP interface (`system.interface` / `--interface`) is now.
+/// dsync#131 — what the pinned PTP interface (`system.interface` / `--interface`) is now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PinnedLookup {
     /// The NIC exists and carries this routable IPv4 (the first one, in listing order).
@@ -69,7 +69,7 @@ pub struct NicSnapshot {
     pub ipv4: Vec<Ipv4Addr>,
 }
 
-/// dantesync#131 — classify the pinned NIC `name` among `nics` (pure). A routable IPv4 wins over
+/// dsync#131 — classify the pinned NIC `name` among `nics` (pure). A routable IPv4 wins over
 /// a link-local one; loopback and 0.0.0.0 never count. Names compare exactly on Linux; on
 /// Windows ([`classify_pinned`]) case-insensitively, and a GUID matches with or without its
 /// braces or the Npcap `\Device\NPF_` prefix.
@@ -115,12 +115,12 @@ fn normalize_windows_name(name: &str) -> &str {
     name.trim_start_matches('{').trim_end_matches('}')
 }
 
-/// dantesync#131 — [`classify_pinned_with`] by this platform's naming rules.
+/// dsync#131 — [`classify_pinned_with`] by this platform's naming rules.
 pub fn classify_pinned(name: &str, nics: &[NicSnapshot]) -> PinnedLookup {
     classify_pinned_with(name, nics, cfg!(windows))
 }
 
-/// dantesync#131 — the IPv4 the startup may join the pinned NIC on after waiting `waited`: a
+/// dsync#131 — the IPv4 the startup may join the pinned NIC on after waiting `waited`: a
 /// routable one at once, a link-local one only after [`PINNED_STARTUP_GRACE`] (a DHCP answer
 /// may still replace it), else none.
 pub fn usable_pinned_ip(lookup: PinnedLookup, waited: std::time::Duration) -> Option<Ipv4Addr> {
@@ -240,12 +240,12 @@ fn windows_adapters() -> Result<Vec<NicSnapshot>> {
     Ok(nics)
 }
 
-/// dantesync#131 — how long a pinned NIC may sit without an IPv4 at startup before the clock
+/// dsync#131 — how long a pinned NIC may sit without an IPv4 at startup before the clock
 /// alarm names it: the PTP staleness bound (`controller::PTP_TIMEOUT_SECS`), so a normal boot
 /// (DHCP / NetworkManager bringing the NIC up) never alarms, a dead one does like any lost clock.
 pub const PINNED_STARTUP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// dantesync#131 — the alarm-worthy problem of a pinned NIC while startup waits for it (pure): a
+/// dsync#131 — the alarm-worthy problem of a pinned NIC while startup waits for it (pure): a
 /// MISSING NIC at once, one without an IPv4 only after [`PINNED_STARTUP_GRACE`]; `None` when it
 /// is ready or still within the grace.
 pub fn startup_wait_problem(
@@ -261,12 +261,12 @@ pub fn startup_wait_problem(
     }
 }
 
-/// dantesync#131 — the pinned PTP interface `name` now.
+/// dsync#131 — the pinned PTP interface `name` now.
 pub fn pinned_interface(name: &str) -> PinnedLookup {
     classify_pinned(name, &nic_snapshots(name))
 }
 
-/// dantesync#131 — the pinned PTP interface cannot be joined now. Returned (inside an `anyhow`
+/// dsync#131 — the pinned PTP interface cannot be joined now. Returned (inside an `anyhow`
 /// error) by every backend's `PtpNetwork::rejoin` BEFORE it closes anything; the controller
 /// downcasts it into the clock alarm's reason and retries quickly while it lasts.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -315,7 +315,7 @@ impl std::fmt::Display for PinnedInterfaceUnavailable {
 
 impl std::error::Error for PinnedInterfaceUnavailable {}
 
-/// dantesync#112 — the name of the interface that carries exactly `ip` now (never loopback), if
+/// dsync#112 — the name of the interface that carries exactly `ip` now (never loopback), if
 /// any. The PTP re-join looks for the NIC it last received PTP on this way: a NIC that is re-plugged
 /// (USB) comes back with a new, higher ifindex, often under a new name, so the listing-ordered
 /// [`get_default_interface`] may put another interface (tailscale, docker, a bridge) first.
@@ -330,7 +330,7 @@ pub fn interface_with_ip(ip: Ipv4Addr) -> Option<String> {
         .map(|iface| iface.name)
 }
 
-/// dantesync#112 — the Windows PTP capture choice, pure so Linux CI tests it. `by_rule` is
+/// dsync#112 — the Windows PTP capture choice, pure so Linux CI tests it. `by_rule` is
 /// `net_pcap::find_ptp_capture_device`'s answer: `Ok((device, Some(ip)))` when the trusted
 /// grandmaster subnet of `gm_allowlist` picks one device (camera-box issue 1073; it always wins),
 /// `Ok((device, None))` for the name fallback. `home` is the device that carries the address PTP
@@ -350,7 +350,7 @@ pub fn choose_capture_device<D>(
     }
 }
 
-/// dantesync#112 — whether [`choose_capture_device`] needs the home device looked up: only on a
+/// dsync#112 — whether [`choose_capture_device`] needs the home device looked up: only on a
 /// re-join (`home` is `Some`) whose trusted-subnet rule found no unique device (it would win
 /// anyway). Returns the address to look the device up by.
 pub fn home_to_look_up<D>(
@@ -400,7 +400,7 @@ pub fn create_multicast_socket(port: u16, interface_ip: Ipv4Addr) -> Result<UdpS
     Ok(udp_socket)
 }
 
-/// The bind address for the pcap IGMP-join socket (dantesync#109).
+/// The bind address for the pcap IGMP-join socket (dsync#109).
 ///
 /// The Windows pcap path opens a UDP socket purely to trigger the kernel IGMP
 /// membership report for the PTP group `224.0.1.129`. IGMP membership is per
@@ -413,7 +413,7 @@ pub fn create_multicast_socket(port: u16, interface_ip: Ipv4Addr) -> Result<UdpS
 /// WSAEADDRINUSE and its PTP follower was starved of Follow_Up/Delay_Resp on
 /// 320.
 pub fn igmp_join_bind_addr() -> SocketAddrV4 {
-    // dantesync#109: bind an EPHEMERAL port (0). The kernel picks a free source
+    // dsync#109: bind an EPHEMERAL port (0). The kernel picks a free source
     // port for the join socket; 319/320 stay free for a DVS ptp.exe on the same
     // host. The port is irrelevant to the IGMP membership and to pcap's capture.
     SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)
@@ -663,7 +663,7 @@ mod tests {
         // Error case is acceptable on minimal test environments
     }
 
-    /// dantesync#112: the interface carrying an address is found by that address.
+    /// dsync#112: the interface carrying an address is found by that address.
     #[test]
     fn interface_with_ip_finds_the_interface_by_its_address_112() {
         if let Ok((name, ip)) = get_default_interface() {
@@ -767,7 +767,7 @@ mod tests {
         assert_eq!(multi_addr.octets(), [224, 0, 1, 129]);
     }
 
-    /// dantesync#109: the pcap IGMP-join socket must bind an EPHEMERAL port,
+    /// dsync#109: the pcap IGMP-join socket must bind an EPHEMERAL port,
     /// never a PTP port. Binding 319/320 collides with a Dante Virtual
     /// Soundcard `ptp.exe` on the same host and starves its PTP follower of the
     /// PTP general messages (Follow_Up/Delay_Resp) on 320 — the DVS media clock
@@ -797,7 +797,7 @@ mod tests {
         );
     }
 
-    /// dantesync#109: a real UDP socket bound the way the IGMP join binds lands
+    /// dsync#109: a real UDP socket bound the way the IGMP join binds lands
     /// on a concrete NON-zero ephemeral port and never on 319/320 — so it can
     /// never collide with an exclusive PTP-port listener (e.g. DVS `ptp.exe`).
     #[test]

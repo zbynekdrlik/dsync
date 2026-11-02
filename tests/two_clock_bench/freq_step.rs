@@ -33,7 +33,7 @@
 //!    scenarios with the detector inside the core.)
 
 use super::*;
-use dantesync::ptp_phase_lock::{
+use dsync::ptp_phase_lock::{
     FreqStep, DT_MAX_S, DT_MIN_S, ERROR_CLAMP_US, FREQ_CLAMP_PPM, K_I_PER_S2, K_P_PER_S,
 };
 

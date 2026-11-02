@@ -1,4 +1,4 @@
-//! dantesync#142 — closed-loop simulation of a cold start on iemmixer's gen3 oscillator (the
+//! dsync#142 — closed-loop simulation of a cold start on iemmixer's gen3 oscillator (the
 //! servo learned +33.3 ppm at 47.8 s and +35.7 ppm at 78.3 s on v1.20.0, LOCK ~86 s after boot).
 //!
 //! The world: the offset moves by (natural + word) µs per second, the word being whatever the

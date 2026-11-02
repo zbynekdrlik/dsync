@@ -1,4 +1,4 @@
-//! dantesync#134 — fast boot sync: the fleet date is placed at the first PTP windows, not at the
+//! dsync#134 — fast boot sync: the fleet date is placed at the first PTP windows, not at the
 //! rate servo's lock (~31-40 s later), with ONE step, on the master and on a follower; the PTP
 //! loop never waits for the boot NTP reading; and the later engagement of the phase lock never
 //! takes a second step. The pure core is proven in `crate::ptp_phase_lock` (the early anchor and

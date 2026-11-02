@@ -1,4 +1,4 @@
-//! dantesync#126 — the NTP master's fleet date offset survives a restart.
+//! dsync#126 — the NTP master's fleet date offset survives a restart.
 //!
 //! A restart of the master used to change the fleet date by itself: the new process stepped its
 //! own wall to UTC at boot, anchored a fresh `D` on that stepped wall and started a new authority
@@ -43,7 +43,7 @@ pub struct AuthorityState {
     /// A coordinated step announced and not landed yet: (the new `D`, its PTP instant). Saved so a
     /// restart inside a step's lead neither drops nor repeats a step the fleet already scheduled.
     pub pending: Option<(i64, i64)>,
-    /// A coordinated slew announced and not complete (dantesync#119, micro mode).
+    /// A coordinated slew announced and not complete (dsync#119, micro mode).
     pub slew: Option<DateSlew>,
     /// The change behind `seq` was a micro-correction (published with it).
     pub micro: bool,
@@ -72,7 +72,7 @@ impl AuthorityState {
 pub struct DateOffsetState {
     pub authority: AuthorityState,
     /// The grandmaster of the anchor `D` belongs to (since 1.17 reported at a restore under another
-    /// one, never a refusal: the time base decides, dantesync#129).
+    /// one, never a refusal: the time base decides, dsync#129).
     pub gm_uuid: [u8; 6],
     /// The master's wall when the record was written (ns since the epoch).
     pub written_wall_ns: i64,
@@ -84,7 +84,7 @@ pub struct DateOffsetState {
 /// step to UTC, a fresh anchor and a new authority session at seq 1 — logged loudly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RestoreRejected {
-    /// No grandmaster identity is known at the first lock. (dantesync#129: ANOTHER identity is no
+    /// No grandmaster identity is known at the first lock. (dsync#129: ANOTHER identity is no
     /// rejection — see [`DateOffsetState::names_another_grandmaster`]; the time base decides.)
     NoGrandmaster,
     /// The record is older than [`MAX_RESTORE_AGE_NS`] (by the master's wall now).
@@ -104,7 +104,7 @@ impl DateOffsetState {
     /// Returns how far the master's wall is off the restored line (`anchor − saved D`): the
     /// master re-aligns its OWN wall by that much, never the fleet.
     ///
-    /// dantesync#129 (slice 0): the grandmaster's UUID is reported, never enforced. Before 1.17
+    /// dsync#129 (slice 0): the grandmaster's UUID is reported, never enforced. Before 1.17
     /// every record held the misread constant, so the comparison never refused; a real UUID can
     /// now differ under one time base (another port of the same clock). A grandmaster whose uptime
     /// differs by more than the cap is refused by the time-base check; one within the cap restores
@@ -134,7 +134,7 @@ impl DateOffsetState {
         Ok(off)
     }
 
-    /// dantesync#129 — does the record name a grandmaster other than `now`? Report-only (the
+    /// dsync#129 — does the record name a grandmaster other than `now`? Report-only (the
     /// restore logs it). A pre-1.17 record holds `ptp::LEGACY_MISREAD_GM_UUID`, which names none.
     pub fn names_another_grandmaster(&self, now: [u8; 6]) -> bool {
         self.gm_uuid != crate::ptp::LEGACY_MISREAD_GM_UUID && self.gm_uuid != now

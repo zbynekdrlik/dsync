@@ -1,11 +1,11 @@
 //! Simple PTP packet logger - shows raw T1, T2, and offset without filtering
 
-use dantesync::ptp::{PtpV1Control, PtpV1FollowUpBody, PtpV1Header};
+use dsync::ptp::{PtpV1Control, PtpV1FollowUpBody, PtpV1Header};
 use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// The sequence id of a PTPv1 Sync (versionPTP 1), with the library's parser (dantesync#129: the
+/// The sequence id of a PTPv1 Sync (versionPTP 1), with the library's parser (dsync#129: the
 /// header is 40 bytes and versionPTP a u16).
 fn sync_sequence(packet: &[u8]) -> Option<u16> {
     let h = PtpV1Header::parse(packet).ok()?;
@@ -127,7 +127,7 @@ fn main() {
 mod tests {
     use super::*;
 
-    /// dantesync#129 — real Dante packets (`tests/fixtures/ptpv1/README.md`).
+    /// dsync#129 — real Dante packets (`tests/fixtures/ptpv1/README.md`).
     const DANTE_SYNC: &[u8] =
         include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/dante-sync.bin");
     const DANTE_FOLLOW_UP: &[u8] =

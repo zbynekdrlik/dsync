@@ -1,6 +1,6 @@
 //! HTTP status endpoint — serves the SAME status JSON the named pipe emits, over a
 //! plain HTTP GET, so LAN automation (e.g. camera-box's CI runner) can read PTP/NTP
-//! lock status without a human or an SMB/named-pipe bridge (dantesync#47).
+//! lock status without a human or an SMB/named-pipe bridge (dsync#47).
 //!
 //! Deliberately hand-rolled over `std::net::TcpListener` — NOT tokio/hyper/warp.
 //! `tokio` is currently a Windows-only Cargo dependency here (used only for the
@@ -10,7 +10,7 @@
 //! connection is plenty for a handful of requests/minute from CI — the same
 //! philosophy `ntp_server.rs` already uses for its UDP server.
 //!
-//! dantesync#126 — one ACTION route beside the status: `POST /date/step` from LOOPBACK only asks
+//! dsync#126 — one ACTION route beside the status: `POST /date/step` from LOOPBACK only asks
 //! the NTP master for one coordinated date step (`crate::date_step_trigger`). Every other request
 //! still gets the status JSON, byte for byte as before.
 
@@ -28,7 +28,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
-/// dantesync#126 — where a `POST /date/step` goes: the sync loop's end of
+/// dsync#126 — where a `POST /date/step` goes: the sync loop's end of
 /// `crate::date_step_trigger::channel` (`None`: the route answers that no loop takes it).
 pub type DateStepSender = Option<mpsc::Sender<DateStepRequest>>;
 
@@ -154,7 +154,7 @@ fn spawn_accept_loop(
 
 /// Handle a single connection. Read whatever the client sent, with a short read timeout so
 /// a client that never sends anything can't wedge this thread forever. `POST /date/step`
-/// (dantesync#126) goes to [`handle_date_step`]; EVERY other request is answered with the
+/// (dsync#126) goes to [`handle_date_step`]; EVERY other request is answered with the
 /// current status JSON, as before — the SAME bytes the named pipe sends
 /// (`SyncStatus::to_json_bytes`), so the two transports can never drift apart.
 fn handle_connection(
@@ -199,7 +199,7 @@ fn handle_connection(
     write_response(&mut stream, 200, &body);
 }
 
-/// dantesync#126 — `POST /date/step`: refused unless the peer is loopback, the `Host` a loopback
+/// dsync#126 — `POST /date/step`: refused unless the peer is loopback, the `Host` a loopback
 /// name and the request carries the `X-DanteSync-Step` header (403); otherwise the request goes to
 /// the sync loop, whose answer is `202` (one coordinated step announced) or `409` (refused, with
 /// the reason), or `503` when the loop does not take it in time — then the request is abandoned
@@ -464,7 +464,7 @@ mod tests {
         drop(held);
     }
 
-    /// dantesync#126 — send one raw request to a test server, return (headers, body).
+    /// dsync#126 — send one raw request to a test server, return (headers, body).
     fn exchange(port: u16, raw: &[u8]) -> (String, String) {
         let mut conn = TcpStream::connect(("127.0.0.1", port)).expect("connect");
         conn.set_read_timeout(Some(Duration::from_secs(10)))

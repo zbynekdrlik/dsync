@@ -1,8 +1,8 @@
-//! dantesync#117 + #88 — the TWO-CLOCK BENCH.
+//! dsync#117 + #88 — the TWO-CLOCK BENCH.
 //!
 //! N simulated boxes on one Dante network, driven by the SAME code the controller runs
-//! (`dantesync::ptp_phase_lock::PhaseLockCore` for every box's frequency word and anchor,
-//! `dantesync::date_offset::{DateAuthority, DateFollower}` for the date), against two clocks that
+//! (`dsync::ptp_phase_lock::PhaseLockCore` for every box's frequency word and anchor,
+//! `dsync::date_offset::{DateAuthority, DateFollower}` for the date), against two clocks that
 //! disagree the way the real rig does:
 //!
 //! - a PTP source: the Dante grandmaster (device uptime, its own oscillator), which changes to a
@@ -31,7 +31,7 @@
 //!    window; zero late or local steps; the master's wall stays within the step bound of UTC.
 //! 4. GM CHANGE: no box steps its wall when the grandmaster changes.
 //!
-//! dantesync#119: a BACKWARD correction (UTC −15 ppm vs the GM: the fleet runs ahead) is a
+//! dsync#119: a BACKWARD correction (UTC −15 ppm vs the GM: the fleet runs ahead) is a
 //! coordinated SLEW, never a step. The bench mirrors the controller's slew glue — the rate term in
 //! the frequency word (applied at the start/end instants, so resolved inside the window like a
 //! step's landing) and the de-slew of every PTP sample — and proves: no box ever steps backwards
@@ -39,32 +39,32 @@
 //! delay) stays within 50 µs through every slew, and the phase lock's law is untouched (the
 //! words differ from a forward-only run by numerical noise only).
 //!
-//! dantesync#119 follow-up: the fleet date is corrected in MICRO-corrections — at most 500 µs, at
+//! dsync#119 follow-up: the fleet date is corrected in MICRO-corrections — at most 500 µs, at
 //! most one per 20 s, beyond a 2 ms dead band, decided on the master's loop tick. The bench drives
 //! that tick every window and proves, over 24 h at +17.6 ppm (the rig's drift) and at −15 ppm:
 //! no single correction above 500 µs, the fleet date within 3 ms of UTC, the relative phase within
 //! 50 µs, no large step; and that ±5 ms asymmetric UTC jitter never makes the corrections
 //! oscillate.
 //!
-//! dantesync#119 (1.12): the fleet date is corrected ONCE A NIGHT (`correction = "daily"`, the
+//! dsync#119 (1.12): the fleet date is corrected ONCE A NIGHT (`correction = "daily"`, the
 //! new default): nothing all day, one coordinated step of the error rounded to whole 200 ms
 //! (1.16) — either direction — when the 02:00 UTC window opens, and an immediate (unrounded)
 //! step only beyond the 5 s emergency cap.
 //! `two_clock_bench/daily.rs` proves it over 48 h (see there); every scenario above runs in
 //! micro mode, which stays byte-identical.
 //!
-//! dantesync#126: a restart of the NTP master's PROCESS keeps the fleet date — the master restores
+//! dsync#126: a restart of the NTP master's PROCESS keeps the fleet date — the master restores
 //! its saved authority (the same `D` and seq) and its followers HOLD the fleet date through the
 //! gap, with the 1.14 path (a boot step to UTC, a new session, followers back on their own NTP
 //! steps after 30 s) as the negative control; and a coordinated step on request lands on every box
 //! at its instant. `two_clock_bench/restart.rs` (see there).
 
-use dantesync::date_offset::{
+use dsync::date_offset::{
     same_time_base, slew_cap_ns, CorrectionMode, DailyConfig, DateAnnounce, DateAuthority,
     DateFollower, DateOffsetState, FollowAction, SlewSpec, StepKind, DEFAULT_SLEW_PPM,
     DEFAULT_STEP_BOUND_NS, MIN_STEP_LEAD_NS,
 };
-use dantesync::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
+use dsync::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
 
 const NS: i64 = 1;
 const US: i64 = 1_000 * NS;
@@ -72,7 +72,7 @@ const MS: i64 = 1_000 * US;
 const S: i64 = 1_000 * MS;
 
 /// #119 follow-up: the largest micro-correction (the default `micro_step_us`).
-const MICRO_STEP_NS: i64 = dantesync::date_offset::DEFAULT_MICRO_STEP_US as i64 * US;
+const MICRO_STEP_NS: i64 = dsync::date_offset::DEFAULT_MICRO_STEP_US as i64 * US;
 
 /// PTP sample window: 4 Sync messages at 8/s (the controller's `sample_window_size` = 4).
 const WINDOW_S: f64 = 0.5;
@@ -130,7 +130,7 @@ struct Scenario {
     /// statistic can be asserted over several noise samples (the "seed every noise source" rule).
     seed: u64,
     /// #119 (1.11.1): the boxes running Windows — every step is realized by the production step
-    /// law (`dantesync::clock::step`) against a model of the Windows clock, and every PTP sample is
+    /// law (`dsync::clock::step`) against a model of the Windows clock, and every PTP sample is
     /// stamped by that stepped clock at its capture instant (`two_clock_bench/windows.rs`). The
     /// others step ideally, as before.
     windows_boxes: &'static [usize],

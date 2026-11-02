@@ -1,10 +1,10 @@
 use anyhow::Result;
-use dantesync::clock::SystemClock;
-use dantesync::config::SystemConfig;
-use dantesync::controller::PtpController;
-use dantesync::ntp::NtpMeasurement;
-use dantesync::status::SyncStatus;
-use dantesync::traits::{NtpSource, PtpNetwork, RejoinOutcome};
+use dsync::clock::SystemClock;
+use dsync::config::SystemConfig;
+use dsync::controller::PtpController;
+use dsync::ntp::NtpMeasurement;
+use dsync::status::SyncStatus;
+use dsync::traits::{NtpSource, PtpNetwork, RejoinOutcome};
 use std::cell::RefCell;
 use std::f64::consts::PI;
 use std::sync::{Arc, RwLock};
@@ -176,7 +176,7 @@ impl PtpNetwork for StatefulNetwork {
         Ok(())
     }
 
-    /// dantesync#112: the simulated grandmaster never goes quiet, so the controller never asks;
+    /// dsync#112: the simulated grandmaster never goes quiet, so the controller never asks;
     /// the simulated network is always joined.
     fn rejoin(&mut self) -> Result<RejoinOutcome> {
         Ok(RejoinOutcome {
@@ -229,7 +229,7 @@ impl NtpSource for DriftingNtp {
     }
 }
 
-// --- dantesync#146: the reported lock (DSYX [41]) audited on every run ---
+// --- dsync#146: the reported lock (DSYX [41]) audited on every run ---
 
 /// `/status.is_locked` under the phase lock is set only after the phase error `e` has been within
 /// 50 µs for 3 windows (so it is set at |e| ≤ 50 µs), never stays set through 4 windows beyond

@@ -1,10 +1,10 @@
 //! The PTP receive path as a trait: what the service's controller and the in-process follower
-//! read packets through (moved from the service's `traits.rs`, dantesync#136).
+//! read packets through (moved from the service's `traits.rs`, dsync#136).
 
 use anyhow::Result;
 use std::net::Ipv4Addr;
 
-/// dantesync#112 — where a [`PtpNetwork::rejoin`] left the PTP receive path.
+/// dsync#112 — where a [`PtpNetwork::rejoin`] left the PTP receive path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RejoinOutcome {
     /// The interface the PTP group is joined on now: the interface name on Linux, the Npcap
@@ -31,7 +31,7 @@ pub trait PtpNetwork {
         Ok(())
     }
 
-    /// dantesync#112 — open the PTP receive path again: select the interface NOW (first the one
+    /// dsync#112 — open the PTP receive path again: select the interface NOW (first the one
     /// that carries the address the grandmaster's time was last received on, else the startup
     /// selection), drop the old sockets / capture (and with them the multicast membership, which
     /// may belong to a netdev that is gone), then join again.

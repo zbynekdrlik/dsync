@@ -58,7 +58,7 @@ pub(super) fn master_runs_local_ntp_path(daily: bool) -> bool {
 }
 
 /// A follower's applicability checks (`service_date_offset`); the time server computes the
-/// replier's PTP now from the SNAPSHOT's D in effect and the live wall. dantesync#129: the
+/// replier's PTP now from the SNAPSHOT's D in effect and the live wall. dsync#129: the
 /// grandmaster UUID is report-only (1.17), so the time base alone decides, as in the controller.
 pub(super) fn follower_accepts(b: &Box_, p: &Published, master_wall_now: i64) -> bool {
     if b.core.anchor_ns().is_none() {
@@ -150,7 +150,7 @@ pub(super) fn master_reconcile(m: &mut Box_, a: &DateAuthority, t_ns: f64, w: u6
         let anchor = m.core.anchor_ns().expect("anchored");
         let gap = a.in_effect_ns(now_ptp) - d;
         if m.follower.held_slew().map(|h| h.slew) != Some(fleet_slew)
-            && gap.abs() <= dantesync::date_offset::ABSORB_TOLERANCE_NS
+            && gap.abs() <= dsync::date_offset::ABSORB_TOLERANCE_NS
         {
             if let FollowAction::Absorb { new_anchor_ns } =
                 m.follower.on_announce(a.announce(), anchor, m.wall_ns())
@@ -175,7 +175,7 @@ pub(super) fn master_reconcile(m: &mut Box_, a: &DateAuthority, t_ns: f64, w: u6
     }
     let e = m.core.last_error_ns().unwrap_or(0);
     let delta = fleet - d - e;
-    if delta.abs() > dantesync::date_offset::ABSORB_TOLERANCE_NS {
+    if delta.abs() > dsync::date_offset::ABSORB_TOLERANCE_NS {
         m.apply_step(a.seq(), delta, StepKind::Join, t_ns, w, grace);
     }
     m.core.set_anchor(fleet);

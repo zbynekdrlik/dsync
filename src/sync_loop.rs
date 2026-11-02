@@ -1,4 +1,4 @@
-//! dantesync#136 — the daemon's sync loop and its time server.
+//! dsync#136 — the daemon's sync loop and its time server.
 //!
 //! One thread drives the PTP controller: `iterate` (`main`: the 10 s status tick and one
 //! `process_loop_iteration`), then the platform's poll interval, until `running` clears. The UDP
@@ -27,7 +27,7 @@ pub const POLL_INTERVAL: Duration = Duration::from_micros(50);
 #[cfg(not(windows))]
 pub const POLL_INTERVAL: Duration = Duration::from_millis(1);
 
-/// dantesync#136 review — when the sync loop last completed an iteration (monotonic: this daemon
+/// dsync#136 review — when the sync loop last completed an iteration (monotonic: this daemon
 /// steps its own wall clock). The time server answers only while it is recent
 /// ([`crate::time_server::STATUS_STALE_AFTER`]): the status snapshot it answers from is the loop's.
 #[derive(Debug)]
@@ -114,7 +114,7 @@ pub fn run<F: FnMut()>(
     }
 }
 
-/// dantesync#136 review — the time server lives exactly as long as `run`: dropped when `run`
+/// dsync#136 review — the time server lives exactly as long as `run`: dropped when `run`
 /// returns or unwinds (a panicking iteration), it stops the server's thread and joins it. A dead
 /// loop never leaves its server answering from the last status snapshot while the clock
 /// free-runs (on Windows the loop runs on the service's own thread, so the process stays up); as

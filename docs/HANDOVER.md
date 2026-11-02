@@ -2,7 +2,7 @@
 
 ## Status
 
-This repository was `zbynekdrlik/dantesync`, renamed on 2026-11-01 (ticket airuleset#1280). The binary, the service and the config path keep the name `dantesync`. Rename them only when you decide to; the owner set that as low priority, and it touches every node.
+This repository was `zbynekdrlik/dsync`, renamed on 2026-11-01 (ticket airuleset#1280). The binary, the service and the config path keep the name `dantesync`. Rename them only when you decide to; the owner set that as low priority, and it touches every node.
 
 Owner rules from 2026-11-01:
 

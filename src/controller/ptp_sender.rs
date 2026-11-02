@@ -1,4 +1,4 @@
-//! dantesync#129 (slice 0) — who sends the PTP time this node follows, as the Sync carries it.
+//! dsync#129 (slice 0) — who sends the PTP time this node follows, as the Sync carries it.
 //!
 //! Before 1.17 the header was parsed as 36 bytes, so every node read the grandmaster UUID as the
 //! constant `ptp::LEGACY_MISREAD_GM_UUID` and never read the version or the subdomain. Now the

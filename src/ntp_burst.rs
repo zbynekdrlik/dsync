@@ -1,4 +1,4 @@
-//! dantesync#136 — the periodic NTP burst, measured off the sync loop.
+//! dsync#136 — the periodic NTP burst, measured off the sync loop.
 //!
 //! Before 1.20 the loop's periodic NTP check ran its burst (`NTP_BURST_SIZE` sequential queries,
 //! `NtpClient::get_offset`) inline: PTP processing paused for the whole burst — longer under load

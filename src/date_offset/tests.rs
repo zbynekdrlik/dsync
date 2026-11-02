@@ -513,7 +513,7 @@ fn forget_drops_the_alignment_but_keeps_a_scheduled_step() {
     );
 }
 
-// ---- dantesync#119 follow-up: the MICRO kind ------------------------------------------------
+// ---- dsync#119 follow-up: the MICRO kind ------------------------------------------------
 
 const US: i64 = 1_000;
 

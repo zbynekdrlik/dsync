@@ -1,4 +1,4 @@
-//! dantesync#131 — startup with a PINNED PTP interface: wait for exactly that NIC, open the PTP
+//! dsync#131 — startup with a PINNED PTP interface: wait for exactly that NIC, open the PTP
 //! receive path on it, and never on another NIC.
 //!
 //! The owner's ruling (1.11.2026): the interface PTP binds to is an explicit setting. stream-snv

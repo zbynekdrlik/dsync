@@ -1,4 +1,4 @@
-//! dantesync#146 — a closed-loop simulation of the WHOLE controller under the phase lock: the rate
+//! dsync#146 — a closed-loop simulation of the WHOLE controller under the phase lock: the rate
 //! servo's acquisition, the phase lock's engagement, the reported lock (`/status.is_locked`, DSYX
 //! [41]) and its phase error `e`, through a cold or seeded boot, a coordinated date step and a
 //! grandmaster frequency step.

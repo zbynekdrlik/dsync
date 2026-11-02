@@ -29,7 +29,7 @@
 //! - `[62]`    Flags: bit 0 = ntp_failed, bit 1 = settled
 //! - `[63]`    Reserved (zero)
 //!
-//! # The meaning of [41] and [62] (dantesync#146)
+//! # The meaning of [41] and [62] (dsync#146)
 //!
 //! **`[41]` = 1 means the clock is safe for a 250 µs Dante flow** (the stack gates its media-clock
 //! ready on this byte alone). Under `system.clock_discipline = "ptp_phase_lock"` (the default) it
@@ -39,11 +39,11 @@
 //! - set once the phase lock owns the frequency word and |e| ≤ 50 µs for 3 consecutive windows
 //!   (0.5 s each);
 //! - cleared when |e| > 150 µs for 4 consecutive windows, when the phase lock disengages, or when
-//!   PTP goes stale (no allowed Sync / Follow_Up for 10 s, dantesync#112). After the first lock
+//!   PTP goes stale (no allowed Sync / Follow_Up for 10 s, dsync#112). After the first lock
 //!   neither a boot's phase pull nor a date step moves it; a grandmaster frequency step large
 //!   enough to take `e` past 150 µs (a 25 ppm step: ~450 µs) clears it once, and it is set again
 //!   once `e` is back within 50 µs. A phase jump while engaged clears it and the phase lock
-//!   re-aligns within 3 s (dantesync#146 `REALIGN_ENGAGED_WINDOWS`).
+//!   re-aligns within 3 s (dsync#146 `REALIGN_ENGAGED_WINDOWS`).
 //!
 //! Under `"legacy"` it is the rate servo's lock (5 windows with |rate| < 5 µs/s), as before 1.23.
 //! The tray and the IPC read the same `/status.is_locked`: one definition.
@@ -51,7 +51,7 @@
 //! **`[62]` bit 1 (`settled`) only means** that the first PTP Sync was accepted after the warmup
 //! and PTP is not stale. It says nothing about the frequency or the phase: read `[41]` for that.
 //!
-//! # dantesync#88 — the date-offset extension (versioned, opt-in by the REQUEST)
+//! # dsync#88 — the date-offset extension (versioned, opt-in by the REQUEST)
 //!
 //! A request whose magic is `"DSYX"` (0x44535958) instead of `"DSYN"`, zero-padded to 64 bytes
 //! (so the reply never amplifies it; a shorter one is ignored), asks for the reply's versioned
@@ -59,7 +59,7 @@
 //! the [`crate::date_offset`] extension (`[64]` version, `[65]` flags with bit 0 = the fleet's
 //! date-offset AUTHORITY, `[68-75]` `date_offset_ns`, `[76-83]` `effective_ptp_ns`, `[84-87]`
 //! `seq`, `[88-93]` the anchor's grandmaster UUID, `[96-103]` the replier's PTP "now"; since
-//! dantesync#119 version 2: flags bit 1 = a SLEW, `[66-67]` its ppm, `[104-111]` its start `D`).
+//! dsync#119 version 2: flags bit 1 = a SLEW, `[66-67]` its ppm, `[104-111]` its start `D`).
 //! See `date_offset::EXT_SIZE` for the authoritative layout. Compatibility, both directions:
 //!
 //! - an OLD client sends `"DSYN"` and gets the byte-identical 64-byte reply it always got — it
@@ -95,7 +95,7 @@ pub const TIME_SERVER_PORT: u16 = 31900;
 /// Request magic bytes: "DSYN"
 const REQUEST_MAGIC: u32 = 0x4453594E;
 
-/// dantesync#88 — request magic "DSYX": the base reply PLUS the versioned date-offset extension.
+/// dsync#88 — request magic "DSYX": the base reply PLUS the versioned date-offset extension.
 const REQUEST_MAGIC_EXT: u32 = 0x44535958;
 
 /// Response magic bytes: "DSYR"
@@ -107,22 +107,22 @@ const REQUEST_SIZE: usize = 8;
 /// Response packet size
 const RESPONSE_SIZE: usize = 64;
 
-/// dantesync#88 — size of a `"DSYX"` request: padded to the base reply's size, so the extended
+/// dsync#88 — size of a `"DSYX"` request: padded to the base reply's size, so the extended
 /// reply is never much larger than the request that asked for it (no amplification).
 pub const EXT_REQUEST_SIZE: usize = RESPONSE_SIZE;
 
-/// dantesync#88 — receive buffer for requests: exactly the largest request we accept (a padded
+/// dsync#88 — receive buffer for requests: exactly the largest request we accept (a padded
 /// `"DSYX"`). A datagram larger than the buffer fails `recv_from` on Windows (`WSAEMSGSIZE`)
 /// instead of being truncated, so this must never shrink below [`EXT_REQUEST_SIZE`].
 const REQUEST_BUF_SIZE: usize = 64;
 const _: () = assert!(REQUEST_BUF_SIZE >= EXT_REQUEST_SIZE);
 
-/// dantesync#136 — how long the server's thread waits for a query before it looks at `running`
+/// dsync#136 — how long the server's thread waits for a query before it looks at `running`
 /// again (its shutdown latency). A BLOCKING socket with this read timeout, never a non-blocking
 /// one (that busy-spins a core, #340).
 pub const TIME_SERVER_READ_TIMEOUT: Duration = Duration::from_millis(100);
 
-/// dantesync#136 review — the time server answers only while the sync loop has completed an
+/// dsync#136 review — the time server answers only while the sync loop has completed an
 /// iteration within this ([`crate::sync_loop::LoopHeartbeat`], monotonic). The status snapshot is
 /// the loop's: a loop dead or wedged for longer leaves it describing a clock that now free-runs.
 /// An iteration normally takes about one poll interval (1 ms / 50 µs, a non-blocking pass); the
@@ -131,7 +131,7 @@ pub const TIME_SERVER_READ_TIMEOUT: Duration = Duration::from_millis(100);
 /// longer answers nobody — as before 1.20, when the loop itself answered.
 pub const STATUS_STALE_AFTER: Duration = Duration::from_secs(3);
 
-/// dantesync#136 review — whether the snapshot is fresh enough to answer from, and the moment that
+/// dsync#136 review — whether the snapshot is fresh enough to answer from, and the moment that
 /// changes (logged once per transition, never per query).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Freshness {
@@ -152,7 +152,7 @@ impl Freshness {
     }
 }
 
-/// dantesync#136 review — the server's view of the loop's heartbeat: `stale` is what the previous
+/// dsync#136 review — the server's view of the loop's heartbeat: `stale` is what the previous
 /// look saw (initially fresh: `run` creates the heartbeat as it starts the server).
 #[derive(Debug, Default)]
 pub(crate) struct FreshnessGate {
@@ -178,7 +178,7 @@ impl FreshnessGate {
 /// Listens on port 31900 and responds to time queries with precise clock data
 /// including system time, monotonic counter, and sync status.
 ///
-/// dantesync#136: it answers on a thread of its own ([`TimeServer::spawn`], `time-server`), from
+/// dsync#136: it answers on a thread of its own ([`TimeServer::spawn`], `time-server`), from
 /// the latest status snapshot — a query never waits for PTP processing or an NTP burst. Before
 /// 1.20 the sync loop answered between its iterations, so every query waited behind them (200 ms
 /// replies missed under load). It answers only while the sync loop runs
@@ -213,7 +213,7 @@ impl TimeServer {
         Ok(self.socket.local_addr()?)
     }
 
-    /// dantesync#136 — answer on a thread of its own (`time-server`) until `running` clears
+    /// dsync#136 — answer on a thread of its own (`time-server`) until `running` clears
     /// (within [`TIME_SERVER_READ_TIMEOUT`]); the socket closes when the thread ends. A query is
     /// answered only while the sync loop's `heartbeat` is within [`STATUS_STALE_AFTER`].
     pub fn spawn(
@@ -414,7 +414,7 @@ fn build_response(request_id: u32, status: &SyncStatus) -> [u8; RESPONSE_SIZE] {
     resp
 }
 
-/// dantesync#88 — the date-offset extension this node publishes, from its status. `None` until
+/// dsync#88 — the date-offset extension this node publishes, from its status. `None` until
 /// the node has a date-offset state (not PTP-phase-locked yet, or the legacy discipline). The
 /// AUTHORITY flag is set only on the master — a follower mirrors its state for observability but
 /// must never be adopted by anyone.
@@ -424,11 +424,11 @@ fn build_response(request_id: u32, status: &SyncStatus) -> [u8; RESPONSE_SIZE] {
 /// `date_offset_effective_ptp_ns` (the step's future instant). The controller writes the anchor
 /// and the pending step in ONE status update, so a reader never sees the step counted twice.
 ///
-/// dantesync#119: when the published change is a SLEW (`date_slew_from_ns` / `date_slew_to_ns` /
+/// dsync#119: when the published change is a SLEW (`date_slew_from_ns` / `date_slew_to_ns` /
 /// `date_slew_ppm`), the announce is the slew — its end `D`, its start instant and its rate — and
 /// never a pending step.
 ///
-/// dantesync#119 follow-up: `date_offset_micro` marks the published change as a MICRO-correction
+/// dsync#119 follow-up: `date_offset_micro` marks the published change as a MICRO-correction
 /// (extension v3 flag bit 2).
 fn date_extension_from_status(status: &SyncStatus, now_wall_ns: i64) -> Option<DateExtension> {
     let in_effect = status.date_offset_ns?;
@@ -443,7 +443,7 @@ fn date_extension_from_status(status: &SyncStatus, now_wall_ns: i64) -> Option<D
     Some(DateExtension {
         version: crate::date_offset::EXT_VERSION,
         authority: status.date_authority == "master",
-        // dantesync#129 (slice 0): no D without the anchor's grandmaster, but the wire carries the
+        // dsync#129 (slice 0): no D without the anchor's grandmaster, but the wire carries the
         // constant pre-1.17 nodes misread: a 1.16 follower adopts an announce only when its UUID
         // equals its own (misread) anchor's, and a 1.17 follower no longer compares it. Any
         // upgrade order keeps the fleet on one date. `/status.date_offset_gm_uuid` stays real.
@@ -465,7 +465,7 @@ fn date_extension_from_status(status: &SyncStatus, now_wall_ns: i64) -> Option<D
     })
 }
 
-/// dantesync#88 — the reply to a `"DSYX"` request: the unchanged 64-byte base, then the
+/// dsync#88 — the reply to a `"DSYX"` request: the unchanged 64-byte base, then the
 /// extension when this node has a date-offset state (else just the base).
 fn build_response_ext(request_id: u32, status: &SyncStatus) -> Vec<u8> {
     let mut out = build_response(request_id, status).to_vec();
@@ -479,7 +479,7 @@ fn build_response_ext(request_id: u32, status: &SyncStatus) -> Vec<u8> {
     out
 }
 
-/// dantesync#88 — a `"DSYX"` request: the `"DSYN"` layout (magic, request id), zero-padded to
+/// dsync#88 — a `"DSYX"` request: the `"DSYN"` layout (magic, request id), zero-padded to
 /// [`EXT_REQUEST_SIZE`].
 pub fn build_ext_request(request_id: u32) -> [u8; EXT_REQUEST_SIZE] {
     let mut req = [0u8; EXT_REQUEST_SIZE];
@@ -488,7 +488,7 @@ pub fn build_ext_request(request_id: u32) -> [u8; EXT_REQUEST_SIZE] {
     req
 }
 
-/// dantesync#88 — what a follower learns from one reply of its NTP master.
+/// dsync#88 — what a follower learns from one reply of its NTP master.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AuthorityReply {
     /// Increments on every reply the poller stores, so a consumer acts on each reply once.
@@ -508,7 +508,7 @@ pub struct AuthorityReply {
     pub received: Instant,
 }
 
-/// dantesync#88 — parse a reply to `build_ext_request(request_id)`. `None` for a short packet,
+/// dsync#88 — parse a reply to `build_ext_request(request_id)`. `None` for a short packet,
 /// a wrong magic, or a stale reply to a different request.
 pub fn parse_reply(
     buf: &[u8],
@@ -537,7 +537,7 @@ pub fn parse_reply(
     })
 }
 
-/// dantesync#88 — where the controller reads the latest reply of the date-offset authority.
+/// dsync#88 — where the controller reads the latest reply of the date-offset authority.
 /// Boxed in the controller so a test injects a scripted authority; the real one is
 /// [`UdpAuthorityPoller`].
 pub trait DateAuthoritySource: Send {
@@ -570,7 +570,7 @@ pub const AUTHORITY_SILENT_POLLS_BEFORE_BACKOFF: u32 = 60;
 /// Poll cadence while backed off. The first reply restores the 1 s cadence for good.
 pub const AUTHORITY_BACKOFF_INTERVAL: Duration = Duration::from_secs(30);
 
-/// dantesync#88 — the poller's cadence. 1 s, except for a host that has never answered `"DSYX"`
+/// dsync#88 — the poller's cadence. 1 s, except for a host that has never answered `"DSYX"`
 /// since this poller started: after a minute of silence that one is polled every 30 s. A host that
 /// answered once is a real authority, and a silence from it (a reboot, a network blip) never slows
 /// the poll: an announce it makes when it is back is at most 5 s ahead of its instant, and a
@@ -608,7 +608,7 @@ impl PollBackoff {
     }
 }
 
-/// dantesync#88 — polls the NTP master's 31900 with `"DSYX"` once per second on its own thread
+/// dsync#88 — polls the NTP master's 31900 with `"DSYX"` once per second on its own thread
 /// (every 30 s while a host that never answered stays silent, see [`PollBackoff`]) and keeps the
 /// latest valid reply. DNS resolution and socket waits happen on that thread, so
 /// the sync loop only ever takes a short mutex.

@@ -1,4 +1,4 @@
-//! dantesync#126 — the coordinated date step ON REQUEST, controller side: only the NTP master
+//! dsync#126 — the coordinated date step ON REQUEST, controller side: only the NTP master
 //! on the fleet line announces it (the whole current UTC error, one coordinated step two leads
 //! ahead, scheduled on its own wall and published at once), a follower schedules it from the
 //! published announce, and every refusal says why. The HTTP route's end is

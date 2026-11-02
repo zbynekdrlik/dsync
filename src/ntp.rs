@@ -8,7 +8,7 @@ use std::time::Duration;
 // A SINGLE raw NTP round trip is contaminated by userspace scheduling jitter
 // (a delayed thread wakeup on either end stretches the measured offset). On a
 // heavily-loaded Windows box this scatters the reported offset by tens of
-// milliseconds even while the PTP servo reports locked — see dantesync#53.
+// milliseconds even while the PTP servo reports locked — see dsync#53.
 //
 // Fix (wired into `NtpClient::get_offset()` in the GREEN commit): take a
 // BURST of raw measurements per check, keep only the lowest-round-trip-delay
@@ -60,7 +60,7 @@ pub struct FilteredOffset {
     /// even after RTT selection; a badly-measured one still shows a large
     /// spread here even though `offset_us` is a single defined number. NEVER
     /// read `offset_us` alone as "the node is fine" — check `spread_us` too
-    /// (dantesync#53 — filtering must never hide instability).
+    /// (dsync#53 — filtering must never hide instability).
     pub spread_us: u64,
     /// How many samples fed the median (<= `NTP_BURST_ACCEPT_N`; lower after a
     /// partial burst failure — also a reason to trust the value less).
@@ -112,7 +112,7 @@ pub fn filter_offset(samples: &[RawSample], accept_n: usize) -> Option<FilteredO
 }
 
 /// A published NTP measurement: the offset/sign pair `SystemClock::step_clock`
-/// and the #50 step-agreement gate need, PLUS the quality fields (dantesync#53)
+/// and the #50 step-agreement gate need, PLUS the quality fields (dsync#53)
 /// that let a consumer tell a well-measured node from a badly-measured one
 /// instead of the filtering silently hiding instability.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -123,7 +123,7 @@ pub struct NtpMeasurement {
     pub spread_us: u64,
     /// See `FilteredOffset::sample_count`.
     pub sample_count: usize,
-    /// dantesync#53 continuation: whether the kernel-timestamped Npcap
+    /// dsync#53 continuation: whether the kernel-timestamped Npcap
     /// transport was used for EVERY sample in this burst (never smoothed —
     /// `false` the instant even one sample fell back to userspace rsntp).
     /// Surfaces the silent-degradation failure mode confirmed live on the
@@ -133,7 +133,7 @@ pub struct NtpMeasurement {
     pub pcap_active: bool,
 }
 
-/// dantesync#134 re-review: the server answered "clock unsynchronized" (LI = 3) — rsntp's
+/// dsync#134 re-review: the server answered "clock unsynchronized" (LI = 3) — rsntp's
 /// `ServerNotSynchronized` (the Windows Npcap transport falls back to rsntp, which says the same).
 pub fn is_server_unsynchronized(e: &anyhow::Error) -> bool {
     e.chain().any(|cause| {
@@ -148,7 +148,7 @@ pub fn is_server_unsynchronized(e: &anyhow::Error) -> bool {
 
 pub struct NtpClient {
     server: String,
-    // dantesync#53: on Windows, a persistent kernel-timestamped (Npcap)
+    // dsync#53: on Windows, a persistent kernel-timestamped (Npcap)
     // transport, opened once at construction. `None` means either this
     // isn't Windows, or Npcap init failed (loudly logged in `new()`) — in
     // both cases `measure_once()` falls back to the `rsntp` path below.
@@ -157,7 +157,7 @@ pub struct NtpClient {
 }
 
 impl NtpClient {
-    /// dantesync#53 continuation: no longer takes an `interface_name` — the
+    /// dsync#53 continuation: no longer takes an `interface_name` — the
     /// Npcap NTP capture device (Windows only) is now selected by which
     /// interface can actually REACH `server`, not by inheriting the PTP
     /// capture interface (which fails outright on a dual-homed host where
@@ -172,7 +172,7 @@ impl NtpClient {
                     log::warn!(
                         "[NTP] Npcap kernel-timestamped transport unavailable ({}), falling back \
                          to userspace rsntp for ALL samples — offset scatter is the KNOWN defect \
-                         this transport exists to fix (dantesync#53)",
+                         this transport exists to fix (dsync#53)",
                         e
                     );
                     None
@@ -185,7 +185,7 @@ impl NtpClient {
         }
         #[cfg(not(windows))]
         {
-            // dantesync#52: the Linux NTP client is rsntp, whose socket is created
+            // dsync#52: the Linux NTP client is rsntp, whose socket is created
             // internally (no setsockopt handle) — nothing to mark here; the request
             // direction is covered by an nftables mangle rule at provisioning. See
             // `crate::dscp` for the coverage split.
@@ -218,11 +218,11 @@ impl NtpClient {
     }
 
     /// One measurement, preferring the kernel-timestamped Npcap transport on
-    /// Windows (dantesync#53) and falling back to the userspace `rsntp` path
+    /// Windows (dsync#53) and falling back to the userspace `rsntp` path
     /// — on Linux always, on Windows only when Npcap init failed at
     /// construction or a single round trip fails transiently (logged either
     /// way; never a silent fallback). The `bool` reports whether THIS sample
-    /// was satisfied by the pcap transport (dantesync#53 continuation:
+    /// was satisfied by the pcap transport (dsync#53 continuation:
     /// `pcap_ntp_active` status signal) — always `false` on non-Windows,
     /// where no such transport exists.
     fn measure_once(&self) -> (Result<RawSample>, bool) {
@@ -283,7 +283,7 @@ impl NtpClient {
     }
 
     /// Fetches the current offset from the NTP server as a burst-filtered,
-    /// RTT-selected measurement (dantesync#53) instead of a single unfiltered
+    /// RTT-selected measurement (dsync#53) instead of a single unfiltered
     /// round trip.
     ///
     /// Returns the offset required to apply to the local system time
@@ -308,7 +308,7 @@ impl NtpClient {
         let filtered = filter_offset(&raw, NTP_BURST_ACCEPT_N)
             .ok_or_else(|| last_err.unwrap_or_else(|| anyhow!("NTP burst: no server response")))?;
 
-        // dantesync#53 continuation: pure, Linux-testable aggregation --
+        // dsync#53 continuation: pure, Linux-testable aggregation --
         // `true` only when EVERY sample in the burst used the kernel-
         // timestamped pcap transport (never smoothed away by a partial
         // fallback).
@@ -337,7 +337,7 @@ impl NtpClient {
     }
 }
 
-/// dantesync#136 — `main` hands the controller the same client the `ntp-burst` thread measures
+/// dsync#136 — `main` hands the controller the same client the `ntp-burst` thread measures
 /// with (one client: one Windows Npcap transport). The inherent `get_offset` above.
 impl crate::traits::NtpSource for NtpClient {
     fn get_offset(&self) -> Result<NtpMeasurement> {
@@ -356,7 +356,7 @@ mod tests {
         RawSample, NTP_BURST_ACCEPT_N,
     };
 
-    /// dantesync#134 re-review: the boot reading tells "the server says unsynchronized" (a master
+    /// dsync#134 re-review: the boot reading tells "the server says unsynchronized" (a master
     /// whose wall is not placed) from every other failure — only that one is asked again.
     #[test]
     fn an_unsynchronized_server_is_told_apart_from_other_ntp_failures_134() {

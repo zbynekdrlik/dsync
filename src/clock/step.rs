@@ -1,4 +1,4 @@
-//! dantesync#119 (1.11.1) — the STEP LAW: move the wall by exactly the amount asked for.
+//! dsync#119 (1.11.1) — the STEP LAW: move the wall by exactly the amount asked for.
 //!
 //! # Why a step must be exact
 //!

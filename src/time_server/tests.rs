@@ -223,7 +223,7 @@ fn test_build_response_ntp_offset_negative() {
     assert_eq!(ntp_off, -42000);
 }
 
-// ---- dantesync#88: the versioned date-offset extension ------------------------------
+// ---- dsync#88: the versioned date-offset extension ------------------------------
 
 fn master_status() -> SyncStatus {
     let mut status = SyncStatus::default();
@@ -422,7 +422,7 @@ fn a_micro_correction_is_published_with_its_micro_flag_119() {
     assert!(!e.announce.micro);
 }
 
-/// dantesync#129 (slice 0): a 1.16 follower adopts an announce only when its GM UUID equals its own
+/// dsync#129 (slice 0): a 1.16 follower adopts an announce only when its GM UUID equals its own
 /// anchor's, which it misread as `LEGACY_MISREAD_GM_UUID`. A 1.17 master therefore keeps
 /// announcing that constant, so the fleet adopts it in any upgrade order; a 1.17 follower no
 /// longer compares the UUID (the time base decides). `/status.date_offset_gm_uuid` stays real.
@@ -525,7 +525,7 @@ fn reply_within_5s(client: &UdpSocket, buf: &mut [u8]) -> usize {
 #[test]
 fn the_server_answers_dsyn_with_64_bytes_and_dsyx_with_the_extension_over_real_udp_88() {
     // End-to-end over loopback, served the way the daemon serves it (`crate::sync_loop::run`,
-    // dantesync#136). Bind the server on an ephemeral port (not 31900, which a running daemon may
+    // dsync#136). Bind the server on an ephemeral port (not 31900, which a running daemon may
     // hold).
     let server = TimeServer::bind("127.0.0.1:0").unwrap();
     let addr = server.local_addr().unwrap();
@@ -574,7 +574,7 @@ fn the_server_answers_dsyn_with_64_bytes_and_dsyx_with_the_extension_over_real_u
     sync_loop.join().unwrap();
 }
 
-/// dantesync#136 — the server's own thread ignores what it always ignored (a runt, a foreign
+/// dsync#136 — the server's own thread ignores what it always ignored (a runt, a foreign
 /// magic, a query while the status lock is poisoned) and answers the next query.
 #[test]
 fn the_server_thread_ignores_junk_and_answers_the_next_query_136() {
@@ -679,7 +679,7 @@ fn the_server_does_not_answer_from_a_stale_status_and_answers_again_once_it_is_f
         .expect("the time-server thread ends without a panic");
 }
 
-/// dantesync#136 review — a stale ↔ fresh change is reported once (the server logs it), never per
+/// dsync#136 review — a stale ↔ fresh change is reported once (the server logs it), never per
 /// look; only a fresh snapshot is answered from.
 #[test]
 fn the_freshness_gate_reports_each_transition_once_136() {

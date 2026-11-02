@@ -1,4 +1,4 @@
-//! dantesync#112 — the controller's PTP liveness: the re-join of the PTP multicast group while no
+//! dsync#112 — the controller's PTP liveness: the re-join of the PTP multicast group while no
 //! allowed PTP packet comes, and what `/status` says meanwhile.
 //!
 //! A node used to keep `mode=LOCK is_locked=true` for days with zero PTP frames on the wire: the
@@ -39,21 +39,21 @@ pub(super) struct PtpLiveness {
     pub(super) rx: RxWindow,
     /// `/status.rejoin`.
     pub(super) rejoin: RejoinStatus,
-    /// dantesync#131: the last re-join found the PINNED interface unusable (missing, or no IPv4):
+    /// dsync#131: the last re-join found the PINNED interface unusable (missing, or no IPv4):
     /// the clock alarm's reason naming the NIC, cleared by a successful re-join or an allowed
     /// packet. While it is set the re-join is retried every [`PINNED_WAIT_RETRY`].
     pub(super) interface_problem: Option<String>,
-    /// dantesync#131: the pinned interface (`main`'s `set_ptp_interface`); `None` = not pinned.
+    /// dsync#131: the pinned interface (`main`'s `set_ptp_interface`); `None` = not pinned.
     /// Any re-join failure of a pinned node is a fault of THAT interface: named, retried fast.
     pub(super) pinned: Option<String>,
 }
 
-/// dantesync#131 — while the pinned interface stays unusable, a fast look's two lines are WARN on
+/// dsync#131 — while the pinned interface stays unusable, a fast look's two lines are WARN on
 /// a changed reason and every this many looks (5 min at [`PINNED_WAIT_RETRY`]), DEBUG between.
 /// The first failure is a normal scheduled attempt (WARN). The clock alarm keeps its own cadence.
 pub(super) const PINNED_WAIT_LOG_EVERY: u32 = 60;
 
-/// dantesync#131 — the level of a fast look's two lines (the announce and the failure) while a
+/// dsync#131 — the level of a fast look's two lines (the announce and the failure) while a
 /// pinned NIC stays unusable: WARN when the reason changed and on every
 /// [`PINNED_WAIT_LOG_EVERY`]th attempt, DEBUG between.
 pub(super) fn pinned_wait_log_level(attempt: u32, changed: bool) -> log::Level {
@@ -64,7 +64,7 @@ pub(super) fn pinned_wait_log_level(attempt: u32, changed: bool) -> log::Level {
     }
 }
 
-/// dantesync#131 — while the pinned interface is unusable, look again this often (a cheap
+/// dsync#131 — while the pinned interface is unusable, look again this often (a cheap
 /// interface lookup, nothing is opened): a NIC that comes back is joined within seconds, not at
 /// the 30..300 s backoff of a re-join that did open something.
 pub(super) const PINNED_WAIT_RETRY: Duration = Duration::from_secs(5);
@@ -258,7 +258,7 @@ where
         }
     }
 
-    /// dantesync#131 — the startup join (`main`): the pin (or `None`) and where PTP joined.
+    /// dsync#131 — the startup join (`main`): the pin (or `None`) and where PTP joined.
     /// Published at once in `/status`; each successful re-join updates the joined interface.
     pub fn set_ptp_interface(&mut self, configured: Option<String>, iface: &str, ip: Ipv4Addr) {
         self.ptp_liveness.pinned = configured.clone();

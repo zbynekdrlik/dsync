@@ -11,7 +11,7 @@ paths:
   - "src/traits.rs"
 ---
 
-# PTP liveness: the re-join and the honest `/status` while PTP is stale (dantesync#112)
+# PTP liveness: the re-join and the honest `/status` while PTP is stale (dsync#112)
 
 ## The failure it fixes
 

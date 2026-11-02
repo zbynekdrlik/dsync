@@ -1,4 +1,4 @@
-//! dantesync#119 — the controller wiring of the coordinated date slew: no backward step, the rate
+//! dsync#119 — the controller wiring of the coordinated date slew: no backward step, the rate
 //! term inside the one frequency word and switched from the loop, every PTP sample de-slewed, the
 //! fold, the master's catch-up and what `/status` publishes. Reuses the `date_sync` test helpers.
 
@@ -12,7 +12,7 @@ use crate::date_offset::{DateSlew, SlewSpec};
 use crate::traits::{MockNtpSource, MockPtpNetwork};
 
 // ========================================================================
-// dantesync#119 — A BACKWARD CORRECTION IS A COORDINATED SLEW
+// dsync#119 — A BACKWARD CORRECTION IS A COORDINATED SLEW
 // ========================================================================
 //
 // The slew's law (the direction decision, the schedule, the follower's hold / join / fold) is

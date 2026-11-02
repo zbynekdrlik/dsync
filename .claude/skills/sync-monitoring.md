@@ -28,7 +28,7 @@ built-in list, so always pass `--hosts`.
 - `1-5ms`: DRIFT - May need investigation
 - `> 5ms`: ERROR - Sync problem detected
 
-**NTP measurement quality (dantesync#53):** `ntp_offset_us` (status JSON / tray) is a
+**NTP measurement quality (dsync#53):** `ntp_offset_us` (status JSON / tray) is a
 burst-filtered, RTT-selected MEDIAN (5 raw samples/check, lowest-3-RTT accepted), not a single raw
 round trip. Two fields expose whether to TRUST that median: `ntp_spread_us` (max-min across the
 accepted samples — large even when the offset itself looks reasonable means the node's NTP

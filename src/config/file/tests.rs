@@ -1,4 +1,4 @@
-//! dantesync#116 — loading `config.json` never destroys it (the 13.9.2026 strih incident: a BOM
+//! dsync#116 — loading `config.json` never destroys it (the 13.9.2026 strih incident: a BOM
 //! write made the parse fail and the daemon overwrote the master's config with the defaults).
 
 use super::*;

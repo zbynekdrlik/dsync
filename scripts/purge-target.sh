@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # WHY (#61): dantesync is Tier-0 — CI's release workflow (.github/workflows/release.yml) builds
-# and publishes dantesync-linux-amd64 + dantesync-windows-amd64.exe (+ tray) on tag push, gated
+# and publishes dsync-linux-amd64 + dsync-windows-amd64.exe (+ tray) on tag push, gated
 # all-or-nothing (needs: build); locally we run only cheap checks (cargo check / clippy / test
 # --no-run). But cargo's project-local target/ has NO garbage collection (rust-lang/cargo#5026):
 # every incremental/profile/bin combination leaves artifacts that are never auto-removed. The

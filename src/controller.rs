@@ -26,33 +26,33 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
-/// dantesync#117 / #88 — the PTP phase lock and fleet date-offset glue (the frequency word once
+/// dsync#117 / #88 — the PTP phase lock and fleet date-offset glue (the frequency word once
 /// locked, the NTP master's authority, a follower's poll/join/schedule, the coordinated step, the
 /// status fields). A child module so it can reach the controller's private state without growing
 /// this file; its state is the one `date_sync` field.
 mod date_sync;
 pub use date_sync::{BootNtpError, BootNtpResult, BootNtpSpawner};
 
-/// dantesync#112 — PTP liveness: the multicast re-join while no allowed PTP packet comes, and the
+/// dsync#112 — PTP liveness: the multicast re-join while no allowed PTP packet comes, and the
 /// honest `/status` meanwhile. A child module like `date_sync`; its state is the one
 /// `ptp_liveness` field.
 mod ptp_liveness;
 
-/// dantesync#129 — the PTP sender's and the grandmaster's identity as a Sync carries them: logged
+/// dsync#129 — the PTP sender's and the grandmaster's identity as a Sync carries them: logged
 /// and published on `/status`, report-only. A child module like `date_sync`; its state is the one
 /// `current_ptp_sender` field.
 mod ptp_sender;
 use ptp_sender::{describe_grandmaster, PtpSender};
 
-/// dantesync#136 — the periodic NTP check with its burst off the sync loop (`main`'s `ntp-burst`
+/// dsync#136 — the periodic NTP check with its burst off the sync loop (`main`'s `ntp-burst`
 /// thread). A child module like `date_sync`.
 mod ntp_check;
 
-/// dantesync#142 — a window without a previous offset is not a measurement.
+/// dsync#142 — a window without a previous offset is not a measurement.
 #[cfg(test)]
 mod first_window_tests;
 
-/// dantesync#146 (the #142 coverage-timing lesson, round 2): the heavy closed-loop simulations
+/// dsync#146 (the #142 coverage-timing lesson, round 2): the heavy closed-loop simulations
 /// and the one wall-clock-timing test of this binary take this lock, so they never run beside
 /// each other. Under CI's tarpaulin (one ptrace tracer for every thread) the #142 and #146 sims
 /// together stalled `the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136` to
@@ -65,7 +65,7 @@ pub(crate) fn heavy_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// dantesync#142 — the learned frequency across a restart (`crate::drift_file`): the seed at
+/// dsync#142 — the learned frequency across a restart (`crate::drift_file`): the seed at
 /// start, its judge, the save while LOCKED. A child module like `date_sync`; its state is the one
 /// `freq_seed` field.
 mod freq_seed;
@@ -74,7 +74,7 @@ mod freq_seed;
 // HELPER FUNCTIONS
 // ============================================================================
 
-/// dantesync#117/#88 — the wall clock now, ns since the Unix epoch. `t2` (the PTP receive time)
+/// dsync#117/#88 — the wall clock now, ns since the Unix epoch. `t2` (the PTP receive time)
 /// is on this same clock, so `wall − D` is this box's view of the grandmaster's PTP time.
 fn wall_now_ns() -> i64 {
     SystemTime::now()
@@ -305,13 +305,13 @@ const NTP_STEP_AGREEMENT_TOL_US: i64 = NTP_STEP_THRESHOLD_BASE_US; // Same-sign 
 // magnitude comparable to or larger than the true ~190-380us/check drift
 // signal -- so "small" is not a reliable trust signal there, and the fast
 // lane chased that noise into a step roughly every ~10s on the live canary
-// (dantesync#76). None of these are new config surface -- consistent with
+// (dsync#76). None of these are new config surface -- consistent with
 // NTP_STEP_THRESHOLD_BASE_US et al already being hardcoded, and avoiding
 // config-migration.md's JSON risk for values only the fleet's own clock
 // architecture should tune. Client-mode behavior (threshold, cadence,
 // agreement) is entirely unaffected -- every use is gated on
-// `self.ntp_server_mode`. See the design comments on dantesync#71 and
-// dantesync#76 for the full numeric derivations.
+// `self.ntp_server_mode`. See the design comments on dsync#71 and
+// dsync#76 for the full numeric derivations.
 //
 // #76's fix: NO single-sample fast lane -- server mode ALWAYS requires
 // NTP_STEP_AGREEMENT_N (2) same-sign agreeing samples, same as before #71
@@ -329,9 +329,9 @@ const NTP_STEP_AGREEMENT_TOL_US: i64 = NTP_STEP_THRESHOLD_BASE_US; // Same-sign 
 // seven immediate steps.
 //
 // NTP_SERVER_MAX_BURST_SPREAD_US is a second, independent layer: a burst
-// whose OWN spread_us (dantesync#53's quality signal, already computed and
+// whose OWN spread_us (dsync#53's quality signal, already computed and
 // published, previously never consulted by ntp_step_gate in either mode --
-// dantesync#74's own accepted trade-off, now proven load-bearing rather than
+// dsync#74's own accepted trade-off, now proven load-bearing rather than
 // safely deferrable) exceeds this bound is skipped ENTIRELY for step-
 // decision purposes at the check_ntp_utc_tracking call site -- it neither
 // starts, confirms, nor contradicts a pending candidate. /status publishing
@@ -347,7 +347,7 @@ const NTP_STEP_AGREEMENT_TOL_US: i64 = NTP_STEP_THRESHOLD_BASE_US; // Same-sign 
 // promptly. This trade-off has NOT been validated live for PTP-lock quality
 // specifically -- the supervisor's post-release canary on strih should
 // confirm it, alongside grepping the log for `Stepped` frequency (per
-// dantesync#76's own canary-methodology note: `/status` publishes the
+// dsync#76's own canary-methodology note: `/status` publishes the
 // POST-correction residual and is blind to a stepping-frequency regression).
 // ============================================================================
 const NTP_SERVER_STEP_THRESHOLD_US: i64 = 200; // still >>5-32us measured single-query noise (#53); catches genuine drift earlier than the client's 500us floor
@@ -358,9 +358,9 @@ const NTP_SERVER_CHECK_INTERVAL_SECS: u64 = 10; // independent of calculate_adap
                                                 // cadence 10-30s), long enough that a brief flap keeps its DC but a real reference change relearns.
 const PHASE_SLEW_MAX_PRESERVE_STREAK: u32 = 5;
 const NTP_SERVER_AGREEMENT_TOL_US: i64 = 400; // #76: FIXED (non-scaling) tolerance sized to the true ~190-380us/check accrual, not to a possibly-noisy candidate's own magnitude
-const NTP_SERVER_MAX_BURST_SPREAD_US: u64 = 600; // #76: a burst this noisy internally is low-quality evidence and is excluded from the step decision entirely -- 600, not the ~500 first suggested, so it does not also exclude strih's own genuine 588us-spread large-error-recovery reading (dantesync#68's own fixture); still well below the observed WAN noise burst spreads (up to 1356us)
+const NTP_SERVER_MAX_BURST_SPREAD_US: u64 = 600; // #76: a burst this noisy internally is low-quality evidence and is excluded from the step decision entirely -- 600, not the ~500 first suggested, so it does not also exclude strih's own genuine 588us-spread large-error-recovery reading (dsync#68's own fixture); still well below the observed WAN noise burst spreads (up to 1356us)
 
-// #83 CORRECTION -- discovered while verifying the corrected 2500us deadband (dantesync#83's own
+// #83 CORRECTION -- discovered while verifying the corrected 2500us deadband (dsync#83's own
 // supervisor follow-up), not part of the original ask, but required to actually deliver a safe
 // result: at the TOP of the live-measured drift range (66ppm, 660us/10s-interval accrual), the
 // per-check accrual EXCEEDS the routine NTP_SERVER_AGREEMENT_TOL_US (400us) -- exactly the #76
@@ -533,7 +533,7 @@ const NTP_SERVER_MAX_CHECKS_WITHOUT_STEP: u32 = 30;
 // on the SECOND agreeing over-threshold sample (#76), so the realized step = deadband + up to
 // two check-intervals of accrued drift = deadband + 2*(ppm * NTP_SERVER_CHECK_INTERVAL_SECS).
 // With the old 2500us trigger that overshot to +2760us (23ppm) / +3300us (66ppm) -- ABOVE the
-// 2500us band the derivation above proves absorbed -- and the fleet juddered (dantesync#94, live
+// 2500us band the derivation above proves absorbed -- and the fleet juddered (dsync#94, live
 // 2026-08-18). The 2500us proven band is a STEP-SIZE bound, and it is now enforced in TWO places:
 // this trigger keeps NORMAL confirmed steps inside it, and NTP_SERVER_LOCKED_MAX_STEP_US is the
 // hard cap that keeps EVERY step inside it. To keep the realized confirmed step <= 2500us at the
@@ -549,7 +549,7 @@ const NTP_SERVER_MAX_CHECKS_WITHOUT_STEP: u32 = 30;
 // path (server_step_threshold_us's else branch) is completely unchanged.
 const NTP_SERVER_LOCKED_DEADBAND_US: i64 = 1_000;
 
-// dantesync#91 — step-storm detection on a server-mode (master) node.
+// dsync#91 — step-storm detection on a server-mode (master) node.
 //
 // The NTP loop CANNOT slew here (PTP owns frequency; a slew is read back by the PTP servo as
 // drift and cancelled -- see clock-discipline-and-testing.md), so a UTC phase error is ALWAYS
@@ -589,16 +589,16 @@ const NTP_STEP_STORM_WARN_INTERVAL: Duration = Duration::from_secs(300);
 // PTP offline detection
 const PTP_TIMEOUT_SECS: u64 = 10; // Consider PTP offline after 10s without packets
 
-/// dantesync#113 — periodic re-resolution cadence for `gm_allowlist` hostname
+/// dsync#113 — periodic re-resolution cadence for `gm_allowlist` hostname
 /// entries, so a DNS/lease change propagates without a service restart.
 const GM_RESOLVE_INTERVAL: Duration = Duration::from_secs(60);
 
-/// dantesync#113 — minimum spacing between the extra "announce from an unknown
+/// dsync#113 — minimum spacing between the extra "announce from an unknown
 /// source" re-resolutions, so a foreign-PTP flood can never turn into a DNS
 /// query storm. The grandmaster moving to a new IP is caught within this window.
 const GM_RESOLVE_ON_DROP_COOLDOWN: Duration = Duration::from_secs(5);
 
-/// dantesync#114 review — initial acquisition grace. Until the node has locked
+/// dsync#114 review — initial acquisition grace. Until the node has locked
 /// ONCE, a still-acquiring (not-yet-locked) clock within this window from start
 /// is NOT treated as a lost clock, so a normal service restart / rig reboot does
 /// not emit a spurious "NO DANTE CLOCK" alarm during convergence. A genuine hard
@@ -635,7 +635,7 @@ where
     current_sync_source: Option<[u8; 6]>,
     /// IP address of the device sending PTP Sync messages (for display in tray app)
     current_sync_source_ip: Option<std::net::Ipv4Addr>,
-    /// dantesync#129 — the last Sync's header identity (version, subdomain, source UUID):
+    /// dsync#129 — the last Sync's header identity (version, subdomain, source UUID):
     /// logged on a change and published on `/status`, report-only.
     current_ptp_sender: Option<PtpSender>,
 
@@ -645,27 +645,27 @@ where
     /// as-if it never arrived, so a foreign-subnet grandmaster cannot be adopted.
     /// Empty = unrestricted (historical last-writer-wins). See `crate::gm_filter`.
     gm_allowlist: GmAllowlist,
-    /// dantesync#113 — resolver for `gm_allowlist` hostname entries. Boxed so a
+    /// dsync#113 — resolver for `gm_allowlist` hostname entries. Boxed so a
     /// test can inject a fake (no real DNS). Real builds use `StdResolver`.
     gm_resolver: Box<dyn Resolver>,
-    /// dantesync#113 — last time the hostname allowlist was re-resolved
+    /// dsync#113 — last time the hostname allowlist was re-resolved
     /// (`Instant`, monotonic — this daemon steps its own wall clock).
     last_gm_resolve: Instant,
-    /// dantesync#114 review — has this node achieved PTP lock at least once? Until
+    /// dsync#114 review — has this node achieved PTP lock at least once? Until
     /// it has (and within `ACQUISITION_GRACE`), a not-yet-locked clock is normal
     /// boot acquisition, not a loss (no spurious reboot alarm).
     ever_locked: bool,
-    /// dantesync#114 — the loud NO-DANTE-CLOCK alarm state machine, evaluated on
+    /// dsync#114 — the loud NO-DANTE-CLOCK alarm state machine, evaluated on
     /// every 10 s `tick_status()` (so it fires even when NO PTP packets arrive —
     /// the whole point, since a lost clock means no packets). Silent while
     /// PTP-locked to an allowed grandmaster; otherwise one notification per
     /// `clock_alarm_interval_s`. See `crate::clock_alarm`.
     clock_alarm: ClockAlarm,
-    /// dantesync#114 — the platform desktop notifier the alarm drives (Linux
+    /// dsync#114 — the platform desktop notifier the alarm drives (Linux
     /// `notify-send`; no-op on a headless box or on Windows, where the tray shows
     /// the balloon from `/status.clock_alarm`). Boxed for test injection.
     clock_alarm_notifier: Box<dyn ClockAlarmNotifier>,
-    /// dantesync#114 — the effective (floored) alarm cadence in seconds, published
+    /// dsync#114 — the effective (floored) alarm cadence in seconds, published
     /// in `/status.clock_alarm_interval_s` so every surface shares one cadence.
     clock_alarm_interval_s: u64,
     /// camera-box issue 1073 — observability for the source filter. Counts PTP
@@ -788,7 +788,7 @@ where
     drift_log_sample_count: u64,
 
     // ==========================================================================
-    // PHASE-SLEW SERVO STATE (dantesync#97)
+    // PHASE-SLEW SERVO STATE (dsync#97)
     // ==========================================================================
     /// The bounded PI phase-slew servo, `Some` only when `config.phase_slew.enabled` — so `None`
     /// (the default) makes every branch below a no-op and the frequency/step paths byte-identical
@@ -817,23 +817,23 @@ where
     /// controller does a FULL reset instead of preserving. Reset to 0 whenever a slew succeeds.
     phase_slew_preserve_streak: u32,
 
-    /// dantesync#117 / #88 — the PTP phase lock and the fleet date offset (the anchor `D`, the
+    /// dsync#117 / #88 — the PTP phase lock and the fleet date offset (the anchor `D`, the
     /// authority on the NTP master, a follower's scheduler and poll source). One sub-struct, owned
     /// by `controller/date_sync.rs`.
     date_sync: date_sync::DateSync,
 
-    /// dantesync#112 — the PTP re-join schedule, the receive rate and `/status.rejoin`, owned by
+    /// dsync#112 — the PTP re-join schedule, the receive rate and `/status.rejoin`, owned by
     /// `controller/ptp_liveness.rs`.
     ptp_liveness: ptp_liveness::PtpLiveness,
-    /// dantesync#116: where the running config came from (`None` until `main` says; the unit
+    /// dsync#116: where the running config came from (`None` until `main` says; the unit
     /// tests' controllers never do). Anything but `"file"` keeps the clock alarm active.
     config_state: Option<ConfigState>,
 
-    /// dantesync#136 — the periodic NTP burst off the loop (its runner, the burst in flight, the
+    /// dsync#136 — the periodic NTP burst off the loop (its runner, the burst in flight, the
     /// wall steps), owned by `controller/ntp_check.rs`.
     ntp_burst: ntp_check::NtpBurstState,
 
-    /// dantesync#142 — the drift file: the seed, its judge, the save while LOCKED, owned by
+    /// dsync#142 — the drift file: the seed, its judge, the save while LOCKED, owned by
     /// `controller/freq_seed.rs`.
     freq_seed: freq_seed::FreqSeed,
 }
@@ -885,7 +885,7 @@ where
                 bad
             );
         }
-        // dantesync#113: resolve hostname entries at startup so the allowlist is
+        // dsync#113: resolve hostname entries at startup so the allowlist is
         // effective before the first packet (a hostname-only allowlist permits
         // nothing until resolved). The resolver is boxed for test injection.
         let gm_resolver: Box<dyn Resolver> = Box::new(StdResolver);
@@ -1136,7 +1136,7 @@ where
         }
     }
 
-    /// The boot NTP reading, measured here (blocking). `main` no longer calls it (dantesync#134:
+    /// The boot NTP reading, measured here (blocking). `main` no longer calls it (dsync#134:
     /// it measures on its own thread and hands the reading over, `start_boot_ntp`); the rules are
     /// the same, `apply_boot_ntp`.
     pub fn run_ntp_sync(&mut self, skip: bool) {
@@ -1163,12 +1163,12 @@ where
     ///
     /// Stepping time does NOT affect the Dante-tuned frequency!
     pub fn check_ntp_utc_tracking(&mut self) {
-        // dantesync#134: not while the boot NTP reading is on its way — this query would block the
+        // dsync#134: not while the boot NTP reading is on its way — this query would block the
         // loop on the same (still unanswered) upstream; the boot reading comes first.
         if self.boot_ntp_pending() {
             return;
         }
-        // dantesync#136: a burst on its way (the `ntp-burst` thread) — the check waits for it; the
+        // dsync#136: a burst on its way (the `ntp-burst` thread) — the check waits for it; the
         // cadence counts from its request, as it counted from the inline burst.
         if self.ntp_burst_in_flight() {
             return;
@@ -1206,7 +1206,7 @@ where
 
         self.last_ntp_check = Instant::now();
 
-        // dantesync#136: with a burst runner (`main`'s `ntp-burst` thread) the burst only starts
+        // dsync#136: with a burst runner (`main`'s `ntp-burst` thread) the burst only starts
         // here and the loop goes on; `service_ntp_burst` applies its result once it is in.
         // Without one (a test) it is measured here, inline, as before 1.20.
         if self.start_ntp_burst() {
@@ -1218,7 +1218,7 @@ where
 
     /// The periodic NTP check's reading, by the check's rules (#50 agreement gate, #68/#71/#76/#83
     /// server mode, #97 slew, #117/#88 date authority) — whether it was measured inline or on the
-    /// `ntp-burst` thread (dantesync#136).
+    /// `ntp-burst` thread (dsync#136).
     pub(in crate::controller) fn apply_ntp_check(
         &mut self,
         result: Result<crate::ntp::NtpMeasurement>,
@@ -1655,7 +1655,7 @@ where
     }
 
     // ========================================================================
-    // FLEET DATE OFFSET (dantesync#88) + PTP PHASE LOCK ANCHOR (#117)
+    // FLEET DATE OFFSET (dsync#88) + PTP PHASE LOCK ANCHOR (#117)
     // ========================================================================
 
     /// Discard the transient a clock step leaves in every PTP measurement path: the sample
@@ -1717,7 +1717,7 @@ where
     /// deterministically ~190-380 us every ~20 s in a noiseless model — and,
     /// on a noisy real upstream, rejects the great majority of noise-driven
     /// candidates via the fixed agreement tolerance, stepping only roughly
-    /// once every 20-60s (dantesync#76's own closed-loop noisy-upstream
+    /// once every 20-60s (dsync#76's own closed-loop noisy-upstream
     /// simulation). This replaces TWO prior behaviours: the pre-#71
     /// 0.9-2.5 ms sawtooth on a ~60-90 s lag, and #71's OWN v1.8.31/v1.8.32
     /// regression (verified only against a noiseless simulation) of chasing
@@ -1743,7 +1743,7 @@ where
             max_step_us,
             effective_stale_window(self.config.ntp_stale_secs).as_secs()
         );
-        // dantesync#134 review: the NTP server reads this snapshot — "unsynchronized" (LI = 3)
+        // dsync#134 review: the NTP server reads this snapshot — "unsynchronized" (LI = 3)
         // from its first reply while this master's wall is not placed yet.
         self.update_shared_status();
     }
@@ -1775,7 +1775,7 @@ where
     /// magnitude (#71's original finding: `max(TOL, |cand|/2)` is too tight for a small genuine
     /// candidate, and grows too loose once a noisy large candidate has already inflated it) —
     /// but dropping magnitude checking ENTIRELY (#71's v1.8.31/v1.8.32 fix) is ALSO wrong on a
-    /// noisy upstream, where "small" is not a reliable trust signal (dantesync#76: strih's real
+    /// noisy upstream, where "small" is not a reliable trust signal (dsync#76: strih's real
     /// WAN upstream scatters +0.5..+2.5ms between bursts, comparable to or larger than the true
     /// ~190-380us/check drift). Server mode therefore:
     ///   - requires only the SAME SIGN to agree (a ramp does not reverse sign between two
@@ -1951,7 +1951,7 @@ where
         self.update_shared_status();
     }
 
-    /// dantesync#113: log a hostname-resolution outcome — INFO on a change (an A
+    /// dsync#113: log a hostname-resolution outcome — INFO on a change (an A
     /// record moved), ERROR (loud, and repeated every re-resolve) for each
     /// hostname currently unresolvable, per the ticket's fail-loud requirement.
     fn log_gm_resolve_outcome(outcome: &ResolveOutcome, allowlist: &GmAllowlist) {
@@ -1972,7 +1972,7 @@ where
         }
     }
 
-    /// dantesync#113: re-resolve the hostname allowlist if the cadence has elapsed
+    /// dsync#113: re-resolve the hostname allowlist if the cadence has elapsed
     /// (called from the 10 s tick). A no-hostname allowlist is a no-op.
     fn maybe_reresolve_gm(&mut self) {
         if !self.gm_allowlist.has_hostnames() {
@@ -1989,7 +1989,7 @@ where
     /// #114: sample the current Dante-clock health for the alarm decision.
     fn sample_clock_health(&self) -> ClockHealth {
         let ptp_stale = self.ptp_stale_at(Instant::now());
-        // mode ∈ {LOCK, NANO} — the genuinely PTP-locked modes. dantesync#146: under the phase
+        // mode ∈ {LOCK, NANO} — the genuinely PTP-locked modes. dsync#146: under the phase
         // lock an engaged phase lock that has not held [41] for 2 min is not locked
         // (`alarm_sees_lock`; legacy: never set, the rate lock as before).
         let locked = self.alarm_sees_lock();
@@ -2020,7 +2020,7 @@ where
         }
     }
 
-    /// dantesync#116 — where the running config came from (`main`, once, before the loop). It is
+    /// dsync#116 — where the running config came from (`main`, once, before the loop). It is
     /// published at once in `/status.config_state`, and a fallback keeps the clock alarm active.
     pub fn set_config_state(&mut self, state: ConfigState) {
         if let Some(reason) = state.alarm_reason() {
@@ -2081,12 +2081,12 @@ where
         // #88: apply a coordinated date step the moment its instant arrives, and follow the
         // master's announce. Every iteration (1 ms / 50 µs), BEFORE the packet early-returns, so a
         // step lands within one loop period of the announced instant on every box.
-        // dantesync#134: the boot NTP reading, measured off the loop, applied once it arrives.
+        // dsync#134: the boot NTP reading, measured off the loop, applied once it arrives.
         self.service_boot_ntp();
-        // dantesync#136: the periodic NTP burst, measured on its own thread, applied once it is in.
+        // dsync#136: the periodic NTP burst, measured on its own thread, applied once it is in.
         self.service_ntp_burst();
         self.service_date_offset();
-        // dantesync#126: answer every `POST /date/step` the HTTP route queued (every node answers;
+        // dsync#126: answer every `POST /date/step` the HTTP route queued (every node answers;
         // only the NTP master can announce the step).
         self.serve_date_step_requests();
 
@@ -2536,7 +2536,7 @@ where
         }
 
         // dsync#136: step 1 of the shared rate servo (`dsync_ptp::rate_servo`): the window's
-        // raw rate `d(offset)/dt` (dantesync#142: none without a previous offset), and the offset
+        // raw rate `d(offset)/dt` (dsync#142: none without a previous offset), and the offset
         // kept for the next window.
         let crate::rate_servo::OffsetMeasurement {
             measured,
@@ -2559,7 +2559,7 @@ where
         }
         .clamp(-500.0, 500.0);
 
-        // dantesync#146: once the phase lock owns the word, the rate it measures carries the phase
+        // dsync#146: once the phase lock owns the word, the rate it measures carries the phase
         // lock's own deliberate deviation (its P term, the boot pull): removed, so the rate servo
         // sees only the frequency the phase lock has not learned (`date_sync/lock_report.rs`).
         // A window without its own rate (no previous offset, a too-short span) is left alone.
@@ -2577,7 +2577,7 @@ where
             );
         }
 
-        // dantesync#142: a seeded start is judged on its first measured windows (before the
+        // dsync#142: a seeded start is judged on its first measured windows (before the
         // integrator step below, so a dropped seed learns from 0 already in this window; its rate
         // is then rebased to a word of 0).
         // A window shorter than 0.1 s carries the smoothed rate, not its own: not judged.
@@ -2599,12 +2599,12 @@ where
             self.rate.update_modes(rate_ppm);
         }
         self.finish_servo_window(rate_ppm, measured, phase_median_ns, dt_secs);
-        // dantesync#142: while LOCKED, the learned frequency is saved every 10 minutes.
+        // dsync#142: while LOCKED, the learned frequency is saved every 10 minutes.
         self.tick_drift_file();
     }
 
     /// The frequency word for this window: the gains of the current mode, the integrator and the
-    /// lock count (both only for a MEASURED window, dantesync#142), then the phase lock and the
+    /// lock count (both only for a MEASURED window, dsync#142), then the phase lock and the
     /// clock write.
     fn finish_servo_window(
         &mut self,
@@ -2614,7 +2614,7 @@ where
         dt_secs: f64,
     ) {
         // dsync#136: step 4 of the shared rate servo: the gains of the current mode, the
-        // integrator and the lock count (dantesync#146: held while the phase lock owns the word).
+        // integrator and the lock count (dsync#146: held while the phase lock owns the word).
         let hold_lock = self.phase_lock_holds_rate_lock();
         let crate::rate_servo::ServoWord {
             word_ppm: total_correction,
@@ -2792,10 +2792,10 @@ where
                 .as_secs();
 
             // Extended fields for tray app
-            // dantesync#146: DSYX [41], the tray, the IPC — one definition (`reported_lock`).
+            // dsync#146: DSYX [41], the tray, the IPC — one definition (`reported_lock`).
             let reported_lock = self.reported_lock();
             status.is_locked = reported_lock && !stale;
-            // dantesync#142: the frequency seed from the drift file.
+            // dsync#142: the frequency seed from the drift file.
             self.publish_freq_seed(&mut status);
             status.smoothed_rate_ppm = self.rate.smoothed_rate_ppm;
             status.mode = if stale {
@@ -3000,7 +3000,7 @@ mod tests {
     }
 
     /// #53: `check_ntp_utc_tracking` must propagate the burst-filter quality
-    /// fields (`spread_us`/`sample_count`/`pcap_active`, dantesync#53
+    /// fields (`spread_us`/`sample_count`/`pcap_active`, dsync#53
     /// continuation) from the `NtpMeasurement` into `SyncStatus`, not just
     /// the offset — otherwise a consumer (e.g. camera-box's gate) has no way
     /// to tell a well-measured node from a badly-measured one, or whether
@@ -3312,7 +3312,7 @@ mod tests {
         fn notify(&self, _title: &str, _message: &str) {}
     }
 
-    /// dantesync#114: the controller raises the clock alarm in `/status` when the
+    /// dsync#114: the controller raises the clock alarm in `/status` when the
     /// node is NOT PTP-locked to an allowed grandmaster, and clears it once
     /// genuinely locked — driven from the 10 s tick even with no packets.
     #[test]
@@ -3365,7 +3365,7 @@ mod tests {
         assert!(!controller.clock_alarm.is_active());
     }
 
-    /// dantesync#114: a nonsense cadence (0) is floored, not published as 0.
+    /// dsync#114: a nonsense cadence (0) is floored, not published as 0.
     #[test]
     fn clock_alarm_interval_is_floored_114() {
         let status = Arc::new(RwLock::new(SyncStatus::default()));
@@ -3397,7 +3397,7 @@ mod tests {
         }
     }
 
-    /// dantesync#113: a resolved hostname allowlist publishes the resolved IP in
+    /// dsync#113: a resolved hostname allowlist publishes the resolved IP in
     /// /status and accepts that grandmaster; an unresolvable one publishes the
     /// unresolved name AND drives the #114 clock alarm with the specific reason.
     #[test]
@@ -4295,7 +4295,7 @@ mod tests {
 
     #[test]
     fn ntp_gate_reversal_pair_steps_zero_times() {
-        // The live-event signature (dantesync#50): +2831us then -2825us — a queue-biased
+        // The live-event signature (dsync#50): +2831us then -2825us — a queue-biased
         // outlier and its negation. The old servo stepped TWICE (there and back); the gate
         // must step NEVER.
         let (mut c, _) = create_nano_test_controller();
@@ -4353,12 +4353,12 @@ mod tests {
     // in the other direction: same-sign-ONLY agreement plus a single-sample
     // fast lane, verified only against a noiseless simulation, assumed
     // "small + same-sign" always meant "trustworthy" -- which chased strih's
-    // real WAN measurement noise (dantesync#76) into a step roughly every
+    // real WAN measurement noise (dsync#76) into a step roughly every
     // 10s. The current design: same-sign PLUS a FIXED (non-scaling)
     // `NTP_SERVER_AGREEMENT_TOL_US`, sized to the true expected per-check
     // accrual rather than to either the client's self-scaling formula or no
     // magnitude check at all, with NO single-sample exception at any
-    // magnitude. See the design comments on dantesync#71 and dantesync#76
+    // magnitude. See the design comments on dsync#71 and dsync#76
     // for the full derivations.
     // ========================================================================
 
@@ -4381,7 +4381,7 @@ mod tests {
             !c.ntp_step_gate(5_000, 1_000),
             "a same-sign but WILD magnitude jump (delta 2500us, far over \
              NTP_SERVER_AGREEMENT_TOL_US) must NOT agree in server mode -- this is the exact \
-             shape dantesync#76 fixes"
+             shape dsync#76 fixes"
         );
         assert!(
             c.ntp_pending_step.is_some(),
@@ -4445,7 +4445,7 @@ mod tests {
 
     #[test]
     fn ntp_gate_server_mode_opposite_sign_reversal_never_steps_71() {
-        // The historical outlier this gate exists for (dantesync#50):
+        // The historical outlier this gate exists for (dsync#50):
         // +2831us then -2825us. Both magnitudes are above the fast lane, so
         // this must still require agreement, and the sign flip must still
         // never agree -- the same-sign-only relaxation above must not
@@ -4553,7 +4553,7 @@ mod tests {
     /// real constant instead of a hand-picked literal — review finding,
     /// #71), the full pipeline (threshold selection, gate, clamp, reset)
     /// must hold the master's steady-state residual well under the ~300us
-    /// target from dantesync#71 -- not merely under the older, too-loose
+    /// target from dsync#71 -- not merely under the older, too-loose
     /// 2ms envelope `the_master_holds_utc_within_a_sub_two_ms_envelope_
     /// over_an_hour_68` asserts. Deterministic (no measurement noise). NOTE
     /// the peak this loop can OBSERVE is always one interval short of the
@@ -4621,7 +4621,7 @@ mod tests {
 
         assert!(
             peak_us < 400,
-            "the master must hold UTC well under the dantesync#71 ~300us target at a real \
+            "the master must hold UTC well under the dsync#71 ~300us target at a real \
              19ppm oscillator, peaked at {}us -- the agreement gate's magnitude-tolerance \
              check (correct for client jitter) is the wrong shape for the master's monotonic \
              ramp and lets residual pile up across several intervals before confirming",
@@ -4636,7 +4636,7 @@ mod tests {
     // the true ~190-380us/check drift signal the #71 fix was tuned against in
     // a NOISELESS simulation. The fast lane's "small + same-sign = trustworthy"
     // assumption is false on this upstream: "small" can just as easily be one
-    // noisy reading. See the design comment on dantesync#76 for the full
+    // noisy reading. See the design comment on dsync#76 for the full
     // derivation and the rejected alternatives.
     // ========================================================================
 
@@ -5217,7 +5217,7 @@ mod tests {
         );
     }
 
-    /// dantesync#91 — closed-loop reproduction of the strih step-storm and its
+    /// dsync#91 — closed-loop reproduction of the strih step-storm and its
     /// alarm. The live root cause: the PTP grandmaster went L2-unreachable, so
     /// the master correctly fell out of genuine lock (`ptp_offline`) and
     /// `server_step_threshold_us` dropped to the tight 200us threshold. Against
@@ -5321,7 +5321,7 @@ mod tests {
         );
     }
 
-    /// dantesync#91 — the zero-false-alarm boundary, LOCKED (not just asserted
+    /// dsync#91 — the zero-false-alarm boundary, LOCKED (not just asserted
     /// in a comment). A genuinely-PTP-locked master at the worst-ever measured
     /// Dante-GM rate error (66ppm, #83) steps at the deadband cadence, which is
     /// the CEILING of healthy operation. #94 raised that ceiling: bounding every
@@ -6591,7 +6591,7 @@ mod tests {
     }
 
     // ========================================================================
-    // PHASE-SLEW WIRING (dantesync#97)
+    // PHASE-SLEW WIRING (dsync#97)
     // ========================================================================
 
     fn slew_config() -> SystemConfig {

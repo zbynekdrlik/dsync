@@ -1,4 +1,4 @@
-//! Loud, repeating "NO DANTE CLOCK" alarm decision (dantesync#114).
+//! Loud, repeating "NO DANTE CLOCK" alarm decision (dsync#114).
 //!
 //! The loss of the Dante PTP clock used to be SILENT and non-repeating: when the
 //! grandmaster stopped matching the allowlist, the controller logged the NTP-only
@@ -47,11 +47,11 @@ pub struct ClockHealth {
     pub gm_allowed: bool,
     /// No allowed PTP packet has been seen within the offline timeout.
     pub ptp_stale: bool,
-    /// dantesync#113: a configured grandmaster hostname could not be resolved.
+    /// dsync#113: a configured grandmaster hostname could not be resolved.
     /// `Some(name)` names the first unresolvable hostname; drives the alarm ACTIVE
     /// with a specific reason even before any PTP packet is seen.
     pub allowlist_unresolvable: Option<String>,
-    /// dantesync#114 review: the node is still in its INITIAL acquisition window
+    /// dsync#114 review: the node is still in its INITIAL acquisition window
     /// (never locked yet, within a grace period from start) AND packets are
     /// arriving. A not-yet-locked clock during normal boot acquisition is NOT a
     /// loss — this suppresses the "not-locked" reason so a service restart / rig
@@ -59,10 +59,10 @@ pub struct ClockHealth {
     /// (PTP stale = no packets at all, or an unresolvable hostname) still fires
     /// immediately, even during the grace, because those are real clock loss.
     pub in_acquisition: bool,
-    /// dantesync#131: the pinned PTP interface cannot be joined (`Some(reason)` names the NIC:
+    /// dsync#131: the pinned PTP interface cannot be joined (`Some(reason)` names the NIC:
     /// missing, or no IPv4). The most actionable reason there is: it comes first.
     pub interface_problem: Option<String>,
-    /// dantesync#116: the node does not run its own `config.json` (the last-good copy or the
+    /// dsync#116: the node does not run its own `config.json` (the last-good copy or the
     /// defaults run): `Some(reason)` keeps the alarm active until the file parses again, even
     /// while the clock itself is locked — the master role or the allowlist may be gone.
     pub config_problem: Option<String>,
@@ -113,7 +113,7 @@ impl ClockHealth {
     }
 }
 
-/// A serializable snapshot of the alarm for `/status` (dantesync#114) — the
+/// A serializable snapshot of the alarm for `/status` (dsync#114) — the
 /// cross-repo contract external gates read. Additive; `active=false` / `since=None`
 /// / `reason=""` is the healthy default so an old JSON blob deserializes cleanly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -233,7 +233,7 @@ impl ClockAlarm {
     }
 }
 
-/// Platform sink for the loud desktop notification (dantesync#114).
+/// Platform sink for the loud desktop notification (dsync#114).
 ///
 /// The WARN log line is emitted by [`drive`] on EVERY platform regardless of this
 /// trait; this is the ADDITIONAL desktop popup. Behind a trait so tests inject a

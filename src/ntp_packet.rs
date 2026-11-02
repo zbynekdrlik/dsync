@@ -1,6 +1,6 @@
 //! Pure NTP (RFC 5905 / SNTP) wire-format helpers + offset/RTT math.
 //!
-//! # Why this file exists (dantesync#53)
+//! # Why this file exists (dsync#53)
 //!
 //! The Windows NTP client's offset scatters by tens of milliseconds even
 //! while the PTP servo reports locked. Root cause: `NtpClient::measure_once()`
@@ -128,7 +128,7 @@ pub struct ParsedReply {
 ///
 /// #53 GREEN: rejects a too-short buffer and a non-server mode, then decodes
 /// the real Origin/Receive/Transmit Timestamp fields.
-/// dantesync#134 re-review: a full-length server-mode reply whose leap indicator says "clock
+/// dsync#134 re-review: a full-length server-mode reply whose leap indicator says "clock
 /// unsynchronized" (LI = 3) — the Npcap transport stops waiting on it at once.
 pub fn is_unsynchronized_server_reply(buf: &[u8]) -> bool {
     buf.len() >= NTP_PACKET_LEN && buf[0] & NTP_MODE_MASK == NTP_MODE_SERVER && buf[0] >> 6 == 3
@@ -142,7 +142,7 @@ pub fn parse_reply(buf: &[u8]) -> Result<ParsedReply> {
             NTP_PACKET_LEN
         ));
     }
-    // dantesync#134 review: LI = 3 is "clock unsynchronized" (RFC 5905) — no time source, as
+    // dsync#134 review: LI = 3 is "clock unsynchronized" (RFC 5905) — no time source, as
     // rsntp rejects it (`ServerNotSynchronized`).
     if buf[0] >> 6 == 3 {
         return Err(anyhow!(
@@ -478,7 +478,7 @@ mod tests {
         );
     }
 
-    /// dantesync#134: a server that says its clock is unsynchronized (LI = 3: a master whose
+    /// dsync#134: a server that says its clock is unsynchronized (LI = 3: a master whose
     /// wall is not placed yet) is no time source — the Windows Npcap transport rejects it like
     /// rsntp does (`ServerNotSynchronized`).
     #[test]

@@ -6,7 +6,7 @@
 //! (`net_pcap`, `net_winsock`) so it can be unit-tested through its [`PtpSocketFactory`] seam:
 //! the interface resolver and the socket opener are its two OS boundaries.
 //!
-//! dantesync#112: [`PtpNetwork::rejoin`] joins again, first on the interface that now carries the
+//! dsync#112: [`PtpNetwork::rejoin`] joins again, first on the interface that now carries the
 //! home address (where the grandmaster's time was last received), else on the startup resolver's
 //! choice. A USB NIC that is re-plugged comes back as a new netdev (a new, higher ifindex, often a
 //! new name); the kernel dropped the old socket's multicast membership with the old netdev, and
@@ -29,7 +29,7 @@ pub trait PtpSocketFactory {
     fn interface_carrying(&mut self, ip: Ipv4Addr) -> Option<String>;
     /// One non-blocking PTP socket bound to `port` and joined to the PTP multicast group on `ip`.
     fn open(&mut self, port: u16, ip: Ipv4Addr) -> Result<UdpSocket>;
-    /// dantesync#131: what the pinned interface `name` is now.
+    /// dsync#131: what the pinned interface `name` is now.
     fn lookup_pinned(&mut self, name: &str) -> PinnedLookup;
 }
 
@@ -100,7 +100,7 @@ pub struct UdpPtpNetwork<F: PtpSocketFactory = KernelSockets> {
     /// message, `ptp::is_time_message`, arrives on a later join): the interface that carries it is
     /// where a re-join goes first.
     home_ip: Ipv4Addr,
-    /// dantesync#131: the pinned interface (`system.interface` / `--interface`). When set, a
+    /// dsync#131: the pinned interface (`system.interface` / `--interface`). When set, a
     /// re-join joins only this NIC (no home address, no resolver) and waits for it otherwise.
     pinned: Option<String>,
 }
@@ -123,7 +123,7 @@ impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
         })
     }
 
-    /// dantesync#131: pin every later re-join to the interface `name` (`None` = not pinned). The
+    /// dsync#131: pin every later re-join to the interface `name` (`None` = not pinned). The
     /// startup join is the caller's (it waits for the pinned NIC's IPv4 itself).
     pub fn pinned_to(mut self, name: Option<String>) -> Self {
         self.pinned = name;
@@ -152,7 +152,7 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         let Some((size, ts, source_ip)) = received else {
             return Ok(None);
         };
-        // dantesync#112: the grandmaster's time arrives on this join, so its address is the home a
+        // dsync#112: the grandmaster's time arrives on this join, so its address is the home a
         // re-join looks for. Nothing else moves it: the sockets bind INADDR_ANY:319/320, and a
         // stray datagram on a fallback join must not make that join the home.
         if crate::ptp::is_time_message(&buf[..size]) {
@@ -177,7 +177,7 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         // docker, a bridge). Only when no interface carries it, the startup resolver (a DHCP move
         // to a new address); when that finds none either, the old pair stays.
         //
-        // dantesync#131: a PINNED interface is the only candidate. Not usable now (missing, no
+        // dsync#131: a PINNED interface is the only candidate. Not usable now (missing, no
         // IPv4) = a typed error BEFORE anything is closed: the controller names the NIC in the
         // clock alarm and looks again in seconds; another NIC is never joined.
         let (iface, ip) = match &self.pinned {
@@ -256,7 +256,7 @@ mod tests {
         released_before_open: Vec<SocketAddr>,
         /// For every socket opened: were all of `released_before_open` free at that moment?
         free_at_open: Vec<bool>,
-        /// dantesync#131: what each pinned interface name is now (absent = missing).
+        /// dsync#131: what each pinned interface name is now (absent = missing).
         pinned: HashMap<String, PinnedLookup>,
     }
 

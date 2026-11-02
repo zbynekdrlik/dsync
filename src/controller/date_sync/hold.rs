@@ -1,4 +1,4 @@
-//! dantesync#126 — a follower HOLDS the fleet date through its master's silence.
+//! dsync#126 — a follower HOLDS the fleet date through its master's silence.
 //!
 //! Before 1.15 a follower dropped the authority after 30 s without an applicable reply and went
 //! back to its local NTP date path, so a master restart stepped every follower on its own next NTP
@@ -43,7 +43,7 @@ where
     N: PtpNetwork,
     S: NtpSource,
 {
-    /// dantesync#126 — every loop iteration on a follower: keep the adopted `D` through the
+    /// dsync#126 — every loop iteration on a follower: keep the adopted `D` through the
     /// master's silence for the hold, then fall back to the local NTP date path.
     pub(super) fn hold_or_forget_silent_authority(&mut self) {
         if !self.date_sync.follower.adopted() {
@@ -86,7 +86,7 @@ where
         }
     }
 
-    /// dantesync#126 — an applicable reply ends a hold (the caller then acts on the announce).
+    /// dsync#126 — an applicable reply ends a hold (the caller then acts on the announce).
     pub(super) fn end_authority_hold(&mut self) {
         if let Some(since) = self.date_sync.restart.holding_since.take() {
             info!(
@@ -97,7 +97,7 @@ where
         }
     }
 
-    /// dantesync#126 — a follower holding the fleet date offset (its master silent). Not while its
+    /// dsync#126 — a follower holding the fleet date offset (its master silent). Not while its
     /// own PTP is offline: it then takes its local NTP path, which a hold never covers.
     pub(in crate::controller) fn holding_date(&self) -> bool {
         self.date_sync.restart.holding_since.is_some()

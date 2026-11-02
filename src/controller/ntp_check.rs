@@ -1,4 +1,4 @@
-//! dantesync#136 — the periodic NTP check with its burst off the sync loop.
+//! dsync#136 — the periodic NTP check with its burst off the sync loop.
 //!
 //! `check_ntp_utc_tracking` decides WHEN a check is due, exactly as before; with a burst runner
 //! (`main`: the `ntp-burst` thread, [`crate::ntp_burst::NtpBurstThread`]) it only starts the burst
@@ -82,7 +82,7 @@ where
             return;
         };
         self.ntp_burst.in_flight = None;
-        // dantesync#136 review: a FAILED burst measured nothing — nothing of it can straddle a
+        // dsync#136 review: a FAILED burst measured nothing — nothing of it can straddle a
         // step or be superseded by the boot reading. It always counts as a failed check (as the
         // inline one did), or a timed-out burst (~15 s) that met a date micro-step would hold back
         // `ntp_failed` and leave `pcap_ntp_active` set.

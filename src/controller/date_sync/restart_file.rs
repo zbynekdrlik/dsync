@@ -1,4 +1,4 @@
-//! dantesync#126 — the master's saved fleet date offset on disk: `date-offset.json` beside
+//! dsync#126 — the master's saved fleet date offset on disk: `date-offset.json` beside
 //! `config.json` (`/etc/dantesync/`, `C:\ProgramData\DanteSync\`), in a file of its own.
 //!
 //! One flat JSON object of integers (all ns, the grandmaster as its six bytes), `version` first.

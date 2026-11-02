@@ -1,4 +1,4 @@
-//! dantesync#146 — the controller glue of the reported lock (DSYX [41], `/status.is_locked`) under
+//! dsync#146 — the controller glue of the reported lock (DSYX [41], `/status.is_locked`) under
 //! the PTP phase lock, and the decoupling that keeps the phase lock's own corrections from reading
 //! as a lock loss to the rate servo.
 //!
@@ -16,7 +16,7 @@
 use super::*;
 use crate::lock_gate::{GateEvent, LOCK_BOUND_NS, UNLOCK_BOUND_NS, UNLOCK_WINDOWS};
 
-/// dantesync#146: an engaged phase lock whose [41] has been 0 this long is a lost clock for the
+/// dsync#146: an engaged phase lock whose [41] has been 0 this long is a lost clock for the
 /// #114 alarm. Longer than a cold boot's pull (30-55 s) and a 25 ppm grandmaster frequency step's
 /// drop (~60 s), so neither alarms; a reference the phase lock cannot hold (a grandmaster sending
 /// garbage, a sub-minimum frequency step that keeps `e` past 150 µs for minutes) does.
@@ -97,7 +97,7 @@ where
         };
     }
 
-    /// dantesync#146: what the #114 clock alarm reads as "locked". Under the phase lock the rate
+    /// dsync#146: what the #114 clock alarm reads as "locked". Under the phase lock the rate
     /// lock is held while engaged, so it alone would never say a broken reference is lost: an
     /// engaged phase lock that has not held [41] for [`PHASE_UNSAFE_ALARM_AFTER`] is not locked.
     pub(in crate::controller) fn alarm_sees_lock(&self) -> bool {

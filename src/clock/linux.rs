@@ -7,7 +7,7 @@ use std::time::Duration;
 
 pub struct LinuxClock {
     original_freq: i64,
-    /// dantesync#119: the learned read->set latency of a step (`super::step`).
+    /// dsync#119: the learned read->set latency of a step (`super::step`).
     step_lead: StepLead,
 }
 
@@ -28,7 +28,7 @@ impl LinuxClock {
     }
 }
 
-/// dantesync#119 (1.11.1) -- ns since the epoch as a `timespec` (the nanoseconds always in
+/// dsync#119 (1.11.1) -- ns since the epoch as a `timespec` (the nanoseconds always in
 /// `0..1e9`, also before the epoch).
 fn ns_to_timespec(ns: i64) -> (i64, i64) {
     (ns.div_euclid(1_000_000_000), ns.rem_euclid(1_000_000_000))
@@ -41,7 +41,7 @@ fn read_clock(clock: libc::clockid_t) -> i64 {
     ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64
 }
 
-/// dantesync#119 (1.11.1) -- Linux under the step law (`super::step`): `CLOCK_REALTIME` is the
+/// dsync#119 (1.11.1) -- Linux under the step law (`super::step`): `CLOCK_REALTIME` is the
 /// wall (no coarser path is in use, so `coarse == precise`), `CLOCK_MONOTONIC` the reference: it
 /// follows the frequency word like the wall and no step moves it.
 struct LinuxStepOps;
@@ -87,7 +87,7 @@ impl SystemClock for LinuxClock {
         Ok(())
     }
 
-    /// dantesync#119 (1.11.1): the step law (`super::step::step_wall`) -- the wall moves by
+    /// dsync#119 (1.11.1): the step law (`super::step::step_wall`) -- the wall moves by
     /// exactly `offset`, measured against `CLOCK_MONOTONIC` (the same law as on Windows).
     fn step_clock(&mut self, offset: Duration, sign: i8) -> Result<()> {
         let magnitude = i64::try_from(offset.as_nanos())
@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(freq_500ppm, 32768000);
     }
 
-    /// dantesync#119: a step target as a `timespec`, nanoseconds normalized also before the epoch.
+    /// dsync#119: a step target as a `timespec`, nanoseconds normalized also before the epoch.
     #[test]
     fn a_step_target_is_a_normalized_timespec_119() {
         use super::ns_to_timespec;
@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(ns_to_timespec(-1), (-1, 999_999_999));
     }
 
-    /// dantesync#119: the step law's two Linux clocks advance together while nothing steps (no
+    /// dsync#119: the step law's two Linux clocks advance together while nothing steps (no
     /// root needed to read them): a mix-up of the clocks or of the units would be off by orders of
     /// magnitude.
     #[test]

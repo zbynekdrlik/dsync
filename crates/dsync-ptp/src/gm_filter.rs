@@ -27,7 +27,7 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-/// dantesync#113 — resolves a grandmaster HOSTNAME to its IPv4 set. Behind a
+/// dsync#113 — resolves a grandmaster HOSTNAME to its IPv4 set. Behind a
 /// trait so the periodic-resolution decision logic is unit-testable with a fake
 /// (no real DNS in tests), mirroring the `NtpSource`/`PtpNetwork` seams.
 pub trait Resolver {
@@ -37,7 +37,7 @@ pub trait Resolver {
     fn resolve(&self, host: &str) -> std::io::Result<Vec<Ipv4Addr>>;
 }
 
-/// dantesync#113 review — hard upper bound on a single OS lookup. `resolve()` is
+/// dsync#113 review — hard upper bound on a single OS lookup. `resolve()` is
 /// called from the sync-loop thread (via `tick_status` and the on-drop path), and
 /// `to_socket_addrs` blocks for the FULL OS resolver timeout (many seconds) when
 /// the DNS server is unreachable — which would stall PTP packet processing and
@@ -102,7 +102,7 @@ pub struct ResolveOutcome {
     pub new_resolved: Vec<Ipv4Addr>,
 }
 
-/// dantesync#113 — RFC-1123-lite hostname syntax check, used to classify a
+/// dsync#113 — RFC-1123-lite hostname syntax check, used to classify a
 /// non-IP/CIDR allowlist entry as a resolvable hostname (`video-clock.lan`)
 /// rather than silently dropping it as garbage. Requires at least one ASCII
 /// letter, so a malformed numeric entry (e.g. `999.999.999.999`, which fails IP
@@ -206,13 +206,13 @@ impl Ipv4Prefix {
 #[derive(Debug, Clone, Default)]
 pub struct GmAllowlist {
     prefixes: Vec<Ipv4Prefix>,
-    /// dantesync#113 — hostname entries (e.g. `video-clock.lan`) to resolve at
+    /// dsync#113 — hostname entries (e.g. `video-clock.lan`) to resolve at
     /// start and periodically. Kept verbatim; resolution fills `resolved`.
     hostnames: Vec<String>,
-    /// dantesync#113 — the last successful resolution of `hostnames` (union), used
+    /// dsync#113 — the last successful resolution of `hostnames` (union), used
     /// alongside `prefixes` by `allows`. Kept across a transient failure.
     resolved: Vec<Ipv4Addr>,
-    /// dantesync#113 — hostnames that failed to resolve on the last pass (loud).
+    /// dsync#113 — hostnames that failed to resolve on the last pass (loud).
     unresolved: Vec<String>,
     /// Entries that failed to parse, kept verbatim for a loud startup warning.
     invalid: Vec<String>,
@@ -233,7 +233,7 @@ impl GmAllowlist {
             }
             match Ipv4Prefix::parse(t) {
                 Ok(p) => prefixes.push(p),
-                // dantesync#113: a non-IP/CIDR entry with NO slash that is a valid
+                // dsync#113: a non-IP/CIDR entry with NO slash that is a valid
                 // hostname (e.g. `video-clock.lan`) is a hostname to resolve — not
                 // "invalid". A slash-bearing entry that failed IP/CIDR parsing
                 // (e.g. `10.77.9.0/33`) is a malformed CIDR, never a hostname.
@@ -252,7 +252,7 @@ impl GmAllowlist {
 
     /// True when NO restriction is in effect (no parseable prefixes AND no
     /// hostname entries) — every source is accepted, the historical
-    /// last-writer-wins behavior. dantesync#113: a hostname-only allowlist is
+    /// last-writer-wins behavior. dsync#113: a hostname-only allowlist is
     /// RESTRICTING even before its first resolution (it must never fail open to
     /// "accept any GM" just because DNS has not answered yet).
     pub fn is_unrestricted(&self) -> bool {
@@ -268,7 +268,7 @@ impl GmAllowlist {
     /// True if `ip` is permitted as a grandmaster source. An unrestricted
     /// allowlist (empty, or all-entries-invalid) accepts everything; otherwise a
     /// source is permitted iff it matches a literal prefix OR a currently-resolved
-    /// hostname IP (dantesync#113). A hostname-only allowlist whose names have NOT
+    /// hostname IP (dsync#113). A hostname-only allowlist whose names have NOT
     /// resolved yet (or all currently fail) permits NOTHING — the loud, correct
     /// failure (the box drops all PTP → NTP fallback + the #114 alarm) rather than
     /// silently accepting any grandmaster.
@@ -284,29 +284,29 @@ impl GmAllowlist {
         &self.invalid
     }
 
-    /// dantesync#113 — hostname entries configured (verbatim).
+    /// dsync#113 — hostname entries configured (verbatim).
     pub fn hostnames(&self) -> &[String] {
         &self.hostnames
     }
 
-    /// dantesync#113 — true when at least one hostname entry is present.
+    /// dsync#113 — true when at least one hostname entry is present.
     pub fn has_hostnames(&self) -> bool {
         !self.hostnames.is_empty()
     }
 
-    /// dantesync#113 — the last successfully-resolved hostname IPs (published in
+    /// dsync#113 — the last successfully-resolved hostname IPs (published in
     /// `/status.gm_allowlist_resolved` so external gates can compare `gm_source_ip`).
     pub fn resolved_ips(&self) -> &[Ipv4Addr] {
         &self.resolved
     }
 
-    /// dantesync#113 — hostnames that currently fail to resolve (published in
+    /// dsync#113 — hostnames that currently fail to resolve (published in
     /// `/status.gm_allowlist_unresolved`).
     pub fn unresolved_hostnames(&self) -> &[String] {
         &self.unresolved
     }
 
-    /// dantesync#113 — the clock-alarm reason (#114) for a hostname allowlist with
+    /// dsync#113 — the clock-alarm reason (#114) for a hostname allowlist with
     /// NO working resolution: `Some(names)` only when there is no resolved
     /// fallback AND a hostname is currently unresolvable. When a previous
     /// resolution is still held (a transient DNS blip), returns `None` — the clock
@@ -319,7 +319,7 @@ impl GmAllowlist {
         }
     }
 
-    /// dantesync#113 — resolve every hostname entry to IPv4 via `resolver`, union
+    /// dsync#113 — resolve every hostname entry to IPv4 via `resolver`, union
     /// the results into `resolved`, and record which hostnames currently fail.
     ///
     /// Keep-previous-on-failure: if NOTHING resolves this pass but a previous
@@ -372,7 +372,7 @@ impl GmAllowlist {
     }
 
     /// The literal prefixes plus each resolved hostname IP as a `/32`, for
-    /// interface selection (dantesync#113: a hostname-addressed GM still drives
+    /// interface selection (dsync#113: a hostname-addressed GM still drives
     /// dual-homed capture-interface selection once resolved).
     fn effective_prefixes(&self) -> Vec<Ipv4Prefix> {
         let mut all = self.prefixes.clone();
@@ -420,7 +420,7 @@ impl GmAllowlist {
         &self,
         candidates: &[(Ipv4Addr, Option<Ipv4Addr>)],
     ) -> Vec<usize> {
-        // dantesync#113: literal prefixes PLUS resolved hostname IPs (as /32s), so
+        // dsync#113: literal prefixes PLUS resolved hostname IPs (as /32s), so
         // a hostname-addressed GM drives dual-homed interface selection too.
         let effective = self.effective_prefixes();
         // (index, matched trusted-prefix len, interface prefix len) per match.
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn invalid_entries_are_recorded_but_valid_ones_still_restrict() {
-        // dantesync#113 changed the contract: a bare non-IP token like "not-an-ip"
+        // dsync#113 changed the contract: a bare non-IP token like "not-an-ip"
         // is now a valid HOSTNAME (to resolve), not an invalid entry. A genuinely
         // invalid entry is a malformed CIDR (a slash it cannot parse), which is
         // never treated as a hostname.
@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn all_entries_invalid_fails_open_to_unrestricted() {
         // A fully typo'd allowlist must never brick the clock: it degrades to
-        // accept-any (with the bad entries surfaced for a warning). dantesync#113:
+        // accept-any (with the bad entries surfaced for a warning). dsync#113:
         // "all invalid" now means all-malformed-CIDR (a bare word is a hostname),
         // so use two malformed CIDRs — with no prefixes AND no hostnames the list
         // is unrestricted.
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn prefix_count_reports_only_active_parsed_prefixes() {
-        // dantesync#113: a genuinely-invalid entry is a malformed CIDR (a bare
+        // dsync#113: a genuinely-invalid entry is a malformed CIDR (a bare
         // word would now be a hostname, not invalid).
         let a = GmAllowlist::parse(&[
             "10.77.9.0/24".to_string(),
@@ -814,7 +814,7 @@ mod tests {
     }
 
     // ========================================================================
-    // dantesync#113 — hostname allowlist entries
+    // dsync#113 — hostname allowlist entries
     // ========================================================================
 
     use std::collections::HashMap;

@@ -1,4 +1,4 @@
-//! dantesync#119 (1.12) — the controller side of the NIGHTLY date step that is not part of the
+//! dsync#119 (1.12) — the controller side of the NIGHTLY date step that is not part of the
 //! master's loop tick (`micro.rs` drives the authority and logs the nightly decisions): the
 //! authority's startup line in daily mode, and the off-line daily master's re-join after a
 //! failed step of its own. Kept apart so `date_sync.rs` stays one screenful per concern.

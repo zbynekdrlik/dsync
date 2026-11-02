@@ -1,4 +1,4 @@
-//! dantesync#126 — the coordinated date step ON REQUEST, for acceptance tests.
+//! dsync#126 — the coordinated date step ON REQUEST, for acceptance tests.
 //!
 //! During the day the fleet date could only be stepped by restarting the NTP master — which was
 //! exactly the UNCOORDINATED path this issue removes. So the master takes a request: `POST

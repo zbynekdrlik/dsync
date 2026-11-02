@@ -580,16 +580,16 @@ fn the_endpoint_port_comes_from_the_daemon_config() {
 fn lock_file_prefers_the_runtime_dir() {
     assert_eq!(
         lock_file_path(Some("/run/user/1000"), 1000),
-        PathBuf::from("/run/user/1000/dantesync-tray.lock")
+        PathBuf::from("/run/user/1000/dsync-tray.lock")
     );
     // No runtime dir: a per-user file in /tmp, never one shared by every user.
     assert_eq!(
         lock_file_path(Some(""), 1000),
-        PathBuf::from("/tmp/dantesync-tray-1000.lock")
+        PathBuf::from("/tmp/dsync-tray-1000.lock")
     );
     assert_eq!(
         lock_file_path(None, 1001),
-        PathBuf::from("/tmp/dantesync-tray-1001.lock")
+        PathBuf::from("/tmp/dsync-tray-1001.lock")
     );
 }
 

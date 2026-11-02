@@ -1,4 +1,4 @@
-//! dantesync#131 — the pinned-interface startup wait, driven with a scripted NIC, a scripted
+//! dsync#131 — the pinned-interface startup wait, driven with a scripted NIC, a scripted
 //! open, and a clock that advances one second per pause.
 
 use super::*;

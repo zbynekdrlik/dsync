@@ -1,4 +1,4 @@
-//! dantesync#134 — fast boot sync on two clocks: the fleet date placed at the FIRST PTP window,
+//! dsync#134 — fast boot sync on two clocks: the fleet date placed at the FIRST PTP window,
 //! one step per box, and no second step when the phase lock engages ~30-40 s later.
 //!
 //! The NTP master (its saved fleet D restored, its RTC 3.75 s behind: strih-pp 25.10.2026) and a
@@ -24,7 +24,7 @@
 //!    (`ERROR_CLAMP_US / FSTEP_PULL_TAU_S` + the PI) and never reads as a frequency step.
 
 use super::*;
-use dantesync::ptp_phase_lock::{
+use dsync::ptp_phase_lock::{
     ANCHOR_CONFIRM_WINDOWS, ERROR_CLAMP_US, FSTEP_PULL_TAU_S, REANCHOR_ON_ENGAGE_NS,
 };
 

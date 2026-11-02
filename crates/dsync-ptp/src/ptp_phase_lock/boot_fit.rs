@@ -1,4 +1,4 @@
-//! dantesync#146 — the frequency the FIRST engagement starts from, measured on the acquisition.
+//! dsync#146 — the frequency the FIRST engagement starts from, measured on the acquisition.
 //!
 //! The first engagement keeps the early anchor and retires the acquisition drift along the pull
 //! reference (#134, τ = [`super::FSTEP_PULL_TAU_S`]). The pull only follows `e` when the integrator

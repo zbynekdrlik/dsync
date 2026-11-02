@@ -1,4 +1,4 @@
-//! dantesync#117 / #88 / #119 — what the phase lock and the fleet date offset publish in `/status`
+//! dsync#117 / #88 / #119 — what the phase lock and the fleet date offset publish in `/status`
 //! (and so in the 31900 extension, which the time server builds from the same snapshot).
 
 use super::*;
@@ -54,7 +54,7 @@ where
         };
         // #126: the master restart kept the fleet date; a follower's hold; the step on request.
         status.date_offset_restored = ds.authority.is_some() && ds.restart.restored;
-        // dantesync#134 review: the master's NTP server answers LI = 3 until its wall is placed.
+        // dsync#134 review: the master's NTP server answers LI = 3 until its wall is placed.
         status.ntp_server_unsynchronized = self.ntp_server_mode && !self.master_wall_placed();
         status.date_authority_hold_age_s = if self.holding_date() {
             ds.restart.holding_since.map(|t| t.elapsed().as_secs())
@@ -172,7 +172,7 @@ where
         };
         // camera-box issue 1372: the grandmaster frequency steps the phase lock followed.
         status.freq_steps = ds.core.freq_steps();
-        // dantesync#146: the first engagement's measured frequency and its once-only re-seed.
+        // dsync#146: the first engagement's measured frequency and its once-only re-seed.
         status.ptp_phase_engaged_on_ppm = ds.core.engaged_on_fit().map(|f| f.freq_ppm);
         status.ptp_phase_boot_reseed_ppm = ds.core.boot_reseed().map(|f| f.freq_ppm);
         status.last_freq_step_ppm = ds.core.last_freq_step().map(|s| s.step_ppm);

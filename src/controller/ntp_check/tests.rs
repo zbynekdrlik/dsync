@@ -1,4 +1,4 @@
-//! dantesync#136 — the periodic NTP check with its burst off the sync loop: the loop keeps
+//! dsync#136 — the periodic NTP check with its burst off the sync loop: the loop keeps
 //! iterating while a slow burst runs, and a burst's result does exactly what the inline check did.
 
 use super::*;
@@ -393,7 +393,7 @@ const SLOW_ROUND_TRIP: Duration = Duration::from_millis(200);
 /// Loop passes that must complete while the burst is still in flight. A loop that blocked on the
 /// burst would apply its result inside the dispatching pass (1 pass); a free loop makes hundreds.
 ///
-/// dantesync#146: this replaced a wall-clock bound (the longest gap between passes < 300 ms). Under
+/// dsync#146: this replaced a wall-clock bound (the longest gap between passes < 300 ms). Under
 /// `cargo tarpaulin` (ptrace, every instrumented line a trap, the whole suite in parallel on a
 /// 2-vCPU runner) the test thread itself is descheduled for 323 ms, 473 ms and 1.009 s
 /// (run 41390378678) while the loop was provably not blocked (971 passes). The pass count proves
@@ -402,7 +402,7 @@ const MIN_PASSES_DURING_BURST: u32 = 10;
 
 #[test]
 fn the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136() {
-    // Never beside the heavy closed-loop sims (dantesync#146, `heavy_test_guard`).
+    // Never beside the heavy closed-loop sims (dsync#146, `heavy_test_guard`).
     let _heavy = crate::controller::heavy_test_guard();
     let upstream = SlowNtpUpstream::start(SLOW_ROUND_TRIP);
     let client = Arc::new(NtpClient::new(

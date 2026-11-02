@@ -1,4 +1,4 @@
-//! dantesync#112 — the controller wiring of the PTP re-join and of the honest `/status` while PTP
+//! dsync#112 — the controller wiring of the PTP re-join and of the honest `/status` while PTP
 //! is stale. The schedule itself is proven in `crate::ptp_rejoin`, the Linux socket re-create in
 //! `crate::net_linux`, and the fleet date offset across a loss + re-acquire on the master in
 //! `controller/date_sync/rejoin_tests.rs`.
@@ -225,7 +225,7 @@ fn while_ptp_is_stale_status_is_not_locked_and_lock_returns_with_the_packets_112
     c.rate.is_locked = true;
     c.rate.in_nano_mode = true;
     c.clock_settled = true;
-    // dantesync#146: the reported lock is the phase lock's, within the bound (its offline edge
+    // dsync#146: the reported lock is the phase lock's, within the bound (its offline edge
     // then holds the learned frequency: one clock write).
     c.lock_reported_for_test();
     c.clock.expect_adjust_frequency().returning(|_| Ok(()));
@@ -260,7 +260,7 @@ fn while_ptp_is_stale_status_is_not_locked_and_lock_returns_with_the_packets_112
         assert!(st.clock_alarm.active, "and the alarm says why");
     }
 
-    // The packets come back: settled again at once; the reported LOCK (dantesync#146) once the
+    // The packets come back: settled again at once; the reported LOCK (dsync#146) once the
     // phase lock has re-engaged and is within the bound again — no service restart.
     c.note_allowed_ptp_packet(Instant::now());
     c.check_ptp_status();
@@ -430,7 +430,7 @@ fn a_followers_delay_req_neither_names_the_grandmaster_nor_clears_the_drop_count
     assert_eq!(c.current_sync_source_ip, None);
 }
 
-/// dantesync#131: a network whose pinned interface `enp56s0` is missing for the first `down`
+/// dsync#131: a network whose pinned interface `enp56s0` is missing for the first `down`
 /// re-joins, then back (`eth0()` stands for the joined NIC).
 fn pinned_network(down: u32, calls: Arc<AtomicU32>, missing: bool) -> MockPtpNetwork {
     let mut net = MockPtpNetwork::new();

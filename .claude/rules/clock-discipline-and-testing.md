@@ -1067,7 +1067,7 @@ What was learned building it:
 - **Replica:** the pure module is a directory now; symlink `crates/dsync-ptp/src/ptp_phase_lock/` beside
   `crates/dsync-ptp/src/ptp_phase_lock.rs` in the scratch crate, or `mod freq_step;` does not resolve.
 
-## dantesync#126 (v1.15) — a master restart keeps the fleet date
+## dsync#126 (v1.15) — a master restart keeps the fleet date
 
 A `systemctl restart dantesync` on the master (strih-lx, 30.9.2026) stepped the whole rig at
 scattered instants: its boot step moved its own wall +247 ms to UTC, a fresh anchor started a new
@@ -1148,7 +1148,7 @@ next NTP samples. What was learned building the fix:
   double fault's settling. Give the session a seq above 1 before the restart (a step on request):
   with seq 1 on both sides "the same session" and "a new session" read the same.
 
-## dantesync#134 (v1.19) — the fleet date at the FIRST PTP window, one step, none at the lock
+## dsync#134 (v1.19) — the fleet date at the FIRST PTP window, one step, none at the lock
 
 The owner (26.10.2026): a boot must sync fast, nothing on a Dante/Blackmagic network waits for a
 settle. strih-pp's boot (25.10.2026) spent 12 s in the blocking boot NTP burst before the PTP loop
@@ -1204,7 +1204,7 @@ What was learned:
   `boot.rs` (−21 / +70 ppm boxes, one step each, both on the line). Negative control:
   `BOOT_HOLD_NS = 0` fails the bench, the acquisition test and two controller tests.
 
-## dantesync#136 — the time server and the NTP burst off the sync loop (v1.20)
+## dsync#136 — the time server and the NTP burst off the sync loop (v1.20)
 
 A DSYX query was answered only when the loop came round, and the periodic NTP burst ran inline:
 every query waited behind PTP processing and the burst (200 ms replies missed under load). Now the
@@ -1250,7 +1250,7 @@ burst runs on the `ntp-burst` thread (`ntp_burst::NtpBurstThread`, `controller/n
   — red on 1.19 at 1.0 s; failed bursts across a step / beside a pending boot reading count),
   `ntp_burst/tests.rs`.
 
-## dantesync#142 (v1.22) — a cold boot locks in seconds: no false first sample, a drift file
+## dsync#142 (v1.22) — a cold boot locks in seconds: no false first sample, a drift file
 
 iemmixer's gen3 box (v1.20.0, 1.11.2026): "Sync established" at 15 s, a PROD at 15.6 s, back to ACQ,
 LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was learned:
@@ -1315,7 +1315,7 @@ LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was l
   decided (`run_for`: 60 windows to a lock, 6 to a verdict), full runs are 120 windows and the
   statistics 20 runs: 0.5 s single-threaded in debug, from ~20 s.
 
-## dantesync#146 (v1.23) — DSYX [41] is the PHASE lock, and the boot pull is never dropped
+## dsync#146 (v1.23) — DSYX [41] is the PHASE lock, and the boot pull is never dropped
 
 dstack gates its media-clock ready on byte [41] alone; gen3 reported LOCK at e ≈ −700 µs and its
 250 µs flow ran late for 3-6 minutes; gate run 41372498483 caught LOCK → PROD → LOCK on a cold

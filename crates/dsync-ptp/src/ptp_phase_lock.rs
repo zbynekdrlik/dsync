@@ -1,4 +1,4 @@
-//! dantesync#117 — the PTP PHASE LOCK: rate AND phase from the Dante grandmaster, nothing else.
+//! dsync#117 — the PTP PHASE LOCK: rate AND phase from the Dante grandmaster, nothing else.
 //!
 //! # The owner contract (issue #117, ROZHODNUTÉ issuecomment-5836853146)
 //!
@@ -39,7 +39,7 @@
 //!   core engages once the controller reports PTP lock, taking over the frequency word
 //!   bumplessly (its integrator starts at the rate servo's word), and hands the learned frequency
 //!   back if lock is lost.
-//! - `D` is anchored at the FIRST window, before the lock (dantesync#134: `median(t2 − t1)` is an
+//! - `D` is anchored at the FIRST window, before the lock (dsync#134: `median(t2 − t1)` is an
 //!   absolute offset of two time bases and needs no rate lock, so the date layer places the fleet
 //!   date seconds after the first Sync instead of ~40 s later). The rate servo leaves the phase
 //!   free while it acquires, so the wall drifts off that anchor by its rate error (~0.4 ms on a
@@ -117,7 +117,7 @@ pub const DISCONTINUITY_NS: i64 = 1_000_000_000;
 /// next authority poll sees its `D` differ and joins; the master rebases the fleet offset.
 pub const REANCHOR_ON_ENGAGE_NS: i64 = 1_000_000;
 
-/// dantesync#146 — while ENGAGED, a JUMP of the error the PI tracks (`e` minus a running pull) by
+/// dsync#146 — while ENGAGED, a JUMP of the error the PI tracks (`e` minus a running pull) by
 /// more than [`REANCHOR_ON_ENGAGE_NS`] from one window to the next, that then stays beyond that
 /// bound for this many consecutive windows (3 s), is a phase jump (another writer set the clock,
 /// the grandmaster's time base jumped by less than [`DISCONTINUITY_NS`]), not something to slew:
@@ -129,7 +129,7 @@ pub const REANCHOR_ON_ENGAGE_NS: i64 = 1_000_000;
 /// rate servo's unlock produced that re-engagement; an engaged phase lock now holds the rate lock.
 pub const REALIGN_ENGAGED_WINDOWS: usize = 6;
 
-/// dantesync#134 — the FIRST engagement after the early anchor (the box anchored `D` at its first
+/// dsync#134 — the FIRST engagement after the early anchor (the box anchored `D` at its first
 /// window and placed the fleet date on it while the rate servo was still acquiring) keeps that
 /// anchor up to this far off it (ns), and retires the acquisition drift along the pull reference
 /// ([`FSTEP_PULL_TAU_S`]) instead of re-anchoring: a re-anchor here would be a SECOND date step,
@@ -137,7 +137,7 @@ pub const REALIGN_ENGAGED_WINDOWS: usize = 6;
 /// (more than the error clamp) the [`REANCHOR_ON_ENGAGE_NS`] rule applies as before.
 pub const BOOT_HOLD_NS: i64 = ERROR_CLAMP_US as i64 * 1_000;
 
-/// dantesync#134 (review of PR 135) — an UNLOCKED first anchor needs this many consecutive windows
+/// dsync#134 (review of PR 135) — an UNLOCKED first anchor needs this many consecutive windows
 /// whose medians agree within [`ANCHOR_AGREE_NS`] (one 4-sample window is not trusted alone: an
 /// interim grandmaster at a cold power-up, a bad window). About 1.5 s. A LOCKED window anchors at
 /// once, as before.
@@ -233,25 +233,25 @@ pub struct PhaseLockCore {
     pull_us: f64,
     freq_steps: u32,
     last_freq_step: Option<FreqStep>,
-    /// dantesync#134: the core has engaged at least once since start (the boot hold applies to
+    /// dsync#134: the core has engaged at least once since start (the boot hold applies to
     /// the first engagement only).
     engaged_once: bool,
-    /// dantesync#134: the unlocked first anchor being confirmed — the first window's median and
+    /// dsync#134: the unlocked first anchor being confirmed — the first window's median and
     /// how many agreeing windows so far.
     anchor_candidate: Option<(i64, usize)>,
-    /// dantesync#146: the open-loop phase of the acquisition (anchored, never engaged), and the
+    /// dsync#146: the open-loop phase of the acquisition (anchored, never engaged), and the
     /// frequency the first engagement started from when it was measured there.
     boot_fit: BootFreqFit,
     engaged_on_fit: Option<BootFit>,
-    /// dantesync#146: the first engagement started on a short ring and is still fitting.
+    /// dsync#146: the first engagement started on a short ring and is still fitting.
     boot_fit_open: bool,
-    /// dantesync#146: the once-only re-seed of that engagement, when it happened.
+    /// dsync#146: the once-only re-seed of that engagement, when it happened.
     boot_reseed: Option<BootFit>,
-    /// dantesync#146: consecutive engaged windows beyond the re-align bound, and the integrator
+    /// dsync#146: consecutive engaged windows beyond the re-align bound, and the integrator
     /// before the first of them.
     far_windows: usize,
     i_before_far_ppm: f64,
-    /// dantesync#146: the tracked error (ns) of the last engaged window, to tell a jump.
+    /// dsync#146: the tracked error (ns) of the last engaged window, to tell a jump.
     last_tracked_ns: Option<f64>,
 }
 
@@ -270,7 +270,7 @@ impl PhaseLockCore {
         self.engaged
     }
 
-    /// dantesync#134: anchored, but never engaged yet — the boot acquisition, the rate servo still
+    /// dsync#134: anchored, but never engaged yet — the boot acquisition, the rate servo still
     /// owns the word. The date layer works on the anchor already (it is the fleet date line).
     pub fn acquiring(&self) -> bool {
         self.anchor_ns.is_some() && !self.engaged_once
@@ -305,13 +305,13 @@ impl PhaseLockCore {
         self.last_freq_step
     }
 
-    /// dantesync#146: the acquisition fit the first engagement started its integrator on
+    /// dsync#146: the acquisition fit the first engagement started its integrator on
     /// (`None`: it started on the rate servo's word).
     pub fn engaged_on_fit(&self) -> Option<BootFit> {
         self.engaged_on_fit
     }
 
-    /// dantesync#146: the first engagement's integrator re-seeded once its ring was full.
+    /// dsync#146: the first engagement's integrator re-seeded once its ring was full.
     pub fn boot_reseed(&self) -> Option<BootFit> {
         self.boot_reseed
     }
@@ -344,19 +344,19 @@ impl PhaseLockCore {
         self.close_boot_fit();
     }
 
-    /// dantesync#146: windows in the acquisition / first-engagement fit (0 = none running).
+    /// dsync#146: windows in the acquisition / first-engagement fit (0 = none running).
     pub fn boot_fit_points(&self) -> usize {
         self.boot_fit.points()
     }
 
-    /// dantesync#146: this box lost PTP. The fit's open-loop phase needs the TRUE elapsed time
+    /// dsync#146: this box lost PTP. The fit's open-loop phase needs the TRUE elapsed time
     /// between windows, and the controller's `dt` after an outage is a fallback, not the outage's
     /// length: the fit starts again from the first window after it (review of #146).
     pub fn on_ptp_outage(&mut self) {
         self.close_boot_fit();
     }
 
-    /// dantesync#146: the first engagement's fit ends (resolved, or its engagement ended).
+    /// dsync#146: the first engagement's fit ends (resolved, or its engagement ended).
     fn close_boot_fit(&mut self) {
         self.boot_fit_open = false;
         self.boot_fit.reset();
@@ -375,7 +375,7 @@ impl PhaseLockCore {
         if self.anchor_ns.is_some() {
             self.rebase_pending = true;
         } else {
-            // dantesync#134: an early anchor being confirmed starts again in the new time base.
+            // dsync#134: an early anchor being confirmed starts again in the new time base.
             self.anchor_candidate = None;
         }
     }
@@ -398,11 +398,11 @@ impl PhaseLockCore {
         dt_s: f64,
     ) -> WindowOutcome {
         let mut event = AnchorEvent::None;
-        // dantesync#134: the first engagement after the early anchor holds it (within the hold).
+        // dsync#134: the first engagement after the early anchor holds it (within the hold).
         let first_engagement = ptp_locked && !self.engaged && !self.engaged_once;
         let anchor = match self.anchor_ns {
             None => {
-                // dantesync#134: anchored at the first windows, locked or not. An unlocked anchor
+                // dsync#134: anchored at the first windows, locked or not. An unlocked anchor
                 // needs ANCHOR_CONFIRM_WINDOWS agreeing windows; a locked window anchors at once.
                 if !ptp_locked {
                     let count = match self.anchor_candidate {
@@ -461,7 +461,7 @@ impl PhaseLockCore {
         };
 
         let mut e_ns = median_diff_ns.wrapping_sub(anchor);
-        // dantesync#146: a phase jump while engaged is re-aligned, not slewed.
+        // dsync#146: a phase jump while engaged is re-aligned, not slewed.
         if ptp_locked && self.engaged && event == AnchorEvent::None {
             let tracked_ns = e_ns as f64 - self.pull_us * 1_000.0;
             let bound = REANCHOR_ON_ENGAGE_NS as f64;
@@ -494,7 +494,7 @@ impl PhaseLockCore {
         }
         self.last_error_ns = Some(e_ns);
 
-        // dantesync#146: the acquisition's open-loop phase, for the first engagement's frequency.
+        // dsync#146: the acquisition's open-loop phase, for the first engagement's frequency.
         if !self.engaged_once && !ptp_locked {
             if event != AnchorEvent::None {
                 self.boot_fit.reset();
@@ -521,7 +521,7 @@ impl PhaseLockCore {
 
         if !self.engaged {
             self.engaged = true;
-            // dantesync#146: the first engagement after the early anchor starts on the frequency
+            // dsync#146: the first engagement after the early anchor starts on the frequency
             // the acquisition measured (when good enough), so the boot pull follows `e`.
             let fit = (first_engagement && event == AnchorEvent::None)
                 .then(|| self.boot_fit.estimate())
@@ -543,7 +543,7 @@ impl PhaseLockCore {
             self.drop_step_state();
         }
         if first_engagement && event == AnchorEvent::None {
-            // dantesync#134: the boot hold — the acquisition drift off the early anchor is retired
+            // dsync#134: the boot hold — the acquisition drift off the early anchor is retired
             // along the pull reference (the PI tracks `e − r`, the word carries `−r/τ`), so the
             // integrator starts undisturbed at the rate servo's word and the wall is not stepped.
             let e_us = e_ns as f64 / 1_000.0;
@@ -590,7 +590,7 @@ impl PhaseLockCore {
         }
     }
 
-    /// dantesync#146: one window of the first engagement's continued fit (`f` = the word just
+    /// dsync#146: one window of the first engagement's continued fit (`f` = the word just
     /// written). Once the ring is full: re-seed the integrator once if the fit says it is off, and
     /// retire the phase left along the pull reference (no wall step, `D` untouched).
     fn continue_boot_fit(&mut self, e_us: f64, dt_s: f64, f: f64, disturbed: bool) {
@@ -700,7 +700,7 @@ mod tests {
         (max_late, last)
     }
 
-    // ---- dantesync#134: the date at the FIRST window, one step, no second one at the lock -----
+    // ---- dsync#134: the date at the FIRST window, one step, no second one at the lock -----
 
     /// The windows of a box acquiring with the rate servo (not PTP-locked): the wall drifts off
     /// the early anchor by the rate error the servo has not removed yet.
@@ -860,7 +860,7 @@ mod tests {
             for n in 0..acq_windows {
                 // The rate servo stand-in: the word converges on −osc with τ ≈ 20 s, 1.5 ppm
                 // short of it at the lock. The core is told the word the servo applies (the
-                // controller passes its `total_correction`, dantesync#146's acquisition fit reads it).
+                // controller passes its `total_correction`, dsync#146's acquisition fit reads it).
                 let t = (n + 1) as f64 * DT;
                 let word = -osc * (1.0 - (-t / 20.0).exp()) * 0.97;
                 let out = c.on_window(D + p.e_ns.round() as i64, false, word, DT);
@@ -927,7 +927,7 @@ mod tests {
         }
     }
 
-    /// dantesync#146: a first engagement on a SHORT ring (a seeded boot) with a hand-over 5 ppm off.
+    /// dsync#146: a first engagement on a SHORT ring (a seeded boot) with a hand-over 5 ppm off.
     fn short_ring_engagement(c: &mut PhaseLockCore, p: &mut Plant) {
         for _ in 0..(ANCHOR_CONFIRM_WINDOWS + 4) {
             let out = c.on_window(D + p.e_ns.round() as i64, false, 30.0, DT);

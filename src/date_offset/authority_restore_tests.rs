@@ -1,4 +1,4 @@
-//! dantesync#126 — the date authority across a restart of the NTP master (saved, restored: the
+//! dsync#126 — the date authority across a restart of the NTP master (saved, restored: the
 //! same `D`, seq and change in flight) and its coordinated step on request. Closed-loop where it
 //! matters: the simulated fleet line drifts, is read every 10 s, and moves by exactly the step at
 //! its instant.

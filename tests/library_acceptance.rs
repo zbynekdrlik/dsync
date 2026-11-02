@@ -22,12 +22,12 @@
 #![cfg(target_os = "linux")]
 
 use anyhow::{anyhow, Result};
-use dantesync::clock::SystemClock;
-use dantesync::config::SystemConfig;
-use dantesync::controller::PtpController;
-use dantesync::ntp::NtpMeasurement;
-use dantesync::status::SyncStatus;
-use dantesync::traits::{NtpSource, PtpNetwork, RejoinOutcome};
+use dsync::clock::SystemClock;
+use dsync::config::SystemConfig;
+use dsync::controller::PtpController;
+use dsync::ntp::NtpMeasurement;
+use dsync::status::SyncStatus;
+use dsync::traits::{NtpSource, PtpNetwork, RejoinOutcome};
 use dsync_ptp::follower::model::VirtualClock;
 use dsync_ptp::follower::{Follower, FollowerConfig};
 use dsync_ptp::mono;

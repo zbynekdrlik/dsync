@@ -1,4 +1,4 @@
-//! dantesync#142 — the learned frequency survives a restart (a drift file, as chrony's and
+//! dsync#142 — the learned frequency survives a restart (a drift file, as chrony's and
 //! ntpd's `driftfile`).
 //!
 //! A cold start learned the oscillator's offset against the grandmaster from 0 at the ACQ

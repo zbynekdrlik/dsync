@@ -1,4 +1,4 @@
-//! dantesync#136 — the time server answers while the sync loop is busy, and ends with the loop.
+//! dsync#136 — the time server answers while the sync loop is busy, and ends with the loop.
 //! Real UDP on loopback (an ephemeral port: a running daemon may hold 31900). Upper bounds only.
 
 use super::*;

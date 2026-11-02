@@ -60,8 +60,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `ci.yml` runs on every PR: Lint (`cargo clippy -- -D warnings -A dead_code`, NOT `--all-targets`),
 `cargo test --lib` + `--test '*'`, and a real Linux+Windows compile. `.github/workflows/release.yml`
-builds and publishes `dantesync-linux-amd64`, `dantesync-windows-amd64.exe` and
-`dantesync-tray-windows-amd64.exe` on every tag push, all-or-nothing via `needs: build` (a failure
+builds and publishes `dsync-linux-amd64`, `dsync-windows-amd64.exe` and
+`dsync-tray-windows-amd64.exe` on every tag push, all-or-nothing via `needs: build` (a failure
 on either platform skips `publish` — no release with a missing asset).
 
 - `clippy::doc-lazy-continuation` fires when a wrapped `///` doc line starts with a markdown list
@@ -191,9 +191,9 @@ gh issue comment <N> -R zbynekdrlik/dsync -F body.md
 ```
 
 `-R` makes the hook use the explicit repo directly, bypassing the ambient-cwd resolution entirely.
-**The repo was renamed `zbynekdrlik/dantesync` → `zbynekdrlik/dsync` (#146 cycle): the hook names
+**The repo was renamed `zbynekdrlik/dsync` → `zbynekdrlik/dsync` (#146 cycle): the hook names
 its markers after the `-R` repo's NAME, and the commit gate looks for `dsync` markers, so
-`-R zbynekdrlik/dantesync` (GitHub still redirects it) posts the comment but records the marker
+`-R zbynekdrlik/dsync` (GitHub still redirects it) posts the comment but records the marker
 under the wrong name and the commit stays blocked.** The commit gate also wants, for a
 non-trivial ticket, numbered approaches (`Approach 1 (chosen)` … `Approach 3`) and an
 `Architektúra:` line that names the structure AND the framework (or why none fits); a design
@@ -360,7 +360,7 @@ Key tunable parameters (in `config.rs`):
 ### Binaries
 
 - `dantesync` - Main sync daemon/service
-- `dantesync-tray` - Windows tray application:
+- `dsync-tray` - Windows tray application:
   - Dynamic icon with pulsing ring based on drift rate
   - Toast notifications for state transitions (lock/unlock/offline)
   - Service control (Restart/Stop) via menu

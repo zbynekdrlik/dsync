@@ -1,4 +1,4 @@
-//! dantesync#142 — a window without a previous offset is not a measurement.
+//! dsync#142 — a window without a previous offset is not a measurement.
 //!
 //! The rate servo differentiates the window offset: the first window after warmup, and the first
 //! after any measurement reset (a clock step, a PTP outage), has nothing to differentiate against.

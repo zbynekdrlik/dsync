@@ -1,4 +1,4 @@
-//! dantesync#142 — the controller's side of the drift file (`crate::drift_file`): the seed at
+//! dsync#142 — the controller's side of the drift file (`crate::drift_file`): the seed at
 //! start, the seed judge over the first measured windows, the save every 10 minutes while
 //! LOCKED and at shutdown, and the `/status` fields.
 //!
@@ -52,7 +52,7 @@ where
     N: PtpNetwork,
     S: NtpSource,
 {
-    /// dantesync#142: open the drift file at `path` and, when it holds a usable learned frequency,
+    /// dsync#142: open the drift file at `path` and, when it holds a usable learned frequency,
     /// seed the servo with it and write it to the clock now (before the warmup). Anything else (no
     /// file, unreadable, malformed, older than 30 days, out of range) starts from 0 and logs why.
     pub fn open_drift_file(&mut self, path: &Path) {
@@ -99,7 +99,7 @@ where
         }
     }
 
-    /// dantesync#142: a MEASURED window's raw rate (over `dt_secs`) while the seed is judged. The
+    /// dsync#142: a MEASURED window's raw rate (over `dt_secs`) while the seed is judged. The
     /// judge reads the rate the oscillator shows against the SEED itself: the raw rate minus what
     /// the word in force over this window's span (half the previous word, half the last one, see
     /// `FreqSeed::word_last`) differed from the seed, so the ACQ P term (gain 0.8) neither hides
@@ -156,9 +156,9 @@ where
         }
     }
 
-    /// dantesync#142: after each window — note the word it wrote (for the seed judge), and while
+    /// dsync#142: after each window — note the word it wrote (for the seed judge), and while
     /// LOCKED save the learned frequency every [`DRIFT_SAVE_INTERVAL`] (the first one an interval
-    /// after the lock). dantesync#146: "locked" is the REPORTED lock ([41]): under the phase lock
+    /// after the lock). dsync#146: "locked" is the REPORTED lock ([41]): under the phase lock
     /// the rate lock is held while engaged, so it no longer says the frequency has settled.
     pub(super) fn tick_drift_file(&mut self) {
         self.freq_seed.word_before = self.freq_seed.word_last;
@@ -178,7 +178,7 @@ where
         }
     }
 
-    /// dantesync#142: at shutdown, save the learned frequency when LOCKED (else the file keeps
+    /// dsync#142: at shutdown, save the learned frequency when LOCKED (else the file keeps
     /// the last locked value). `main` calls it after the sync loop ends.
     pub fn save_drift_file_at_shutdown(&mut self) {
         if self.reported_lock() && !self.ptp_offline {
@@ -241,7 +241,7 @@ where
         }
     }
 
-    /// dantesync#142: the `/status` fields.
+    /// dsync#142: the `/status` fields.
     pub(super) fn publish_freq_seed(&self, status: &mut SyncStatus) {
         status.freq_seed_ppm = self.freq_seed.seed_ppm;
         status.freq_seed_source = if self.freq_seed.source.is_empty() {

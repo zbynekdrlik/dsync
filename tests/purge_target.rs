@@ -154,7 +154,7 @@ fn purge_target_daemon_live_true_when_a_matching_process_is_found() {
     let cmd = format!(
         r#"set -uo pipefail
 . {path}
-pgrep() {{ [ "$1" = "-x" ] && [ "$2" = "dantesync|dantesync-tray" ] && return 0; return 1; }}
+pgrep() {{ [ "$1" = "-x" ] && [ "$2" = "dantesync|dsync-tray" ] && return 0; return 1; }}
 purge_target_daemon_live && echo LIVE || echo NOTLIVE
 "#,
         path = lib_script().display()
@@ -189,7 +189,7 @@ fn purge_target_daemon_comm_pattern_matches_both_binary_names() {
         "daemon-live check must match by process NAME (pgrep -x), not a full-cmdline grep"
     );
     assert!(
-        src.contains("dantesync-tray"),
+        src.contains("dsync-tray"),
         "daemon-live guard must also cover the Windows tray companion process"
     );
 }
@@ -520,8 +520,7 @@ fn claude_md_build_and_ci_names_the_release_workflow_and_the_purge_backstop() {
         "must name .github/workflows/release.yml as the thing that actually builds+publishes"
     );
     assert!(
-        section.contains("dantesync-linux-amd64")
-            && section.contains("dantesync-windows-amd64.exe"),
+        section.contains("dsync-linux-amd64") && section.contains("dsync-windows-amd64.exe"),
         "must name the actual published release assets"
     );
     assert!(

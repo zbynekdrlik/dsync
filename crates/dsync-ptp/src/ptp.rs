@@ -28,7 +28,7 @@ impl From<u8> for PtpV1Control {
     }
 }
 
-/// dantesync#129 — what every node before 1.17 read as the grandmaster UUID off a real Dante Sync:
+/// dsync#129 — what every node before 1.17 read as the grandmaster UUID off a real Dante Sync:
 /// a 36-byte header plus a 13-byte skip landed on absolute bytes 49..55, the reserved byte and
 /// `grandmasterCommunicationTechnology` (1) inside zeros. It was reported on `/status.gm_uuid`,
 /// saved by the NTP master with its date offset (`date-offset.json`) and announced on 31900, so it
@@ -52,7 +52,7 @@ pub const LEGACY_MISREAD_GM_UUID: [u8; 6] = [0, 0, 0, 0, 1, 0];
 /// | 34 | flags (u16) |
 /// | 36..40 | reserved |
 ///
-/// dantesync#129: the size was 36 before 1.17, so the Sync body was read 4 bytes early.
+/// dsync#129: the size was 36 before 1.17, so the Sync body was read 4 bytes early.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PtpV1Header {
     pub version_ptp: u16,
@@ -122,7 +122,7 @@ fn nul_terminated(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
-/// dantesync#112 — a PTP TIME message: a datagram with a whole PTPv1 header whose control is Sync
+/// dsync#112 — a PTP TIME message: a datagram with a whole PTPv1 header whose control is Sync
 /// or Follow_Up, i.e. the grandmaster's time. The ONE definition of "PTP was received": the
 /// controller's liveness (and the grandmaster it names) and the backends' home address both use
 /// it, so a runt, another follower's Delay_Req or any stray datagram on 319/320 counts for neither.
@@ -172,7 +172,7 @@ impl PtpTimestamp {
 /// | 36 | reserved |
 /// | 37 | grandmasterPreferred |
 ///
-/// The rest of the 84-byte body (the local and parent clock) is not read. dantesync#129: the
+/// The rest of the 84-byte body (the local and parent clock) is not read. dsync#129: the
 /// best-master fields are parsed for the grandmaster failover; nothing selects on them yet.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PtpV1SyncMessageBody {
@@ -252,7 +252,7 @@ impl PtpV1FollowUpBody {
         }
         let mut rdr = Cursor::new(data);
 
-        // reserved (2). dantesync#129: before 1.17 the body started 4 bytes early (a 36-byte
+        // reserved (2). dsync#129: before 1.17 the body started 4 bytes early (a 36-byte
         // header) and skipped 6, which reached the same absolute byte 42: the decode is unchanged.
         rdr.set_position(2);
 
@@ -274,7 +274,7 @@ impl PtpV1FollowUpBody {
 mod tests {
     use super::*;
 
-    /// dantesync#129 — a real Dante PTPv1 Sync (124 bytes, the UDP payload) and its Follow_Up
+    /// dsync#129 — a real Dante PTPv1 Sync (124 bytes, the UDP payload) and its Follow_Up
     /// (52 bytes), captured read-only off the wire: see `tests/fixtures/ptpv1/README.md`.
     const DANTE_SYNC: &[u8] = include_bytes!("../tests/fixtures/ptpv1/dante-sync.bin");
     const DANTE_FOLLOW_UP: &[u8] = include_bytes!("../tests/fixtures/ptpv1/dante-follow-up.bin");

@@ -1,4 +1,4 @@
-//! dantesync#126 — the [`DateAuthority`] across a restart of the NTP master, and its coordinated
+//! dsync#126 — the [`DateAuthority`] across a restart of the NTP master, and its coordinated
 //! step on request.
 //!
 //! - [`DateAuthority::persisted`] is what the master saves (its published state, see
@@ -14,7 +14,7 @@
 
 use super::*;
 
-/// dantesync#126 — why [`DateAuthority::step_now`] announced nothing.
+/// dsync#126 — why [`DateAuthority::step_now`] announced nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepRefused {
     /// A step or a slew is announced and not complete, or an abnormal correction is being
@@ -24,12 +24,12 @@ pub enum StepRefused {
     /// nightly step).
     NoEstimate,
     /// The fleet line is not behind UTC (`error_ns` ≤ 0): a backward correction is slewed or made
-    /// at night, never stepped on request (dantesync#119), and there is nothing to step at 0.
+    /// at night, never stepped on request (dsync#119), and there is nothing to step at 0.
     NotBehind { error_ns: i64 },
 }
 
 impl DateAuthority {
-    /// dantesync#126 — the state to save, as it stands at `now_ptp_ns`: a change due by then has
+    /// dsync#126 — the state to save, as it stands at `now_ptp_ns`: a change due by then has
     /// landed (so the record changes exactly when the published state does).
     pub fn persisted(&self, now_ptp_ns: i64) -> AuthorityState {
         let (d_ns, since_ptp_ns, pending, slew) = self.promoted(now_ptp_ns);
@@ -44,7 +44,7 @@ impl DateAuthority {
         }
     }
 
-    /// dantesync#126 — the authority a restarted master builds from its saved state: `D`, its
+    /// dsync#126 — the authority a restarted master builds from its saved state: `D`, its
     /// instant, the seq and the change in flight continue (a change whose instant passed while the
     /// master was down is in effect). Everything the process measured is fresh: the UTC estimate
     /// starts again from the next reading. Configure it like [`new`](Self::new) (the builders),
@@ -66,7 +66,7 @@ impl DateAuthority {
         a
     }
 
-    /// dantesync#126 — the last nightly step of the saved state (daily mode; nothing in micro
+    /// dsync#126 — the last nightly step of the saved state (daily mode; nothing in micro
     /// mode). Call after [`with_correction`](Self::with_correction), which builds the scheduler.
     pub fn with_daily_last_step(mut self, last: Option<(i64, i64)>) -> Self {
         if let (Some(daily), Some((wall, amount))) = (self.daily.as_mut(), last) {
@@ -75,7 +75,7 @@ impl DateAuthority {
         self
     }
 
-    /// dantesync#126 — announce the current UTC error NOW as ONE coordinated step,
+    /// dsync#126 — announce the current UTC error NOW as ONE coordinated step,
     /// [`MICRO_LEAD_FACTOR`] leads ahead, like the nightly window: the step every box applies at
     /// that instant. The error is the estimate where the step lands (the same robust line as the
     /// nightly step), and the kept readings are compensated at once. Refused while another change
@@ -108,7 +108,7 @@ impl DateAuthority {
 }
 
 impl DateFollower {
-    /// dantesync#126 — the restarted master aligns its own scheduler with the session it restored
+    /// dsync#126 — the restarted master aligns its own scheduler with the session it restored
     /// BEFORE it takes the session's announce, when that announce is still ahead (a saved step or
     /// slew whose instant has not come): an unaligned follower ignores a change still ahead, so the
     /// master would never schedule it — nor, staying unaligned, any later one — on its own wall.

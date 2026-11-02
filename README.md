@@ -24,7 +24,7 @@ A high-precision PTP (Precision Time Protocol) synchronization tool optimized fo
 - **Source:** polls the daemon's `http://127.0.0.1:8898/status` once a second (the port from
   `http_status.port` in `/etc/dantesync/config.json`; `http_status.enabled` must stay on, the
   default); one instance per user
-- **Run:** `dantesync-tray` (release asset `dantesync-tray-linux-amd64`) inside an X session whose
+- **Run:** `dsync-tray` (release asset `dsync-tray-linux-amd64`) inside an X session whose
   panel has a system tray (e.g. tint2). Runtime packages: `libgtk-3-0`,
   `libayatana-appindicator3-1`, `libxdo3`. The NO DANTE CLOCK alarm is notified by the daemon
   itself (`notify-send`), so the Linux tray shows no notifications.
@@ -60,7 +60,7 @@ let state = clock.state(); // locked (DSYX [41]), holdover, gm_uuid, date_offset
 
 ### Linux
 ```bash
-curl -sSL https://raw.githubusercontent.com/zbynekdrlik/dantesync/master/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/zbynekdrlik/dsync/master/install.sh | sudo bash
 ```
 
 ### Windows
@@ -68,14 +68,14 @@ curl -sSL https://raw.githubusercontent.com/zbynekdrlik/dantesync/master/install
 2. Open PowerShell as **Administrator**
 3. Run:
 ```powershell
-irm https://raw.githubusercontent.com/zbynekdrlik/dantesync/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/zbynekdrlik/dsync/master/install.ps1 | iex
 ```
 
 ## Uninstall
 
 ### Windows
 ```powershell
-irm https://raw.githubusercontent.com/zbynekdrlik/dantesync/master/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/zbynekdrlik/dsync/master/uninstall.ps1 | iex
 ```
 
 ## Usage (Manual)
@@ -92,7 +92,7 @@ dantesync [OPTIONS]
 cargo build --release
 ```
 
-The tray needs the `tray` feature: `cargo build --release --features tray --bin dantesync-tray`
+The tray needs the `tray` feature: `cargo build --release --features tray --bin dsync-tray`
 (on Linux with `libgtk-3-dev libayatana-appindicator3-dev libxdo-dev` installed). The daemon is
 built without it and never links gtk.
 

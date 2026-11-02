@@ -62,12 +62,12 @@ join to the NIC that reaches the grandmaster — not whichever NIC the OS enumer
 
 The identical "PTP and NTP live on different subnets on a dual-homed host" problem was already solved
 for the NTP transport by `net_pcap::find_device_for_ntp_server` + `ntp_packet::select_ntp_pcap_device`
-(dantesync#53 — subnet containment, longest-prefix, skip zero-netmask junk adapters). The PTP
+(dsync#53 — subnet containment, longest-prefix, skip zero-netmask junk adapters). The PTP
 interface selection MIRRORS it. If you touch the receive path, follow that pattern; do not add a
 config field pinning the interface (rejected — the `gm_allowlist` the operator already sets IS the
 signal, zero extra config).
 
-dantesync issue 112: the startup AND the PTP re-join select through ONE `select_ptp_device(hint,
+dsync issue 112: the startup AND the PTP re-join select through ONE `select_ptp_device(hint,
 allowlist, home)` (startup `home = None`): the trusted-subnet rule, then the device that carries the
 home address (where the grandmaster's time was last received), then the name fallback — the pure
 order is `net::choose_capture_device`. Linux has no trusted-subnet rule (it uses
@@ -107,7 +107,7 @@ BYTE-IDENTICAL. Only a multi-homed box WITH a restricting allowlist whose defaul
 subnet changes behavior. The Linux socket path (`RealPtpNetwork`) is intentionally NOT changed (the
 fleet's only multi-homed box is Windows).
 
-## The IGMP-join socket must bind an EPHEMERAL port, NEVER 319/320 (dantesync#109 — DVS coexistence)
+## The IGMP-join socket must bind an EPHEMERAL port, NEVER 319/320 (dsync#109 — DVS coexistence)
 
 On a box that ALSO runs Dante Virtual Soundcard (the `stream` box, 10.77.9.204), DVS's own `ptp.exe`
 needs UDP 319/320 exclusively for its PTP follower. The pcap path's IGMP-membership socket

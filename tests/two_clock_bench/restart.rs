@@ -1,4 +1,4 @@
-//! dantesync#126 — the bench's master RESTART, its followers' authority loss, and the
+//! dsync#126 — the bench's master RESTART, its followers' authority loss, and the
 //! coordinated step on request.
 //!
 //! The master's PROCESS stops (no PTP window, no authority, nothing published, its NTP server
@@ -468,7 +468,7 @@ fn a_restart_inside_a_steps_lead_lands_the_step_with_the_fleet_126() {
         "{landings:?}"
     );
     assert!(
-        (landings[0].1 - landings[1].1).abs() <= dantesync::date_offset::ABSORB_TOLERANCE_NS,
+        (landings[0].1 - landings[1].1).abs() <= dsync::date_offset::ABSORB_TOLERANCE_NS,
         "{landings:?}"
     );
     let t: Vec<f64> = landings.iter().map(|l| l.2).collect();

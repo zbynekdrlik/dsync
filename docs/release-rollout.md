@@ -9,8 +9,8 @@ addresses, transports and credentials are not in this repository: they are in
 ## The order
 
 1. **Release.** Bump `Cargo.toml`, merge `dev` into `master`. CI's `auto-release` job tags
-   `vX.Y.Z` and `release.yml` publishes `dantesync-linux-amd64`, `dantesync-windows-amd64.exe`,
-   `dantesync-tray-windows-amd64.exe` and `dantesync-tray-linux-amd64`, each with a `.sha256`.
+   `vX.Y.Z` and `release.yml` publishes `dsync-linux-amd64`, `dsync-windows-amd64.exe`,
+   `dsync-tray-windows-amd64.exe` and `dsync-tray-linux-amd64`, each with a `.sha256`.
    A failure on either platform publishes nothing.
 2. **Verify the assets once** against their `.sha256` files before any node gets them.
 3. **One canary node first, never the NTP master.** Check both its `/status` on port 8898 and

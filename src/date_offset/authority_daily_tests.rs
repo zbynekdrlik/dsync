@@ -1,4 +1,4 @@
-//! dantesync#119 (1.12) — the date authority in DAILY mode: readings all day, nothing announced;
+//! dsync#119 (1.12) — the date authority in DAILY mode: readings all day, nothing announced;
 //! at the nightly window ONE coordinated step of the error rounded to the 200 ms quantum (1.16),
 //! either direction, the remainder carried; the emergency cap, never rounded; the micro mode
 //! untouched. Closed-loop: the simulated fleet line drifts, is read

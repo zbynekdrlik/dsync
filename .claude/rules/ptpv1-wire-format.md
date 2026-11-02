@@ -8,7 +8,7 @@ paths:
   - "crates/dsync-ptp/tests/fixtures/ptpv1/**"
 ---
 
-# The PTPv1 wire format and the grandmaster identity (dantesync#129)
+# The PTPv1 wire format and the grandmaster identity (dsync#129)
 
 ## The layout, proven on real Dante bytes
 

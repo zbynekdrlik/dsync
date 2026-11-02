@@ -1,4 +1,4 @@
-//! dantesync#146 — the reported lock's controller glue: the decoupled rate, the one definition of
+//! dsync#146 — the reported lock's controller glue: the decoupled rate, the one definition of
 //! the published lock, and the PTP-offline edge. The closed loop is `lock_sim_tests.rs`.
 
 use super::super::tests::phase_lock_config;

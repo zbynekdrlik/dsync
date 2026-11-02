@@ -55,7 +55,7 @@ fn filetime_u64(ft: windows::Win32::Foundation::FILETIME) -> u64 {
     (ft.dwHighDateTime as u64) << 32 | (ft.dwLowDateTime as u64)
 }
 
-/// dantesync#119 (1.11.1) -- Windows under the step law (`super::step`): the coarse and the precise
+/// dsync#119 (1.11.1) -- Windows under the step law (`super::step`): the coarse and the precise
 /// system time, and QPC at the system time's rate as the step-immune reference.
 struct WindowsStepOps {
     perf_frequency: i64,
@@ -130,7 +130,7 @@ impl StepOps for WindowsStepOps {
 pub struct WindowsClock {
     original_increment: u64,
     perf_frequency: i64,
-    /// dantesync#119: the learned read->set latency of a step (`super::step`).
+    /// dsync#119: the learned read->set latency of a step (`super::step`).
     step_lead: StepLead,
 
     // Diagnostic tracking
@@ -417,7 +417,7 @@ impl SystemClock for WindowsClock {
         Ok(())
     }
 
-    /// dantesync#119 (1.11.1): the step law (`super::step::step_wall`) -- the wall moves by
+    /// dsync#119 (1.11.1): the step law (`super::step::step_wall`) -- the wall moves by
     /// exactly `offset`, measured against QPC. The read-modify-write this replaces read the
     /// COARSE system time and so landed short by the clock-interrupt lag on every step.
     fn step_clock(&mut self, offset: Duration, sign: i8) -> Result<()> {
@@ -592,7 +592,7 @@ mod tests {
         assert_eq!(offset_100ns, 10);
     }
 
-    /// dantesync#119: on a real Windows box (the CI leg) the step law's two clocks agree while
+    /// dsync#119: on a real Windows box (the CI leg) the step law's two clocks agree while
     /// nothing steps -- the precise system time and QPC at the system-time rate advance together.
     /// A unit slip (100 ns vs ns, a QPC frequency mix-up) would be off by orders of magnitude.
     #[test]

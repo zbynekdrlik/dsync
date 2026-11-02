@@ -65,7 +65,7 @@ DRIFT_NANO_US = 0.5     # NANO mode entry: < 0.5 us/s
 DRIFT_LOCK_US = 5.0     # LOCK threshold: < 5 us/s
 DRIFT_PROD_US = 20.0    # PROD/ACQ boundary: < 20 us/s
 
-# dantesync#129: since 1.17 `gm_uuid` (base reply bytes 42-47) is the REAL grandmaster, not the
+# dsync#129: since 1.17 `gm_uuid` (base reply bytes 42-47) is the REAL grandmaster, not the
 # constant 00:00:00:00:01:00 every node misread before. Two ports of one clock (the video and the
 # audio VLAN) carry two UUIDs, and a mixed 1.16/1.17 fleet reports both forms, so a GM difference
 # is reported, never a verdict term.

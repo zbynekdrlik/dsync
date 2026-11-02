@@ -1,4 +1,4 @@
-//! dantesync#119 (1.12) — the controller wiring of the NIGHTLY date step: the configured mode
+//! dsync#119 (1.12) — the controller wiring of the NIGHTLY date step: the configured mode
 //! reaches the master's authority, the nightly step is pre-announced (DSYX, two leads) and shown
 //! in `/status` during its lead — signed size and due time, the SongPlayer requirement — then
 //! cleared once it lands; nothing is announced by day, an error beyond the emergency cap is

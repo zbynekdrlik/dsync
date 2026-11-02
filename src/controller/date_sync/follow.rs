@@ -1,4 +1,4 @@
-//! dantesync#88 / #119 — a follower acting on the authority's announce: the step it takes now,
+//! dsync#88 / #119 — a follower acting on the authority's announce: the step it takes now,
 //! the step or slew it schedules (a micro-correction scheduled quietly), what it logs.
 
 use super::*;

@@ -1,4 +1,4 @@
-//! dantesync#129 (slice 0) — the grandmaster IDENTITY consumers once `gm_uuid` is real. Before
+//! dsync#129 (slice 0) — the grandmaster IDENTITY consumers once `gm_uuid` is real. Before
 //! 1.17 every node read the same constant (`ptp::LEGACY_MISREAD_GM_UUID`), so none of these checks
 //! could tell grandmasters apart. Slice 0 is report-only for the fleet: the GM-change detector
 //! starts working, and nothing that used to adopt the master's date offset stops adopting it.

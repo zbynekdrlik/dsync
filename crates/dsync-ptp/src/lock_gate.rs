@@ -1,4 +1,4 @@
-//! dantesync#146 — the REPORTED lock under the PTP phase lock: DSYX byte [41], `/status.is_locked`,
+//! dsync#146 — the REPORTED lock under the PTP phase lock: DSYX byte [41], `/status.is_locked`,
 //! the tray and the IPC (all of them read `/status.is_locked`, one definition).
 //!
 //! # The contract (ROZHODNUTÉ on #146, dstack confirmed 2026-11-02)

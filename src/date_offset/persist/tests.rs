@@ -1,4 +1,4 @@
-//! dantesync#126 — the saved date-offset record: `D` in effect at an instant, and whether a
+//! dsync#126 — the saved date-offset record: `D` in effect at an instant, and whether a
 //! restarted master may restore it.
 
 use super::*;
@@ -71,7 +71,7 @@ fn the_offset_is_judged_against_the_d_in_effect_at_that_instant_126() {
     );
 }
 
-/// dantesync#129 (slice 0): the grandmaster UUID is report-only. Another UUID under the same
+/// dsync#129 (slice 0): the grandmaster UUID is report-only. Another UUID under the same
 /// time base (another port of one clock) restores; a grandmaster with another uptime is refused by
 /// the time base (`a_time_base_off_beyond_the_cap_is_never_restored_126`); no identity at all is
 /// still never restored.
@@ -152,7 +152,7 @@ fn a_saved_state_older_than_a_day_is_not_restored_126() {
     assert_eq!(st.validate_restore(Some(GM), anchor, wall, CAP), Ok(-3 * S));
 }
 
-/// dantesync#129: a 1.16 master saved the constant it misread as the grandmaster's UUID. On the
+/// dsync#129: a 1.16 master saved the constant it misread as the grandmaster's UUID. On the
 /// upgrade's restart the live UUID is real, and refusing the restore would boot-step the master to
 /// UTC: the fleet date would move. A saved constant names no grandmaster, so the time base decides.
 #[test]

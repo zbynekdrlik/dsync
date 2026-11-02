@@ -13,7 +13,7 @@ pub(super) fn one_offset(us: i64, sign: i8) -> crate::ntp::NtpMeasurement {
 }
 
 // ========================================================================
-// PTP PHASE LOCK + FLEET DATE OFFSET WIRING (dantesync#117 / #88)
+// PTP PHASE LOCK + FLEET DATE OFFSET WIRING (dsync#117 / #88)
 // ========================================================================
 //
 // The laws themselves (the PI, the authority, the scheduler) are proven in their own modules
@@ -475,7 +475,7 @@ fn nothing_is_published_or_adopted_while_a_re_anchor_is_pending_88() {
     assert!(!f.date_sync.follower.adopted());
 }
 
-/// dantesync#126 (design issuecomment-5905806391, (c)): this replaces
+/// dsync#126 (design issuecomment-5905806391, (c)): this replaces
 /// `a_follower_that_loses_the_authority_returns_to_the_local_ntp_path_88`. A silent master (a
 /// restart) no longer sends its followers back to their own NTP steps after 30 s — each of them
 /// stepped +247 ms at its own instant on 30.9.2026. A follower that has adopted `D` HOLDS it: `D`
@@ -521,7 +521,7 @@ fn a_follower_holds_the_fleet_date_through_a_silent_master_126() {
     assert_ne!(st.read().expect("status").date_authority, "holding");
 }
 
-/// dantesync#126: the hold is bounded (`authority_hold_s`, 900 s by default). A master silent
+/// dsync#126: the hold is bounded (`authority_hold_s`, 900 s by default). A master silent
 /// longer than the loss window plus the hold is forgotten, and the follower takes its local NTP
 /// date path again (the 1.14 fallback, pinned by the test this one replaces).
 #[test]

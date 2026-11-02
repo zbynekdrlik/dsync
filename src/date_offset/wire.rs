@@ -1,4 +1,4 @@
-//! The wire codec of the 31900 time-query reply's date-offset extension (dantesync#88, v2 #119,
+//! The wire codec of the 31900 time-query reply's date-offset extension (dsync#88, v2 #119,
 //! v3 the #119 micro-corrections). Pure, like the rest of `crate::date_offset`.
 
 use super::{clamp_slew_ppm, DateAnnounce, SlewSpec};
@@ -28,7 +28,7 @@ pub const EXT_VERSION: u8 = 3;
 /// during a grandmaster change those differ for a window, and publishing the new UUID beside an
 /// old-base `D` would let a follower that already re-anchored adopt a days-wrong offset.
 ///
-/// dantesync#129 (1.17, slice 0): a 1.17 node sends `ptp::LEGACY_MISREAD_GM_UUID` here (the
+/// dsync#129 (1.17, slice 0): a 1.17 node sends `ptp::LEGACY_MISREAD_GM_UUID` here (the
 /// constant every pre-1.17 node read as its grandmaster), so a 1.16 follower, which compares it
 /// with its own misread anchor, keeps adopting. A 1.17 follower reports the field and lets the
 /// time-base check decide; the real identity returns here in a later slice of issue 129, once no
@@ -36,7 +36,7 @@ pub const EXT_VERSION: u8 = 3;
 ///
 /// A future version APPENDS fields; a v1 reader decodes the first 40 bytes of any version ≥ 1.
 ///
-/// Version 2 (dantesync#119) keeps those 40 bytes and uses two of them that v1 writes as zero, so a
+/// Version 2 (dsync#119) keeps those 40 bytes and uses two of them that v1 writes as zero, so a
 /// v1 reader simply sees a step (the pre-#119 behaviour):
 ///
 /// ```text
@@ -46,7 +46,7 @@ pub const EXT_VERSION: u8 = 3;
 /// [40-47]  slew_from_ns     (i64) — D where the slew starts
 /// ```
 ///
-/// Version 3 (dantesync#119 follow-up) keeps the v2 layout and sets one more flag, which a v2 reader
+/// Version 3 (dsync#119 follow-up) keeps the v2 layout and sets one more flag, which a v2 reader
 /// ignores (it simply takes the increment as a plain step or slew):
 ///
 /// ```text
@@ -54,17 +54,17 @@ pub const EXT_VERSION: u8 = 3;
 /// ```
 pub const EXT_SIZE: usize = 40;
 
-/// Size of the v2 extension (dantesync#119): the v1 fields plus `slew_from_ns`. This build writes
+/// Size of the v2 extension (dsync#119): the v1 fields plus `slew_from_ns`. This build writes
 /// it; a reply is only read as a slew when the version is ≥ 2 AND all of it is present.
 pub const EXT_SIZE_V2: usize = 48;
 
 /// Extension flag: the replying node is the fleet's date-offset authority.
 pub const EXT_FLAG_AUTHORITY: u8 = 0x01;
 
-/// Extension flag (v2, dantesync#119): the announce is a coordinated SLEW, not a step.
+/// Extension flag (v2, dsync#119): the announce is a coordinated SLEW, not a step.
 pub const EXT_FLAG_SLEW: u8 = 0x02;
 
-/// Extension flag (v3, dantesync#119 follow-up): the announce is a MICRO-correction.
+/// Extension flag (v3, dsync#119 follow-up): the announce is a MICRO-correction.
 pub const EXT_FLAG_MICRO: u8 = 0x04;
 
 /// The decoded 31900 reply extension.

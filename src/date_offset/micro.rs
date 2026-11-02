@@ -1,4 +1,4 @@
-//! dantesync#119 follow-up — the fleet date correction as sub-threshold MICRO-corrections.
+//! dsync#119 follow-up — the fleet date correction as sub-threshold MICRO-corrections.
 //!
 //! Until 1.10 the date authority let the fleet date drift from UTC up to the step bound (50 ms)
 //! and then corrected the whole error in one coordinated event. At the grandmaster's +1.06 ms/min
@@ -534,7 +534,7 @@ impl MicroScheduler {
             .is_some_and(|&(t, _)| now_ptp_ns.saturating_sub(t) > MICRO_READING_MAX_AGE_NS)
     }
 
-    /// dantesync#119 (1.12) — a UTC reading arrived within [`MICRO_READING_MAX_AGE_NS`] of
+    /// dsync#119 (1.12) — a UTC reading arrived within [`MICRO_READING_MAX_AGE_NS`] of
     /// `now_ptp_ns` (the nightly step is decided only then, like a micro-correction).
     pub fn fresh(&self, now_ptp_ns: i64) -> bool {
         self.readings
@@ -542,7 +542,7 @@ impl MicroScheduler {
             .is_some_and(|&(t, _)| now_ptp_ns.saturating_sub(t) <= MICRO_READING_MAX_AGE_NS)
     }
 
-    /// dantesync#119 (1.12) — the level rests on enough FRESH readings: at least
+    /// dsync#119 (1.12) — the level rests on enough FRESH readings: at least
     /// [`MICRO_MIN_READINGS`] within [`MICRO_LEVEL_WINDOW_NS`] of the newest, which is fresh. After
     /// a UTC gap the first reading back is alone in the level window (its noise reads as 0), and
     /// one WAN outlier must not set a whole nightly step.

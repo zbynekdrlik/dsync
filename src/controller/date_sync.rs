@@ -1,4 +1,4 @@
-//! dantesync#117 / #88 — the controller's PTP phase lock and fleet date-offset glue.
+//! dsync#117 / #88 — the controller's PTP phase lock and fleet date-offset glue.
 //!
 //! The laws live in pure modules — `crate::ptp_phase_lock` (the PI on `e = (t2 − t1) − D`) and
 //! `crate::date_offset` (the authority, the step scheduler, the time-base check) — proven there and
@@ -8,7 +8,7 @@
 //! and what `/status` publishes. A child module of `controller` so it reaches the controller's
 //! private state; all of its state is the one [`DateSync`] field.
 //!
-//! dantesync#119 — a backward fleet correction is a coordinated SLEW (`crate::date_offset`): `D`
+//! dsync#119 — a backward fleet correction is a coordinated SLEW (`crate::date_offset`): `D`
 //! follows the slew's schedule of PTP time. Here it becomes (1) an extra rate term of the ONE
 //! frequency word — composed with the phase lock's word in `apply_self_tuning_servo` and
 //! re-applied from the loop at the slew's start and end instants ([`PtpController::apply_slew_edge`]),
@@ -17,14 +17,14 @@
 //! clock as if no slew ran, so neither reads the deliberate rate as grandmaster disagreement, and
 //! the only residual they see is the rate term's switching delay (one loop iteration).
 //!
-//! dantesync#119 follow-up — the fleet date is corrected in MICRO-corrections (≤ 500 µs, at most
+//! dsync#119 follow-up — the fleet date is corrected in MICRO-corrections (≤ 500 µs, at most
 //! one per 20 s, beyond a 2 ms dead band; `crate::date_offset::MicroScheduler`). The master's
 //! loop drives the authority's micro clock ([`PtpController::tick_date_authority`]); every box
 //! applies an increment through the same step / slew paths, logs it quietly as `micro`, keeps it
 //! out of the NTP step-storm count, and publishes `date_micro_*` in `/status`. A drift the
 //! corrections cannot hold raises the loud `date correction falling behind` line.
 //!
-//! dantesync#119 (1.12) — by default the fleet date is corrected ONCE A NIGHT
+//! dsync#119 (1.12) — by default the fleet date is corrected ONCE A NIGHT
 //! (`system.date_offset.correction = "daily"`, `crate::date_offset::DailyScheduler`): the master's
 //! loop drives the same authority tick, which announces nothing by day and ONE coordinated step
 //! of the error rounded to whole `daily_step_quantum_ms` (1.16) when the nightly window opens
@@ -55,7 +55,7 @@ const AUTHORITY_REPLY_MAX_AGE: Duration = Duration::from_secs(5);
 /// A follower that has heard no APPLICABLE authority reply (fresh, in the same PTP time base)
 /// for this long stops following — otherwise a silent, re-based or downgraded master would
 /// leave it neither following nor stepping, drifting at the grandmaster-vs-UTC rate with `/status`
-/// still saying "follower". dantesync#126: it first HOLDS the fleet D for
+/// still saying "follower". dsync#126: it first HOLDS the fleet D for
 /// `system.date_offset.authority_hold_s` (a master restart), then returns to the local NTP path.
 const AUTHORITY_LOSS: Duration = Duration::from_secs(30);
 
@@ -110,57 +110,57 @@ pub(super) struct DateSync {
     pub(super) last_step: Option<(i64, u64, &'static str)>,
     /// The master's last `UTC − wall` reading (ns), as fed to the authority.
     pub(super) master_utc_error_ns: Option<i64>,
-    /// dantesync#119 — the rate of a backward correction's slew (the master's authority uses it).
+    /// dsync#119 — the rate of a backward correction's slew (the master's authority uses it).
     pub(super) slew_ppm: u32,
-    /// dantesync#119 — the slew rate term currently inside the applied frequency word (ppm).
+    /// dsync#119 — the slew rate term currently inside the applied frequency word (ppm).
     pub(super) applied_slew_ppm: f64,
-    /// dantesync#119 — slews already folded into the anchor, as the RATE servo's measurement still
+    /// dsync#119 — slews already folded into the anchor, as the RATE servo's measurement still
     /// needs them removed (mod 1 s): its phase is continuous across a fold only this way.
     pub(super) rate_folded_ns: i64,
-    /// dantesync#119 — when a failed slew-edge write, and a saturated word, were last warned
+    /// dsync#119 — when a failed slew-edge write, and a saturated word, were last warned
     /// about (each throttled on its own: the loop runs every 1 ms / 50 µs).
     pub(super) slew_write_warned_at: Option<Instant>,
     pub(super) slew_saturation_warned_at: Option<Instant>,
-    /// dantesync#119 — the running slew's START was logged (one line per slew, however often its
+    /// dsync#119 — the running slew's START was logged (one line per slew, however often its
     /// word is re-applied, rebased or extended; reset when it is folded).
     pub(super) slew_start_logged: bool,
-    /// dantesync#119 — when the last slew-edge write failed (the retry is rate-bounded).
+    /// dsync#119 — when the last slew-edge write failed (the retry is rate-bounded).
     pub(super) slew_write_failed_at: Option<Instant>,
-    /// dantesync#119 — the fleet slew the master's catch-up last failed to take (logged once).
+    /// dsync#119 — the fleet slew the master's catch-up last failed to take (logged once).
     pub(super) slew_catch_up_seq: Option<u32>,
-    /// dantesync#119 follow-up — the micro-correction tuning (the master's authority uses it).
+    /// dsync#119 follow-up — the micro-correction tuning (the master's authority uses it).
     pub(super) micro: crate::date_offset::MicroConfig,
-    /// dantesync#119 follow-up — the last micro-correction this box applied (ns, signed).
+    /// dsync#119 follow-up — the last micro-correction this box applied (ns, signed).
     pub(super) last_micro_ns: Option<i64>,
-    /// dantesync#119 follow-up — the falling-behind state last logged, and when it was last warned.
+    /// dsync#119 follow-up — the falling-behind state last logged, and when it was last warned.
     pub(super) falling_behind_logged: bool,
     pub(super) falling_behind_warned_at: Option<Instant>,
-    /// dantesync#119 follow-up — the micro-corrections' paused state last logged (no fresh UTC).
+    /// dsync#119 follow-up — the micro-corrections' paused state last logged (no fresh UTC).
     pub(super) micro_paused_logged: bool,
-    /// dantesync#119 (1.11.1) — the phase-lock error of the last window before a clock step and
+    /// dsync#119 (1.11.1) — the phase-lock error of the last window before a clock step and
     /// `D` just after the step moved it, until the first window after the step measured its jump.
     pub(super) step_phase_ref: Option<(i64, i64)>,
-    /// dantesync#119 (1.11.1) — the phase jump of the last step MEASURED (`/status`): a later step
+    /// dsync#119 (1.11.1) — the phase jump of the last step MEASURED (`/status`): a later step
     /// that could not be measured leaves it in place (it belongs to the last measured step, not
     /// necessarily to `last_date_step_ts`).
     pub(super) last_step_phase_jump_ns: Option<i64>,
-    /// dantesync#119 (1.12) — how the master's authority corrects the date (from
+    /// dsync#119 (1.12) — how the master's authority corrects the date (from
     /// `system.date_offset.correction`: daily by default).
     pub(super) correction: CorrectionMode,
-    /// dantesync#119 (1.12) — a daily-mode master lost its own PTP: it kept its `D` (no local
+    /// dsync#119 (1.12) — a daily-mode master lost its own PTP: it kept its `D` (no local
     /// NTP steps) while its wall free-ran, so once PTP is back it re-joins the fleet line on the
     /// measured error even though its `D` never left it (`realign_master_to_fleet`).
     pub(super) master_outage_realign: bool,
     /// camera-box issue 1372 — the wall epoch (s) of the last grandmaster frequency step the phase
     /// lock followed (`/status` `last_freq_step_ts`).
     pub(super) last_freq_step_ts: Option<u64>,
-    /// dantesync#126 — the master's saved date offset, a follower's hold, the step on request.
+    /// dsync#126 — the master's saved date offset, a follower's hold, the step on request.
     pub(super) restart: restart::RestartState,
-    /// dantesync#146 — the reported lock (DSYX [41]) under the phase lock (`lock_report.rs`).
+    /// dsync#146 — the reported lock (DSYX [41]) under the phase lock (`lock_report.rs`).
     pub(super) lock_gate: crate::lock_gate::PhaseLockGate,
-    /// dantesync#146 — since when the engaged phase lock has not held [41] (the clock alarm).
+    /// dsync#146 — since when the engaged phase lock has not held [41] (the clock alarm).
     pub(super) unsafe_since: Option<Instant>,
-    /// dantesync#146 — the phase lock's last two words minus its integrator (ppm), oldest first:
+    /// dsync#146 — the phase lock's last two words minus its integrator (ppm), oldest first:
     /// the deviation the rate servo's measurement is decoupled from (0 = the rate servo's word).
     pub(super) word_deviation: crate::rate_servo::WordDeviation,
 }
@@ -247,7 +247,7 @@ impl DateSync {
         }
     }
 
-    /// dantesync#119 (1.12) — the fleet date is corrected once a night (the master's mode).
+    /// dsync#119 (1.12) — the fleet date is corrected once a night (the master's mode).
     pub(super) fn daily(&self) -> bool {
         matches!(self.correction, CorrectionMode::Daily(_))
     }
@@ -372,7 +372,7 @@ where
                 out.error_ns.unwrap_or(0) as f64 / 1_000.0
             );
         }
-        // dantesync#146: the reported lock is judged on this window's `e`, and the rate servo's
+        // dsync#146: the reported lock is judged on this window's `e`, and the rate servo's
         // next measurement is decoupled from this word's deviation.
         let close = phase_window::close_window(
             &self.date_sync.core,
@@ -397,7 +397,7 @@ where
                         out.error_ns.unwrap_or(0) as f64 / 1_000.0,
                         word
                     );
-                    // dantesync#146: the first engagement's frequency, measured on the acquisition.
+                    // dsync#146: the first engagement's frequency, measured on the acquisition.
                     if let Some(fit) = self.date_sync.core.engaged_on_fit() {
                         info!(
                             "[PHASE-LOCK] started on the acquisition's measured {:+.3}ppm \
@@ -511,7 +511,7 @@ where
         self.prev_t1_ns = 0;
         self.prev_t2_ns = 0;
         self.rate.reset_measurement();
-        // dantesync#146: no PTP, no phase lock: [41] clears at once, and the acquisition fit
+        // dsync#146: no PTP, no phase lock: [41] clears at once, and the acquisition fit
         // starts again after the outage (its `dt` across it is not the outage's length).
         // dsync#136: the edge's phase-lock part is shared with the in-process follower.
         let outage = phase_window::on_outage(
@@ -548,7 +548,7 @@ where
     /// while a coordinated step is pending (the scheduler owns that), during the failure backoff,
     /// or mid re-anchor.
     fn realign_master_to_fleet(&mut self) {
-        // dantesync#134: also while the boot acquisition runs (anchored at the first window, the
+        // dsync#134: also while the boot acquisition runs (anchored at the first window, the
         // rate servo still owning the word) — the date is placed at once, not at the lock.
         if !self.date_authority_active()
             || !(self.date_sync.core.engaged() || self.date_sync.core.acquiring())
@@ -622,7 +622,7 @@ where
     /// the authority lost) returns false and keeps the existing NTP step path — the local date
     /// fallback.
     ///
-    /// dantesync#119 (1.12): a DAILY-mode master without PTP returns true too — its own wall is
+    /// dsync#119 (1.12): a DAILY-mode master without PTP returns true too — its own wall is
     /// NOT stepped to UTC, because the fleet line is deliberately up to a day's drift off UTC and
     /// that step would put the master that far off the fleet (and back at its re-join). It
     /// free-runs on the learned frequency and re-joins once PTP is back.
@@ -784,7 +784,7 @@ where
         if self.restore_date_authority(anchor, now_wall) || self.date_sync.restart.boot_step_due {
             return;
         }
-        // dantesync#134: a new session starts on the wall the boot step placed — wait for the
+        // dsync#134: a new session starts on the wall the boot step placed — wait for the
         // boot NTP reading (bounded, `boot.rs`); and a saved state judged provisionally waits for
         // its next judgement (review of PR 135).
         if self.boot_ntp_pending() || self.boot_step_deferred() {
@@ -927,7 +927,7 @@ where
         // D belongs to the master's PTP time base. Adopt it only when this box is in that same
         // base: PTP online, no re-anchor pending, and — the decisive check, which also catches a
         // grandmaster that rebooted under the same UUID — both nodes reading the same PTP "now"
-        // (`same_time_base`). dantesync#129: the grandmaster UUID is reported, never enforced
+        // (`same_time_base`). dsync#129: the grandmaster UUID is reported, never enforced
         // (pre-1.17 every node read one constant; two ports of one clock carry two UUIDs). A 1.17
         // master announces that constant for 1.16 followers: only a real, different UUID is logged.
         if self.ptp_offline || self.date_sync.core.rebase_pending() {

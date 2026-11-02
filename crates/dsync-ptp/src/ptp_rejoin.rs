@@ -1,4 +1,4 @@
-//! dantesync#112 — when to re-join the PTP multicast group, and how live the PTP receive is.
+//! dsync#112 — when to re-join the PTP multicast group, and how live the PTP receive is.
 //!
 //! A running node could keep `mode=LOCK` for days with no PTP frame on the wire. A USB NIC that is
 //! re-plugged comes back under the same name but as a new netdev, and the socket's multicast
@@ -91,7 +91,7 @@ impl RejoinSchedule {
         }
     }
 
-    /// dantesync#131 — how long ago the last attempt of this silence was; `None` before the first.
+    /// dsync#131 — how long ago the last attempt of this silence was; `None` before the first.
     pub fn since_last_attempt(&self, now: Instant) -> Option<Duration> {
         self.last_attempt
             .map(|prev| now.saturating_duration_since(prev))
@@ -163,7 +163,7 @@ impl RxWindow {
     }
 }
 
-/// `/status.rejoin`: the PTP re-joins this process made (dantesync#112). Additive; the default
+/// `/status.rejoin`: the PTP re-joins this process made (dsync#112). Additive; the default
 /// (no attempt yet) is what an old JSON blob deserializes to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]

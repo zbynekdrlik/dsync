@@ -1,4 +1,4 @@
-//! dantesync#119 follow-up — the controller wiring of the date MICRO-corrections: the master's
+//! dsync#119 follow-up — the controller wiring of the date MICRO-corrections: the master's
 //! loop drives the authority's micro clock, an increment is applied through the ordinary step /
 //! slew paths but labelled `micro` and kept out of the NTP step-storm count, a follower takes a
 //! micro announce from the reply, and `/status` publishes `date_micro_*` and the falling-behind
