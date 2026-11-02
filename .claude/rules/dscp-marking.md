@@ -10,11 +10,11 @@ paths:
 # DSCP marking of timesync sockets (#52)
 
 DSCP marks timesync UDP so loaded venue switches prioritise it (the MikroTik CRS
-switches honour DSCP in hardware, TRUST-L3; Dante marks its own PTP the same way).
+switches honour DSCP in hardware, TRUST-L3; the audio devices mark their own PTP the same way).
 `src/dscp.rs` is the whole feature: a `system.dscp = {enabled, dscp}` config
 (default ON, EF/46), a PURE `decide()`/`dscp_to_tos()` selection, and a thin
 `apply()` syscall seam. **The value is a config key** — the fleet can pick EF (46)
-or CS7 (56, Dante's clock queue) without a code change (open owner decision at time
+or CS7 (56, the audio network's clock queue) without a code change (open owner decision at time
 of writing).
 
 ## TOS byte, not DSCP
@@ -34,7 +34,7 @@ take the clock offline (same discipline as `gm_allowlist`).
 | NTP server reply (`ntp_server.rs`) | Linux | YES — effective (only when `ntp_server_mode.enabled`, i.e. the master) |
 | NTP client request (`PcapNtpTransport`, `net_pcap.rs`) | Windows only | socket owned, but Windows FILTERS IP_TOS → `apply()` is a logged no-op there |
 | NTP client request (`rsntp::SntpClient`, `ntp.rs`) | Linux | NO handle — socket created internally by rsntp; UNMARKABLE |
-| PTP Sync/FollowUp | all | inbound-only (dantesync is a PTP slave to the Dante GM) — nothing outbound to mark |
+| PTP Sync/FollowUp | all | inbound-only (dsync is a PTP slave to the GM) — nothing outbound to mark |
 
 Consequences for future work:
 - **`net_pcap.rs` / `PcapNtpTransport` is `#[cfg(windows)]` ONLY** (`lib.rs`: `#[cfg(windows)] pub mod net_pcap;`). On Linux the NTP client is 100% rsntp. So a "mark the client request" change on Linux is impossible at the socket layer — it needs an nftables mangle rule at provisioning (`-p udp --dport 123 -j DSCP`).

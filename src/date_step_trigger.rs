@@ -15,7 +15,7 @@
 //! the HTTP side giving up (the loop then never acts on it). A request the loop took but left
 //! unanswered for [`DATE_STEP_TAKEN_TIMEOUT`] is a `500` with `{"accepted":null,…}`: unknown, read
 //! `/status.date_step_trigger_last`. The request must
-//! carry the `X-DanteSync-Step` header, which no web page can send cross-origin without a preflight
+//! carry the `X-Dsync-Step` header, which no web page can send cross-origin without a preflight
 //! this server never answers, and a loopback `Host` (a DNS-rebound page names its own host). An
 //! older build ignores the route and answers `200` with the status JSON, so a caller keys on
 //! `"accepted"`, never on the status code alone.
@@ -40,7 +40,11 @@ pub const DATE_STEP_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 pub const DATE_STEP_TAKEN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The header a step request must carry (any value), lower case.
-pub const DATE_STEP_HEADER: &str = "x-dantesync-step";
+pub const DATE_STEP_HEADER: &str = "x-dsync-step";
+
+/// dsync#147: the pre-1.25 name of [`DATE_STEP_HEADER`], still accepted so an operator's existing
+/// call keeps working after the rename. Same cross-origin property (a custom header).
+pub const LEGACY_DATE_STEP_HEADER: &str = "x-dantesync-step";
 
 /// What the sync loop did with a request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,9 +205,12 @@ fn headers(request: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Does the request carry the [`DATE_STEP_HEADER`] header (the name case-insensitive)?
+/// Does the request carry the [`DATE_STEP_HEADER`] header, or its pre-1.25 name
+/// [`LEGACY_DATE_STEP_HEADER`] (the name case-insensitive)?
 pub fn has_step_header(request: &[u8]) -> bool {
-    headers(request).iter().any(|(n, _)| n == DATE_STEP_HEADER)
+    headers(request)
+        .iter()
+        .any(|(n, _)| n == DATE_STEP_HEADER || n == LEGACY_DATE_STEP_HEADER)
 }
 
 /// Is the request's `Host` a loopback name (`127.0.0.1`, `localhost`, `[::1]`, with or without a
@@ -303,22 +310,33 @@ mod tests {
     #[test]
     fn a_step_request_must_carry_the_step_header_126() {
         assert!(has_step_header(
-            b"POST /date/step HTTP/1.1\r\nHost: x\r\nX-DanteSync-Step: 1\r\n\r\n"
+            b"POST /date/step HTTP/1.1\r\nHost: x\r\nX-Dsync-Step: 1\r\n\r\n"
         ));
         assert!(has_step_header(
-            b"POST /date/step HTTP/1.1\r\nx-dantesync-step:yes\r\n\r\n"
+            b"POST /date/step HTTP/1.1\r\nx-dsync-step:yes\r\n\r\n"
         ));
         // Not a header: absent, only in the request line, or after the headers end.
         assert!(!has_step_header(
             b"POST /date/step HTTP/1.1\r\nHost: x\r\n\r\n"
         ));
         assert!(!has_step_header(
-            b"POST /x-dantesync-step:1 HTTP/1.1\r\nHost: x\r\n\r\n"
+            b"POST /x-dsync-step:1 HTTP/1.1\r\nHost: x\r\n\r\n"
         ));
         assert!(!has_step_header(
-            b"POST /date/step HTTP/1.1\r\nHost: x\r\n\r\nX-DanteSync-Step: 1"
+            b"POST /date/step HTTP/1.1\r\nHost: x\r\n\r\nX-Dsync-Step: 1"
         ));
         assert!(!has_step_header(b""));
+    }
+
+    /// dsync#147: the pre-1.25 header name is still accepted (an operator's existing call).
+    #[test]
+    fn the_legacy_step_header_is_still_accepted_147() {
+        assert!(has_step_header(
+            b"POST /date/step HTTP/1.1\r\nHost: x\r\nX-DanteSync-Step: 1\r\n\r\n"
+        ));
+        assert!(!has_step_header(
+            b"POST /date/step HTTP/1.1\r\nHost: x\r\nX-Sync-Step: 1\r\n\r\n"
+        ));
     }
 
     #[test]
@@ -348,7 +366,7 @@ mod tests {
         );
         // A folded continuation line is not a header of its own.
         assert!(!has_step_header(
-            b"POST /date/step HTTP/1.1\r\nX-Other: a\r\n X-DanteSync-Step: 1\r\n\r\n"
+            b"POST /date/step HTTP/1.1\r\nX-Other: a\r\n X-Dsync-Step: 1\r\n\r\n"
         ));
     }
 

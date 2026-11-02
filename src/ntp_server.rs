@@ -1,7 +1,7 @@
-//! Minimal NTP/SNTP Server implementation for DanteSync.
+//! Minimal NTP/SNTP Server implementation for dsync.
 //!
 //! This module provides a simple NTP server that responds to client queries
-//! with the current system time. It's designed for use in Dante audio networks
+//! with the current system time. It's designed for use in audio networks
 //! where one machine serves as the time master, disciplined by PTP, and all
 //! other machines sync their time via NTP from this master.
 //!

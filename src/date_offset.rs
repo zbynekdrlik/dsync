@@ -2,7 +2,7 @@
 //!
 //! # The model (owner contract, dsync#117 ROZHODNUTÉ issuecomment-5836853146)
 //!
-//! Dante PTP carries no real-world time — the grandmaster's clock is device uptime. Every box
+//! PTPv1 carries no real-world time — the grandmaster's clock is device uptime. Every box
 //! phase-locks its system clock to `PTP time + D` (see `crate::ptp_phase_lock`), where `D` is ONE
 //! fleet-wide date offset:
 //!
@@ -37,12 +37,12 @@
 //! # dsync#119 — a correction BACKWARDS is slewed, never stepped
 //!
 //! A backward step makes wall time run back on every box at once, and wall-time consumers downstream
-//! (Dante DVS/ASIO, the camera-box stream OBS) lose that much audio (−43.7 ms at the −51 ms step of
+//! (the virtual soundcard DVS (ASIO), the camera-box stream OBS) lose that much audio (−43.7 ms at the −51 ms step of
 //! camera-box#1372). So only a POSITIVE correction (the fleet is behind UTC) is a coordinated step.
 //! A NEGATIVE one is announced as a [`DateSlew`]: from its start instant every box moves `D` down at
 //! the same bounded rate (`slew_ppm`, default 100 = 50 ms in 500 s) until the amount is paid. `D`
 //! is then a function of PTP time, [`DateSlew::offset_at`], identical on every box, so the relative
-//! phase holds; only the fleet-vs-Dante rate deviates by `slew_ppm` while it runs. The wall never
+//! phase holds; only the fleet-vs-grandmaster rate deviates by `slew_ppm` while it runs. The wall never
 //! runs backwards: the controller applies the slew as an extra rate term of the ONE frequency word
 //! and removes the scheduled displacement from every PTP measurement, so neither servo reads it as
 //! grandmaster disagreement (`controller/date_sync.rs`).
@@ -65,7 +65,7 @@
 //!
 //! # dsync#119 (1.12) — ONE coordinated step per NIGHT (the default)
 //!
-//! Each micro-step disturbs the Dante Virtual Soundcard on a Windows box; one rare step does not
+//! Each micro-step disturbs the virtual soundcard on a Windows box; one rare step does not
 //! (owner decision, issue comment 5849932587). In [`CorrectionMode::Daily`] the authority keeps
 //! reading UTC and fitting the same robust estimate all day but announces nothing; when the nightly
 //! window opens ([`DailyScheduler`], 02:00 UTC by default) it announces ONE coordinated step, any

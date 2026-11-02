@@ -13,7 +13,7 @@
 //! IP(s)/subnet(s), and the controller drops any PTP packet whose source IP is
 //! not permitted, *as-if it never arrived*. It answers the real question ("which
 //! network/GM do we TRUST") deterministically, rather than "which advertises the
-//! best clock" (which a foreign Dante GM can win).
+//! best clock" (which a foreign GM can win).
 //!
 //! Backward compatibility: an EMPTY allowlist means UNRESTRICTED — accept any
 //! source, exactly the historical last-writer-wins behavior — so a single-GM

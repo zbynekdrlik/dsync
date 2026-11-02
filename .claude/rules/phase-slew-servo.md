@@ -49,7 +49,7 @@ wiring lives in `src/controller.rs` (`slew_phase` / `reset_phase_slew`, the deco
    response to the sub-deadband error, so the NTP-path noise floor is never chased. **Do NOT read
    this as "f_phase → 0 in the band":** the integrator's already-absorbed DC frequency KEEPS being
    applied (`target = 0 + i` = the held integrator), and that held frequency is exactly what holds
-   the clock on-phase against the Dante-vs-UTC drift — zeroing `f_phase` in-band would let the drift
+   the clock on-phase against the PTP-vs-UTC drift — zeroing `f_phase` in-band would let the drift
    repop, which IS the #103 failure. Only the *reaction* to the residual is suppressed. 200 µs sits
    above the measurement noise floor (≈40 µs burst spread + ≈130 µs inter-burst jitter; the healthy
    6-sample spread is 119-135 µs) and below the master's P-equilibrium, so a real sustained DC error
@@ -108,7 +108,7 @@ The servo is DUAL-MODE. A `converged` latch splits two gain sets:
   applying a stale one forever.
 
 **Load-bearing invariant: a STEP must NOT discard the learned frequency DC.** A step corrects PHASE;
-the ~50 ppm Dante-vs-UTC FREQUENCY relationship is unchanged. `PhaseSlewServo::note_phase_step()`
+the ~50 ppm PTP-vs-UTC FREQUENCY relationship is unchanged. `PhaseSlewServo::note_phase_step()`
 keeps the integrator (and re-enters acquisition to re-verify it); the controller calls
 `preserve_phase_slew_dc_across_step()` (which keeps `pending_f_phase_ppm = servo.i_ppm()`) on a
 step/flap, and `reset_phase_slew()` (full reset, integrator → 0) ONLY on a genuine loss of reference

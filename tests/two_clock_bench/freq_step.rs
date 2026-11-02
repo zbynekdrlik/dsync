@@ -1,8 +1,8 @@
-//! camera-box issue 1372 (dantesync slice) — a grandmaster FREQUENCY step, on two clocks.
+//! camera-box issue 1372 (dsync slice) — a grandmaster FREQUENCY step, on two clocks.
 //!
 //! One box on the phase lock against one grandmaster, both integer-ns clocks from the bench's
 //! world (`world.rs`): the box ticks at its oscillator (+23 ppm) plus the word, the grandmaster at
-//! its own rate, and at some instant the grandmaster's rate STEPS (a Dante leader re-election under
+//! its own rate, and at some instant the grandmaster's rate STEPS (a PTP leader re-election under
 //! the same identity: the video VLAN case, no re-anchor). Each 0.5 s window holds 4 PTP samples,
 //! `wall_rx − gm_tx` with the box's path delay and the software-timestamp noise, and the core gets
 //! their `raw[len/2]` median and `dt` in grandmaster time, as the controller does. The same world
@@ -42,7 +42,7 @@ const BOX_OSC_PPM: f64 = 23.0;
 const HANDOVER_WORD_PPM: f64 = -BOX_OSC_PPM + 0.4;
 /// The box's one-way PTP path delay.
 const PATH_DELAY_NS: f64 = 38_000.0;
-/// The rig's Dante leader flip (29.9.2026).
+/// The rig's PTP leader flip (29.9.2026).
 const STEP_PPM: f64 = 25.0;
 /// Locked for 10 minutes before anything happens.
 const LOCKED_WINDOWS: u64 = 1_200;

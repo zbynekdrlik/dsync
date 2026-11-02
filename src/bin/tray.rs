@@ -16,7 +16,7 @@ fn main() {
 /// StatusNotifier host runs, e.g. tint2). A poller thread GETs the daemon's
 /// `127.0.0.1:8898/status` once a second; a 250 ms glib timeout applies the newest
 /// reading and handles the menu. No notifications: the Linux daemon `notify-send`s
-/// the NO DANTE CLOCK alarm itself (dsync#114).
+/// the NO PTP CLOCK alarm itself (dsync#114).
 #[cfg(target_os = "linux")]
 mod linux_app {
     use dsync::tray_view::{self, IconSpec, TrayState, TrayStatus};
@@ -634,7 +634,7 @@ mod app {
                             }
 
                             // ================================================
-                            // #114: loud, repeating NO-DANTE-CLOCK balloon.
+                            // #114: loud, repeating NO-PTP-CLOCK balloon.
                             // Windows can't toast from the session-0 service, so
                             // the tray raises the per-cadence balloon here from
                             // the /status.clock_alarm field.

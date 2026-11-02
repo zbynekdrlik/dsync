@@ -130,7 +130,7 @@ impl Default for SpikeFilter {
 impl SpikeFilter {
     /// Create a new spike filter with default parameters
     ///
-    /// Default parameters are tuned for typical Dante PTP sync:
+    /// Default parameters are tuned for typical PTPv1 sync:
     /// - 20 sample window (~20 seconds at 1 sample/sec)
     /// - MAD floor of 0.5 µs/s (prevents issues on ultra-stable systems)
     /// - Mode-dependent k values for appropriate sensitivity

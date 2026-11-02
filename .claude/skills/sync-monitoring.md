@@ -1,9 +1,9 @@
 ---
 name: sync-monitoring
-description: Monitor and verify DanteSync clock synchronization across multiple computers. Use when checking sync status, running comparison tests, or verifying NTP/PTP alignment.
+description: Monitor and verify dsync clock synchronization across multiple computers. Use when checking sync status, running comparison tests, or verifying NTP/PTP alignment.
 ---
 
-# DanteSync Sync Monitoring
+# dsync Sync Monitoring
 
 ## Quick Status Check
 
@@ -65,5 +65,5 @@ logged loudly at startup) or the network/server path itself is genuinely noisy â
 
 **Config Locations:**
 
-- Linux: `/etc/dantesync/config.json`
-- Windows: `C:\ProgramData\DanteSync\config.json`
+- Linux: `/etc/dsync/config.json`
+- Windows: `C:\ProgramData\dsync\config.json`

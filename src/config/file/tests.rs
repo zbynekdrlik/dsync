@@ -47,8 +47,8 @@ fn assert_is_master(cfg: &Config) {
 #[test]
 fn the_last_good_copy_sits_beside_the_config_116() {
     assert_eq!(
-        last_good_path(Path::new("/etc/dantesync/config.json")),
-        PathBuf::from("/etc/dantesync/config.json.last-good")
+        last_good_path(Path::new("/etc/dsync/config.json")),
+        PathBuf::from("/etc/dsync/config.json.last-good")
     );
 }
 

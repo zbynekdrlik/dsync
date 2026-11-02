@@ -47,7 +47,7 @@ pub struct SystemConfig {
 
     /// dsync#131 — the NIC PTP binds to, by name (`"enp56s0"`; on Windows the adapter's
     /// name, e.g. `"Ethernet"`, or its GUID). The owner's ruling (1.11.2026): the interface is an
-    /// explicit setting, never chosen by listing order. When set, dantesync waits for that NIC's
+    /// explicit setting, never chosen by listing order. When set, dsync waits for that NIC's
     /// IPv4 and never joins another one (startup and every PTP re-join); a missing NIC raises the
     /// clock alarm with its name. `--interface` overrides it ([`SystemConfig::pinned_interface`]).
     ///
@@ -77,7 +77,7 @@ pub struct SystemConfig {
     #[serde(default)]
     pub dscp: DscpConfig,
 
-    /// dsync#114 — cadence (seconds) of the loud "NO DANTE CLOCK" alarm while
+    /// dsync#114 — cadence (seconds) of the loud "NO PTP CLOCK" alarm while
     /// the node is NOT PTP-locked to an allowed grandmaster. Default 60 s (the
     /// owner's "every minute"). Floored at `CLOCK_ALARM_INTERVAL_FLOOR_S` (10 s)
     /// at read time so a `0` can never turn the alarm into per-tick spam.
@@ -91,7 +91,7 @@ pub struct SystemConfig {
 
     /// dsync#117 — how this node disciplines its clock.
     ///
-    /// - `"ptp_phase_lock"` (DEFAULT): the owner contract. RATE and PHASE come from the Dante PTP
+    /// - `"ptp_phase_lock"` (DEFAULT): the owner contract. RATE and PHASE come from the PTPv1
     ///   grandmaster only (`crate::ptp_phase_lock`); NTP only moves the DATE, through the fleet
     ///   date offset the NTP master announces (`crate::date_offset`, #88). `phase_slew` is never
     ///   engaged in this mode.
@@ -208,7 +208,7 @@ pub struct DateOffsetConfig {
     )]
     pub step_lead_ms: u64,
     /// dsync#119 — the rate (ppm) at which a BACKWARD correction is slewed (a backward date
-    /// step would lose Dante audio downstream). Default 100 (50 ms in 500 s). `0` means the
+    /// step would lose audio downstream). Default 100 (50 ms in 500 s). `0` means the
     /// default; anything else is clamped to 10..=500 at read time ([`Self::slew_ppm`]).
     #[serde(
         default = "default_date_slew_ppm",
@@ -607,7 +607,7 @@ impl Default for PhaseSlewConfig {
 
 /// NTP Server configuration for unified time source mode.
 ///
-/// When enabled, DanteSync becomes an NTP server that:
+/// When enabled, dsync becomes an NTP server that:
 /// 1. Syncs time from upstream NTP on startup, and — since #68 — KEEPS
 ///    re-querying that upstream on the normal cadence, disciplining itself
 ///    with bounded corrections
@@ -617,7 +617,7 @@ impl Default for PhaseSlewConfig {
 ///
 /// #68 — this used to read "syncs ONCE on startup, stops all periodic NTP
 /// queries". That was the defect, not a footnote: PTP locks the master's
-/// FREQUENCY to the Dante grandmaster, whose rate is not UTC's rate, so with
+/// FREQUENCY to the grandmaster, whose rate is not UTC's rate, so with
 /// the periodic queries off the master's UTC phase error integrated from boot
 /// with nothing subtracting from it (6-19 ppm measured on strih ⇒ ~21 ms 19
 /// minutes after a restart, 1.04 s over two days) while `ntp_failed` stayed
@@ -776,10 +776,10 @@ impl Default for SystemConfig {
         // UNIFIED CONFIGURATION - Same core behavior on Windows and Linux
         //
         // ARCHITECTURE: Dual-source time synchronization
-        // 1. PTP (Dante) → frequency synchronization only (adjust_frequency)
+        // 1. PTP (the grandmaster) → frequency synchronization only (adjust_frequency)
         // 2. NTP → UTC phase alignment (step_clock)
         //
-        // CRITICAL: Dante PTP provides DEVICE UPTIME, not UTC time!
+        // CRITICAL: PTPv1 provides DEVICE UPTIME, not UTC time!
         // - NTP handles all time stepping via periodic UTC corrections
         // - PTP locks the frequency while NTP keeps absolute time correct
         //
@@ -811,7 +811,7 @@ impl Default for SystemConfig {
             // switch ignores DSCP; a bad value fails open to unmarked.
             dscp: DscpConfig::default(),
 
-            // dsync#114: loud NO-DANTE-CLOCK alarm every 60 s while unlocked.
+            // dsync#114: loud NO-PTP-CLOCK alarm every 60 s while unlocked.
             clock_alarm_interval_s: default_clock_alarm_interval_s(),
 
             // dsync#117: the PTP phase lock is the default; "legacy" restores the old path.

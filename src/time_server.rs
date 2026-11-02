@@ -31,7 +31,7 @@
 //!
 //! # The meaning of [41] and [62] (dsync#146)
 //!
-//! **`[41]` = 1 means the clock is safe for a 250 µs Dante flow** (the stack gates its media-clock
+//! **`[41]` = 1 means the clock is safe for a 250 µs audio flow** (the stack gates its media-clock
 //! ready on this byte alone). Under `system.clock_discipline = "ptp_phase_lock"` (the default) it
 //! is [`crate::lock_gate`]'s verdict on the phase error `e = (t2 − t1) − D`
 //! (`/status.ptp_phase_error_us`):
@@ -564,7 +564,7 @@ const AUTHORITY_RESOLVE_INTERVAL: Duration = Duration::from_secs(60);
 const AUTHORITY_REPLY_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Consecutive unanswered polls after which a poller whose host has NEVER answered slows down:
-/// that host does not speak `"DSYX"` (an older dantesync, a public NTP server, a firewall).
+/// that host does not speak `"DSYX"` (an older dsync, a public NTP server, a firewall).
 pub const AUTHORITY_SILENT_POLLS_BEFORE_BACKOFF: u32 = 60;
 
 /// Poll cadence while backed off. The first reply restores the 1 s cadence for good.
@@ -723,7 +723,7 @@ fn poll_loop(host: String, running: Arc<AtomicBool>, shared: Arc<Mutex<Option<Au
                                 } else {
                                     info!(
                                         "[DATE] {} answers but publishes no date-offset authority \
-                                         (older dantesync or not phase-locked) — keeping the local date path",
+                                         (older dsync or not phase-locked) — keeping the local date path",
                                         host
                                     );
                                 }
@@ -753,7 +753,7 @@ fn poll_loop(host: String, running: Arc<AtomicBool>, shared: Arc<Mutex<Option<Au
                 );
             } else {
                 info!(
-                    "[DATE] no DSYX reply from {} for {} polls (an older dantesync, a public NTP \
+                    "[DATE] no DSYX reply from {} for {} polls (an older dsync, a public NTP \
                      server or a firewall?) — polling every {:?} until it answers",
                     host, AUTHORITY_SILENT_POLLS_BEFORE_BACKOFF, AUTHORITY_BACKOFF_INTERVAL
                 );

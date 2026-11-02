@@ -1,11 +1,11 @@
 //! dsync#117 + #88 — the TWO-CLOCK BENCH.
 //!
-//! N simulated boxes on one Dante network, driven by the SAME code the controller runs
+//! N simulated boxes on one audio network, driven by the SAME code the controller runs
 //! (`dsync::ptp_phase_lock::PhaseLockCore` for every box's frequency word and anchor,
 //! `dsync::date_offset::{DateAuthority, DateFollower}` for the date), against two clocks that
 //! disagree the way the real rig does:
 //!
-//! - a PTP source: the Dante grandmaster (device uptime, its own oscillator), which changes to a
+//! - a PTP source: the grandmaster (device uptime, its own oscillator), which changes to a
 //!   DIFFERENT grandmaster (another uptime, another oscillator) halfway through;
 //! - an NTP (UTC) source that drifts against the grandmaster (+8 ppm measured live, the
 //!   "0.7 s/day" of #117) — and, in a second run, −15 ppm.
@@ -152,7 +152,7 @@ struct Scenario {
     /// scenarios' "48 h at +17.6 ppm").
     gm_b_ppm: f64,
     /// camera-box issue 1372: grandmaster A's rate STEPS to this (ppm) at this window, under the
-    /// same identity (a Dante leader flip seen on the video VLAN: no re-anchor anywhere).
+    /// same identity (a PTP leader flip seen on the video VLAN: no re-anchor anywhere).
     gm_a_flip: Option<(u64, f64)>,
     /// #126: the NTP master's PROCESS restarts (`restart.rs`); no scenario before 1.15 has one.
     master_restart: Option<MasterRestart>,
@@ -988,7 +988,7 @@ fn run(sc: &Scenario) -> RunResult {
 #[path = "two_clock_bench/scenarios.rs"]
 mod scenarios;
 
-// camera-box issue 1372 (dantesync slice): a grandmaster FREQUENCY step on two clocks.
+// camera-box issue 1372 (dsync slice): a grandmaster FREQUENCY step on two clocks.
 #[path = "two_clock_bench/freq_step.rs"]
 mod freq_step;
 

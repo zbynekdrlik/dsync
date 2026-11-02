@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Guidelines
 
-- **FOCUSED APPLICATION:** This is NOT a general-purpose all-situations application. This is a highly focused app for our exact Dante audio network synchronization use case. Code that adds complexity for unused features should be removed, not kept "just in case."
+- **FOCUSED APPLICATION:** This is NOT a general-purpose all-situations application. This is a highly focused app for our exact audio network synchronization use case. Code that adds complexity for unused features should be removed, not kept "just in case."
 - Act as senior Rust, Windows, hardware, and clock-skilled developer
 - Use TDD approach and ensure all code has test coverage
 - **Critical Self-Review:** Be skeptical of your own conclusions. Before assuming something "doesn't work" or "isn't supported":
@@ -68,15 +68,15 @@ on either platform skips `publish` — no release with a missing asset).
   marker (`+`/`-`/`*` or `N.`) — keep list markers off wrapped-line starts.
 - `scripts/purge-target.sh` (a `pre-push` hook via `scripts/install-git-hooks.sh`) purges `target/`
   past a size budget (cargo has no `target/` GC, rust-lang/cargo#5026); it skips while the
-  dantesync daemon/tray is running.
+  dsync daemon/tray is running.
 
 **Windows cross-compilation** requires Npcap SDK 1.13+ with `LIB` env var set to `npcap-sdk/Lib/x64`.
 
 ## Playbook router
 
-- Dante stability gate (#98): `gate.yml` on the `companion` runner, the pass rule, and the
+- stability gate (#98): `gate.yml` on the `companion` runner, the pass rule, and the
   tree-hash release coupling in `auto-release`. The gate must be green on dev's tree BEFORE merging
-  to master, or the release is refused → `docs/dante-gate.md`
+  to master, or the release is refused → `docs/stability-gate.md`
 - The library form (#136, v1.24): `crates/dsync-ptp` holds the shared PTP code and the in-process
   follower. It covers the workspace and re-export layout, the extracted `RateServo` steps, the
   virtual clock over the RAW counter, the stamp conversion that drops a packet straddling a wall
@@ -137,7 +137,7 @@ on either platform skips `publish` — no release with a missing asset).
   10→30→60→120→300 s schedule, the finding that `D` is anchored once per process, the
   per-socket-loopback-address test trick) →
   `.claude/rules/ptp-liveness-rejoin.md` (auto-loads on its `paths:`)
-- PTPv1 wire format + the grandmaster identity (#129 — the 40-byte header proven on real Dante
+- PTPv1 wire format + the grandmaster identity (#129 — the 40-byte header proven on real PTPv1
   bytes in `crates/dsync-ptp/tests/fixtures/ptpv1/`, the Follow_Up offset that was right only by accident, the
   pre-1.17 misread constant `00:00:00:00:01:00` and its three consumers (the restart restore, the
   report-only follower check, the constant kept on the 31900 wire), report-only sender fields,
@@ -174,9 +174,9 @@ The airuleset design-gate hook (`hooks/post-record-design-comment.sh`, external 
 classifies a posted `gh issue comment` as a design/validated/reviewed marker resolves which repo
 the comment belongs to from the **session's own ambient working directory**, not from a `cd
 <path> &&` prefix inside the SAME Bash command. A worker whose session launched in a sibling repo
-(e.g. `camera-box`) and runs `cd /home/newlevel/devel/dantesync && gh issue comment 71 -F
+(e.g. `camera-box`) and runs `cd /home/newlevel/devel/dsync && gh issue comment 71 -F
 body.md` — even though the comment genuinely posts to the right repo (confirmed by the returned
-`.../dantesync/issues/71#issuecomment-...` URL) — has that comment silently classified against
+`.../dsync/issues/71#issuecomment-...` URL) — has that comment silently classified against
 the WRONG repo (or not at all), because the hook's own `cwd` metadata never followed the `cd`.
 The commit-blocking gate (`hooks/block-commit-without-design.sh`) then fires as if no design
 comment exists at all, even though one is genuinely posted and readable on the issue.
@@ -212,7 +212,7 @@ inline `cd <path> &&`/`cd <path>;` — but ONLY when it is the LITERAL FIRST sta
 Bash tool call the `git commit` itself runs in. A shape like:
 
 ```bash
-cd /home/newlevel/devel/dantesync && git add file1 file2
+cd /home/newlevel/devel/dsync && git add file1 file2
 git commit -m "$(cat <<'EOF'
 ...
 EOF
@@ -229,14 +229,14 @@ heredoc's OWN body lines are part of the SAME statement, not new top-level ones,
 break this):
 
 ```bash
-cd /home/newlevel/devel/dantesync && git add file1 file2 && git commit -m "$(cat <<'EOF'
+cd /home/newlevel/devel/dsync && git add file1 file2 && git commit -m "$(cat <<'EOF'
 ...
 EOF
 )"
 ```
 
 If a commit is blocked and reports the WRONG repo name in its own error message (e.g. "no design
-comment posted yet for #N (repo camera-box)" while working in dantesync), check `pwd` first — a
+comment posted yet for #N (repo camera-box)" while working in dsync), check `pwd` first — a
 worker's session `cwd` can be a sibling repo's checkout even mid-session, and this shape is the
 fix, not `-R` (which `git commit` has no equivalent flag for at all).
 
@@ -278,11 +278,11 @@ design-gate's `cd` resolution.
 - DO NOT waste time on approaches requiring hardware timestamping (SIO_TIMESTAMPING, PTP hardware clocks, etc.)
 - The goal is to achieve <50µs precision using SOFTWARE timestamps only
 - Linux achieves this with kernel-level SO_TIMESTAMPNS - Windows needs equivalent software approach
-- Audinate/Dante drivers are NOT involved - we use standard Windows/Linux network stack
+- Audinate's audio drivers are NOT involved - we use standard Windows/Linux network stack
 
 ## Architecture Overview
 
-DanteSync is a high-precision PTP (Precision Time Protocol) synchronization tool for Dante Audio networks. It implements PTPv1 over UDP multicast (ports 319/320) with a hybrid NTP+PTP approach.
+dsync is a high-precision PTP (Precision Time Protocol) synchronization tool for audio networks. It implements PTPv1 over UDP multicast (ports 319/320) with a hybrid NTP+PTP approach.
 
 ### Core Components
 
@@ -306,16 +306,16 @@ link the same crate's `follower` to lock to the grandmaster in their own process
 - **`sync_loop.rs`** - The sync loop `main` drives the controller through, and the UDP 31900 time server's own `time-server` thread (#136)
 - **`status.rs`** - `SyncStatus` struct shared via IPC to tray app (includes `is_locked`, `smoothed_rate_ppm`, `mode`)
 
-### CRITICAL: Dante Time vs UTC Time
+### CRITICAL: PTP Time vs UTC Time
 
-**Dante PTP provides DEVICE UPTIME, not UTC time.** This is fundamental to the architecture:
+**PTPv1 provides DEVICE UPTIME, not UTC time.** This is fundamental to the architecture:
 
-- The Dante grandmaster clock uses device uptime (time since power-on), NOT real UTC.
-- The owner contract (#117): **RATE = the Dante PTP tick only; NTP = date stepping only.**
+- The grandmaster clock uses device uptime (time since power-on), NOT real UTC.
+- The owner contract (#117): **RATE = the PTPv1 tick only; NTP = date stepping only.**
 
 **The default discipline (`system.clock_discipline = "ptp_phase_lock"`, #117 + #88):**
 
-1. **PTP (Dante)** → `adjust_frequency()`: rate AND phase. Once PTP-locked, `crates/dsync-ptp/src/ptp_phase_lock.rs`
+1. **PTP (the grandmaster)** → `adjust_frequency()`: rate AND phase. Once PTP-locked, `crates/dsync-ptp/src/ptp_phase_lock.rs`
    holds `wall = PTP time + D` with a PI on `e = (t2 − t1) − D`. Every box ticks with the GM and
    shows the same wall time (µs). A GM change re-anchors `D` with no wall step.
 2. **NTP (UTC)** → the fleet date offset `D` only. The NTP master alone reads UTC and is the
@@ -349,8 +349,12 @@ never read: see `.claude/rules/clock-discipline-and-testing.md`.
 
 Config file locations:
 
-- Linux: `/etc/dantesync/config.json`
-- Windows: `C:\ProgramData\DanteSync\config.json`
+- Linux: `/etc/dsync/config.json`
+- Windows: `C:\ProgramData\dsync\config.json`
+
+Since 1.25 (#147) the state dir is `/etc/dsync` (`C:\ProgramData\dsync`). A box installed before
+1.25 keeps its old state dir in place until a deployer renames it; `/status.state_dir` names the one
+in use (`src/state_dir.rs`).
 
 Key tunable parameters (in `config.rs`):
 
@@ -359,9 +363,9 @@ Key tunable parameters (in `config.rs`):
 
 ### Binaries
 
-- `dantesync` - Main sync daemon/service
+- `dsync` - Main sync daemon/service
 - `dsync-tray` - Windows tray application:
   - Dynamic icon with pulsing ring based on drift rate
   - Toast notifications for state transitions (lock/unlock/offline)
   - Service control (Restart/Stop) via menu
-  - Reads status via named pipe IPC (`\\.\pipe\dantesync`)
+  - Reads status via named pipe IPC (`\\.\pipe\dsync`)

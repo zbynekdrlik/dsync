@@ -147,7 +147,7 @@ jobs:
         run: cargo test --workspace --test '*' --verbose
         timeout-minutes: 10
 
-      # dsync#98: the Dante gate's verdict + release check (scripts/stability_gate.py).
+      # dsync#98: the stability gate's verdict + release check (scripts/stability_gate.py).
       - name: Run script tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
@@ -324,7 +324,7 @@ jobs:
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --release --features tray --bin dantesync --bin dsync-tray --target ${{ matrix.target }}
+        run: cargo build --release --features tray --bin dsync --bin dsync-tray --target ${{ matrix.target }}
 
   # ============================================================================
   # Code Coverage
@@ -357,7 +357,7 @@ jobs:
 
       # --timeout: tarpaulin's ptrace engine kills a test binary that sends it no event for this
       # long (default 60 s). Once every line is covered, the two-clock bench computes for minutes
-      # on already-covered code, so a stretch with no test ending and no thread starting (dantesync
+      # on already-covered code, so a stretch with no test ending and no thread starting (dsync
       # issue 119 CI run 36274688463: 61 s) is not a hang. The coverage threshold is unchanged.
       - name: Generate coverage
         # dsync#136: --workspace keeps the moved PTP code (crates/dsync-ptp) in the coverage.
@@ -387,12 +387,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      # dsync#98: a release is tagged only after a successful gate.yml run (the Dante stability
+      # dsync#98: a release is tagged only after a successful gate.yml run (the stability
       # gate on companion) tested this exact tree. The merge commit has a new SHA but, with master an
       # ancestor of dev, the same tree as dev's gated head. Only push / workflow_dispatch gate runs
       # count (a schedule run measures nothing). No match = no tag; gate the tree (after the merge:
       # `gh workflow run gate.yml --ref master`) and re-run this job. See docs/stability-gate.md.
-      - name: Require a green Dante gate on this tree
+      - name: Require a green stability gate on this tree
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/stability_gate.py release-check --repo "$GITHUB_REPOSITORY" --tree "$(git rev-parse 'HEAD^{tree}')"

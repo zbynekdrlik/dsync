@@ -10,9 +10,9 @@ paths:
 
 # The PTPv1 wire format and the grandmaster identity (dsync#129)
 
-## The layout, proven on real Dante bytes
+## The layout, proven on real PTPv1 bytes
 
-IEEE 1588-2002 (PTPv1). A Dante Sync is 124 bytes, a Follow_Up 52. The header is **40** bytes.
+IEEE 1588-2002 (PTPv1). A PTPv1 Sync is 124 bytes, a Follow_Up 52. The header is **40** bytes.
 The real packets are committed in `crates/dsync-ptp/tests/fixtures/ptpv1/`, with their provenance.
 
 | Absolute | Field |

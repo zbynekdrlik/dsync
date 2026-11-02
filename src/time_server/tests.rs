@@ -280,7 +280,7 @@ fn the_poller_backs_off_after_a_minute_of_silence_and_recovers_on_a_reply_88() {
 fn a_poller_whose_authority_ever_answered_never_backs_off_past_the_step_lead_88() {
     // A master that answered and then went quiet (a host reboot, a network blip) may announce a
     // step seconds after it is back: a follower polling every 30 s would hear it after its
-    // instant and step late. Only a host that NEVER answered DSYX (an older dantesync, a public
+    // instant and step late. Only a host that NEVER answered DSYX (an older dsync, a public
     // NTP server) earns the slow cadence.
     let mut b = PollBackoff::default();
     b.on_reply();

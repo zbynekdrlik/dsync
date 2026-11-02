@@ -275,7 +275,7 @@ class GateWorkflowTests(unittest.TestCase):
         self.assertIn("name: Stability Gate", self.text)
         self.assertIn("runs-on: [dsync-gate, companion]", self.text)
         self.assertIn("cargo build --release --bin dsync\n", self.text)
-        self.assertNotIn("dante-gate", self.text)
+        self.assertEqual(self.text.count("runs-on: [dsync-gate"), 1)
 
     def test_the_release_check_looks_up_this_workflow_file_147(self):
         # The release coupling finds gate runs by FILE name: renaming gate.yml would break it.

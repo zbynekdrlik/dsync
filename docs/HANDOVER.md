@@ -2,7 +2,7 @@
 
 ## Status
 
-This repository was `zbynekdrlik/dsync`, renamed on 2026-11-01 (ticket airuleset#1280). The binary, the service and the config path keep the name `dantesync`. Rename them only when you decide to; the owner set that as low priority, and it touches every node.
+This repository was renamed to `zbynekdrlik/dsync` on 2026-11-01 (ticket airuleset#1280). Since 1.25.0 (#147, owner 2026-11-02) everything inside follows: the binaries `dsync` and `dsync-tray`, the release assets `dsync-*`, the Linux unit `dsync.service`, the Windows service `dsync`, the pipe `\\.\pipe\dsync` and the state dir `/etc/dsync` (`C:\ProgramData\dsync`). A box installed before 1.25 keeps its old state dir: the daemon uses it in place until a deployer renames it (`src/state_dir.rs`), and `/status.state_dir` says which one runs. The deploying side (camera-box) switches the units; dsync never deploys.
 
 Owner rules from 2026-11-01:
 
@@ -13,7 +13,7 @@ Owner rules from 2026-11-01:
 
 ## Machines
 
-- dev1: this project's account, with no sudo and no local Dante network access assumed.
+- dev1: this project's account, with no sudo and no local audio network access assumed.
 - Rig nodes belong to camera-box. Do not deploy to them.
 - Non-rig nodes mbc, fohabl, iem-snv, companion-snv and alex-nb come to you when camera-box hands over the node list. Until that handover you have no fleet access.
 
@@ -24,7 +24,7 @@ Owner rules from 2026-11-01:
 
 ## How to run a test
 
-CI first: `.github/workflows/ci.yml` runs on GitHub-hosted Linux and Windows. Run `cargo test` locally on dev1. Real clock behaviour needs a Dante network node, so ask dstack for a test on hardware.
+CI first: `.github/workflows/ci.yml` runs on GitHub-hosted Linux and Windows. Run `cargo test` locally on dev1. Real clock behaviour needs an audio network node, so ask dstack for a test on hardware.
 
 ## Site facts
 
@@ -34,14 +34,14 @@ The file was removed from the tree in v1.20.1 (issue #108). Its old values stay 
 
 ## Runners
 
-One self-hosted runner: `companion` (labels `dante-gate`, `companion`), for the Dante stability gate (#98, airuleset#1280). `.github/workflows/gate.yml` is the only thing that touches companion, through `/usr/local/sbin/dsync-gate-install`. A release is tagged only after the gate passed on the same tree. See `docs/dante-gate.md`.
+One self-hosted runner: `companion` (labels `dsync-gate`, `companion`), for the stability gate (#98, airuleset#1280). `.github/workflows/gate.yml` is the only thing that touches companion, through `/usr/local/sbin/dsync-gate-install`. A release is tagged only after the gate passed on the same tree. See `docs/stability-gate.md`.
 
 ## Backlog
 
 Owner-requested:
 
-- A Dante stability gate that every change must pass, including a video-driven change (2026-11-01).
-- A versioned library so applications can lock to Dante PTP internally, without the system service (2026-11-01, issue #136).
+- A stability gate that every change must pass, including a video-driven change (2026-11-01).
+- A versioned library so applications can lock to PTPv1 internally, without the system service (2026-11-01, issue #136).
 - Improve the clock only for a measured need (2026-10-26).
 
 First task: review and merge the handover change from `dev`. Merging starts a release, so check what a release does on the nodes first.
@@ -50,6 +50,6 @@ Proposed by a session, not yet asked for by the owner: the open issues in this r
 
 ## Knowledge left in other projects
 
-- camera-box: 414 files mention dantesync, plus 6 rule files. Ask through dstack.
-- dstack: `docs/design/2026-10-30-shared-dante-stack.md`, and `crates/dante-stack/Cargo.toml` names this project.
-- iemmixer: it maintained this code until 2026-10-30, and its memory notes cover Dante.
+- camera-box: 414 files mention this project by its pre-1.25 name, plus 6 rule files. Ask through dstack.
+- dstack: its shared-stack design doc (2026-10-30) and its stack crate's `Cargo.toml` name this project (dstack owns those names).
+- iemmixer: it maintained this code until 2026-10-30, and its memory notes cover the audio network.

@@ -12,7 +12,7 @@
 //! two loops fight. #97 makes it safe via **feed-forward decoupling** (the carrier line): the
 //! commanded `f_phase` is SUBTRACTED from every PTP rate observation before the PTP servo consumes
 //! it (`decouple_ptp_rate`), so the PTP servo never sees the slew as grandmaster disagreement and
-//! cannot fight it. The PTP servo keeps the local oscillator locked to the Dante grandmaster's
+//! cannot fight it. The PTP servo keeps the local oscillator locked to the grandmaster's
 //! rate; the phase servo independently trims UTC phase. Time-constant separation reinforces this:
 //! the PTP servo works in fractions of a second, the phase servo's integrator in minutes.
 //!
@@ -44,7 +44,7 @@ pub const K_P_PPM_PER_US: f64 = 0.02;
 
 /// Integral gain: ppm accrued per (µs of error × second). #103 halved it (was 0.002); the rate
 /// limit below is the binding term, and the integrator now absorbs the master's constant
-/// Dante-vs-UTC error (≈23 ppm) over minutes — deliberately slow, so it never lurches the frequency.
+/// PTP-vs-UTC error (≈23 ppm) over minutes — deliberately slow, so it never lurches the frequency.
 pub const K_I_PPM_PER_US_S: f64 = 0.0008;
 
 /// Integrator rate limit: the I-term may change by at most this many ppm per second. #103 lowered
@@ -84,7 +84,7 @@ pub const MAX_LOOP_GAIN: f64 = 0.25;
 /// FULL phase deadband (µs): inside this band the servo makes no NEW response to the sub-deadband
 /// error — the proportional term is zero and the integrator STATE is frozen — so the NTP-path noise
 /// floor is never chased. The integrator's already-absorbed DC frequency KEEPS being applied (that
-/// is what holds a stable clock on-phase against the Dante-vs-UTC drift; zeroing `f_phase` in-band
+/// is what holds a stable clock on-phase against the PTP-vs-UTC drift; zeroing `f_phase` in-band
 /// would let that drift repop — the #103 failure); only the *reaction* to the residual is
 /// suppressed. #103 renamed this from `I_DEADBAND_US` (which froze only the integrator) and
 /// raised it `150 → 200`: 200 µs sits safely above the measurement noise floor (≈40 µs burst spread
@@ -105,7 +105,7 @@ pub const SAT_ALARM_DWELL_S: f64 = 60.0;
 // ============================================================================
 //
 // The #103 tracking gains above are deliberately slow so the STEADY-STATE loop never oscillates.
-// But on a high-DC box (~50 ppm Dante-vs-UTC, e.g. cam1) the slow integrator cannot build the ~50 ppm
+// But on a high-DC box (~50 ppm PTP-vs-UTC, e.g. cam1) the slow integrator cannot build the ~50 ppm
 // holding frequency before the offset runs away, and a step then resets it — the #105 runaway loop.
 // So the servo runs a faster ACQUISITION gain set until it first converges, then latches into the
 // #103 TRACKING gains above. The acquisition gains stay DELAY-ROBUST (loop gain 0.4, stable at 1-2
@@ -668,7 +668,7 @@ mod tests {
 
     // ---- convergence (closed loop) ---------------------------------------
 
-    /// Drive the servo in a closed loop against a constant DC inflow (the master's Dante-vs-UTC
+    /// Drive the servo in a closed loop against a constant DC inflow (the master's PTP-vs-UTC
     /// error), with ZERO transport delay: each interval `e` accrues `+inflow·dt`, then the slew
     /// removes `f_phase·dt`. (#103 convergence is deliberately slow — minutes; the delayed-plant ring
     /// tests below add the transport delay the damping targets.)
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn worst_case_66ppm_master_still_converges_into_the_deadband() {
-        // 66 ppm = the worst-ever measured Dante-GM rate error (#83). A bigger DC takes the slow
+        // 66 ppm = the worst-ever measured GM rate error (#83). A bigger DC takes the slow
         // integrator longer to absorb, so give it more updates; it still parks inside the band.
         let (e, i, peak) = run_closed_loop(66.0, 10.0, 0.0, 400);
         assert!(
@@ -849,7 +849,7 @@ mod tests {
 
     #[test]
     fn damped_servo_does_not_ring_on_a_one_sample_delay_plant() {
-        // 23 ppm Dante-vs-UTC DC, 10 s master cadence, starting mid-swing like the live +455..+568us.
+        // 23 ppm PTP-vs-UTC DC, 10 s master cadence, starting mid-swing like the live +455..+568us.
         let (peak, spread6) = closed_loop_one_sample_delay(23.0, 10.0, 500.0, 400);
         // A deadbeat servo rings to a ~4000us sustained 6-sample spread here (the prod incident, which
         // fails camera-box's 2000us clock gate); a damped one settles inside the phase deadband.
@@ -921,7 +921,7 @@ mod tests {
     fn deadband_holds_the_converged_dc_frequency_it_does_not_drop_to_zero() {
         // #103 review 🟡: inside the deadband P and the integrator STATE freeze, but the integrator's
         // already-absorbed DC frequency must KEEP being applied — that held frequency is exactly what
-        // holds the clock on-phase. Zeroing f_phase in-band would let the ~23ppm Dante-vs-UTC drift
+        // holds the clock on-phase. Zeroing f_phase in-band would let the ~23ppm PTP-vs-UTC drift
         // repop (the #103 failure), and the fresh-servo tests above (i=0) could NOT catch that. So:
         // drive the servo to convergence first, THEN feed an in-deadband error and prove the held DC
         // is still commanded.
@@ -982,7 +982,7 @@ mod tests {
 
     #[test]
     fn high_dc_50ppm_acquisition_stays_below_the_step_threshold_and_settles_fast() {
-        // 50 ppm Dante-vs-UTC DC (cam1 class). The acquisition transient must stay well below the box's
+        // 50 ppm PTP-vs-UTC DC (cam1 class). The acquisition transient must stay well below the box's
         // small adaptive step threshold (~1.6 ms per the #105 journal) so no step ever fires, and settle
         // into the deadband within ~2 min. v1.8.50's slow integrator parks e ~2.5 ms (> threshold → the
         // runaway loop) and takes many minutes.

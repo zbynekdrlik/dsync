@@ -1,9 +1,9 @@
 ---
 name: sync-status
-description: Check current DanteSync synchronization status across all network targets
+description: Check current dsync synchronization status across all network targets
 ---
 
-Check the current clock synchronization status across all DanteSync targets using the UDP Time Query API.
+Check the current clock synchronization status across all dsync targets using the UDP Time Query API.
 
 ## Instructions
 

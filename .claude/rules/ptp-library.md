@@ -15,7 +15,7 @@ network layer.
 
 ## Layout: one codebase, the service re-exports
 
-- The cargo workspace has two members: the root package `dantesync` (the service and its bins)
+- The cargo workspace has two members: the root package `dsync` (the service and its bins)
   and `crates/dsync-ptp`. Consumers pin the crate as
   `dsync-ptp = { git = "https://github.com/zbynekdrlik/dsync", tag = "vX.Y.Z" }`.
 - The crate version equals the service version. A test pins it:

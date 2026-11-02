@@ -13,8 +13,8 @@ use std::time::{Duration, SystemTime};
 // ============================================================================
 // RATE-BASED SERVO E2E TESTS
 // ============================================================================
-// The DanteSync controller uses a RATE-BASED servo algorithm:
-// - Dante PTP timestamps are device uptime, NOT UTC
+// The dsync controller uses a RATE-BASED servo algorithm:
+// - PTPv1 timestamps are device uptime, NOT UTC
 // - The absolute offset is meaningless for time accuracy
 // - What matters is the RATE OF CHANGE of offset (drift rate in us/s)
 // - Lock = rate stable within ±5us/s (frequencies matched)
@@ -207,15 +207,15 @@ impl NtpSource for SimNtp {
     }
 }
 
-/// NTP source with independent drift (simulates Dante frequency ≠ NTP reference)
+/// NTP source with independent drift (simulates the grandmaster frequency ≠ NTP reference)
 struct DriftingNtp {
-    offset_us: std::cell::Cell<i64>, // Grows over time if Dante and NTP disagree
+    offset_us: std::cell::Cell<i64>, // Grows over time if the grandmaster and NTP disagree
     drift_us_per_call: i64,          // How much NTP offset grows per query
 }
 
 impl NtpSource for DriftingNtp {
     fn get_offset(&self) -> Result<NtpMeasurement> {
-        // Simulate NTP offset growing because Dante frequency ≠ NTP reference
+        // Simulate NTP offset growing because the grandmaster frequency ≠ NTP reference
         let current = self.offset_us.get();
         self.offset_us.set(current + self.drift_us_per_call);
         let sign = if current >= 0 { 1 } else { -1 };
@@ -557,7 +557,7 @@ fn test_regression_high_gain_low_jitter() {
 
 /// Critical test: drift RATE must converge to stable (<5us/s = frequencies matched)
 /// NOTE: With rate-based servo, absolute offset doesn't need to be zero.
-/// Dante timestamps are device uptime, not UTC. NTP handles UTC alignment.
+/// PTPv1 timestamps are device uptime, not UTC. NTP handles UTC alignment.
 /// What matters is that the RATE OF CHANGE is stable (frequencies matched).
 #[test]
 fn test_rate_convergence_stability() {
@@ -568,7 +568,7 @@ fn test_rate_convergence_stability() {
     config.filters.sample_window_size = 4;
     config.filters.calibration_samples = 0;
     config.filters.warmup_secs = 0.0;
-    config.filters.min_delta_ns = 100_000_000; // 100ms - allow samples at Dante rate
+    config.filters.min_delta_ns = 100_000_000; // 100ms - allow samples at the grandmaster's rate
 
     let physics = Arc::new(SharedPhysics {
         engine: RefCell::new(PhysicsEngine::new(20.0)), // 20ppm drift
@@ -612,7 +612,7 @@ fn test_rate_convergence_stability() {
         if !offsets.is_empty() {
             let prev = *offsets.last().unwrap();
             let delta_us = (offset - prev) / 1000.0;
-            let dt_s = 0.125; // 125ms per packet pair (Dante interval)
+            let dt_s = 0.125; // 125ms per packet pair (the grandmaster's Sync interval)
             let rate = delta_us / dt_s; // us/s
             rates.push(rate);
         }
@@ -750,7 +750,7 @@ fn test_auto_adaptive_drift_rates() {
 }
 
 /// Critical test: PTP rate-based servo remains stable while NTP handles UTC drift
-/// Simulates Dante frequency ≠ NTP reference (common in real deployments)
+/// Simulates the grandmaster frequency ≠ NTP reference (common in real deployments)
 /// Key: PTP maintains frequency lock (rate stable) while NTP handles time stepping
 #[test]
 fn test_ptp_rate_stable_during_ntp_drift() {
@@ -777,8 +777,8 @@ fn test_ptp_rate_stable_during_ntp_drift() {
         pending_followup: None,
     };
 
-    // Drifting NTP: simulates Dante running faster than NTP reference
-    // This is normal - Dante is PTP-locked, not NTP-locked
+    // Drifting NTP: simulates the grandmaster running faster than NTP reference
+    // This is normal - the grandmaster is PTP time, not NTP-locked
     // NTP handles UTC alignment via stepping, PTP handles frequency
     let ntp = DriftingNtp {
         offset_us: std::cell::Cell::new(0),

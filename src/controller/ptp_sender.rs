@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn the_grandmaster_line_names_its_best_master_fields_129() {
-        let sync = include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/dante-sync.bin");
+        let sync = include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/ptpv1-sync.bin");
         let body = PtpV1SyncMessageBody::parse(&sync[PtpV1Header::SIZE..]).expect("a Sync body");
         assert_eq!(
             describe_grandmaster(&body),

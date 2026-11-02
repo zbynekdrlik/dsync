@@ -2,7 +2,7 @@
 //! receive path on it, and never on another NIC.
 //!
 //! The owner's ruling (1.11.2026): the interface PTP binds to is an explicit setting. stream-snv
-//! ran a whole production without the Dante clock because a USB NIC got its address first at
+//! ran a whole production without the grandmaster clock because a USB NIC got its address first at
 //! boot. With `system.interface` set, startup loops here until the pinned NIC has a usable IPv4
 //! AND the receive path opens on it (on Windows the Npcap device list can lag the adapter list
 //! at boot, so an open failure is waited out too, never fatal). Meanwhile the controller — which

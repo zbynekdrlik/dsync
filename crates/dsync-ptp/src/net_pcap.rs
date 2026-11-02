@@ -25,7 +25,7 @@ const PTP_MULTICAST: Ipv4Addr = Ipv4Addr::new(224, 0, 1, 129);
 /// NOT the PTP ports 319/320. IGMP membership is per interface+group, not per
 /// port, and pcap's own BPF filter (not this socket) selects the captured PTP
 /// traffic — so binding 319/320 was a pointless exclusive claim that collided
-/// with a Dante Virtual Soundcard `ptp.exe` on the same host (dantesync, a
+/// with the virtual soundcard's `ptp.exe` on the same host (dsync, a
 /// boot-time service, bound first; `ptp.exe`, started later without
 /// `SO_REUSEADDR`, lost both ports with WSAEADDRINUSE). One socket for the
 /// group is sufficient; the old per-port pair (319 AND 320) and the now-pointless
@@ -64,7 +64,7 @@ fn join_multicast(iface_ip: Ipv4Addr) -> Result<UdpSocket> {
 /// a normal `Err` (exactly like any other pcap failure -- `NtpClient::new`
 /// already logs and falls back to userspace `rsntp` for this case) instead
 /// of crashing the process. This also hardens a real deployed box: if
-/// Npcap's runtime is ever missing/corrupted there, dantesync now degrades
+/// Npcap's runtime is ever missing/corrupted there, dsync now degrades
 /// gracefully instead of crashing outright.
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn wpcap_runtime_available() -> bool {
@@ -402,7 +402,7 @@ fn device_with_ip(ip: Ipv4Addr) -> Option<Device> {
 fn open_ptp_capture(device: Device, iface_ip: Ipv4Addr) -> Result<PtpCapture> {
     // CRITICAL: Join the multicast group via ONE ephemeral-port socket to
     // trigger IGMP membership (dsync#109: NOT bound to 319/320, so a
-    // Dante Virtual Soundcard ptp.exe on the same host keeps both PTP ports).
+    // the virtual soundcard's ptp.exe on the same host keeps both PTP ports).
     let igmp_sock = join_multicast(iface_ip)?;
     info!(
         "Joined PTP multicast group 224.0.1.129 on {} via an ephemeral-port IGMP socket \

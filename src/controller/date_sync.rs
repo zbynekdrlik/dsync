@@ -181,7 +181,7 @@ impl DateSync {
         }
         if enabled {
             info!(
-                "[PHASE-LOCK] clock discipline: {} — rate AND phase from the Dante PTP grandmaster; \
+                "[PHASE-LOCK] clock discipline: {} — rate AND phase from the PTPv1 grandmaster; \
                  NTP only moves the date, through the fleet date offset (#117/#88)",
                 CLOCK_DISCIPLINE_PTP_PHASE_LOCK
             );

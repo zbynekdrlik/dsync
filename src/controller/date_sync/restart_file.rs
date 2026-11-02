@@ -1,5 +1,5 @@
 //! dsync#126 — the master's saved fleet date offset on disk: `date-offset.json` beside
-//! `config.json` (`/etc/dantesync/`, `C:\ProgramData\DanteSync\`), in a file of its own.
+//! `config.json` (`/etc/dsync/`, `C:\ProgramData\dsync\`), in a file of its own.
 //!
 //! One flat JSON object of integers (all ns, the grandmaster as its six bytes), `version` first.
 //! It is written by temp + rename (the temp file synced first), so a crash never leaves a half
@@ -322,8 +322,8 @@ mod tests {
     #[test]
     fn the_directory_synced_is_the_record_s_own_even_for_a_bare_file_name_126() {
         assert_eq!(
-            dir_to_sync(Path::new("/etc/dantesync/date-offset.json")),
-            Some(PathBuf::from("/etc/dantesync"))
+            dir_to_sync(Path::new("/etc/dsync/date-offset.json")),
+            Some(PathBuf::from("/etc/dsync"))
         );
         assert_eq!(
             dir_to_sync(Path::new("date-offset.json")),

@@ -199,7 +199,7 @@ pub use dsync_ptp::frame::parse_udp_frame;
 // ============================================================================
 // #53 continuation — select the pcap NTP device by NTP-server reachability
 // ============================================================================
-// v1.8.24 confirmed live on a dual-homed host (stream box: Dante 10.77.7.204/23,
+// v1.8.24 confirmed live on a dual-homed host (stream box: audio 10.77.7.204/23,
 // LAN 10.77.9.204/23) that `PcapNtpTransport` inheriting the PTP capture
 // interface can never work when PTP and NTP live on different subnets — the
 // NTP server is genuinely unreachable from the PTP-selected device
@@ -599,18 +599,18 @@ mod tests {
 
     // ---- #53 continuation: pcap NTP device selection by reachability ----
 
-    /// #53 RED: reproduces the EXACT live stream-box topology — Dante on
+    /// #53 RED: reproduces the EXACT live stream-box topology — the audio network on
     /// 10.77.7.204/23 (where the PTP capture binds), LAN on 10.77.9.204/23
     /// (where the NTP server actually lives). The LAN candidate must be
     /// selected because ONLY its subnet contains the server address; the
-    /// placeholder just returns the first candidate with a netmask (Dante,
+    /// placeholder just returns the first candidate with a netmask (the audio network,
     /// listed first) regardless of `server_ip`, so this fails against it.
     #[test]
     fn select_ntp_pcap_device_picks_the_subnet_that_contains_the_server() {
         let server_ip: Ipv4Addr = "10.77.9.202".parse().unwrap();
         let candidates = [
             CandidateInterface {
-                name: "Ethernet 2 (Dante)".to_string(),
+                name: "Ethernet 2 (audio)".to_string(),
                 ip: "10.77.7.204".parse().unwrap(),
                 netmask: Some("255.255.254.0".parse().unwrap()), // /23
             },
@@ -627,7 +627,7 @@ mod tests {
             selected,
             Some(1),
             "the LAN device (index 1) is the only one whose /23 subnet contains \
-             10.77.9.202 -- Dante's 10.77.6.0-10.77.7.255 does not overlap LAN's \
+             10.77.9.202 -- the audio network's 10.77.6.0-10.77.7.255 does not overlap LAN's \
              10.77.8.0-10.77.9.255"
         );
     }
@@ -639,7 +639,7 @@ mod tests {
         let server_ip: Ipv4Addr = "192.168.1.5".parse().unwrap();
         let candidates = [
             CandidateInterface {
-                name: "Ethernet 2 (Dante)".to_string(),
+                name: "Ethernet 2 (audio)".to_string(),
                 ip: "10.77.7.204".parse().unwrap(),
                 netmask: Some("255.255.254.0".parse().unwrap()),
             },
@@ -712,18 +712,18 @@ mod tests {
     /// shares its first three octets with the server (a naive "compare
     /// octet 1-2-3" /24 implementation would coincidentally pass all four).
     /// This fixture forces the real subnet-mask math: the server
-    /// (10.77.6.5) is inside the Dante candidate's /23 span
+    /// (10.77.6.5) is inside the audio-network candidate's /23 span
     /// (10.77.6.0-10.77.7.255, from IP 10.77.7.204/23) but in a DIFFERENT
     /// /24 than that candidate's own IP (10.77.6.x vs 10.77.7.x) -- a naive
     /// octet-1-2-3-equality implementation returns None here (matches
     /// neither candidate), while the real netmask-AND implementation must
-    /// select the Dante candidate (index 0).
+    /// select the audio-network candidate (index 0).
     #[test]
     fn select_ntp_pcap_device_selects_across_a_24_boundary_within_the_23_span() {
         let server_ip: Ipv4Addr = "10.77.6.5".parse().unwrap();
         let candidates = [
             CandidateInterface {
-                name: "Ethernet 2 (Dante)".to_string(),
+                name: "Ethernet 2 (audio)".to_string(),
                 ip: "10.77.7.204".parse().unwrap(),
                 netmask: Some("255.255.254.0".parse().unwrap()), // /23: 10.77.6.0-10.77.7.255
             },
@@ -737,7 +737,7 @@ mod tests {
         assert_eq!(
             select_ntp_pcap_device(server_ip, &candidates),
             Some(0),
-            "10.77.6.5 is inside the Dante candidate's /23 span (10.77.6.0-10.77.7.255) even \
+            "10.77.6.5 is inside the audio-network candidate's /23 span (10.77.6.0-10.77.7.255) even \
              though it's in a DIFFERENT /24 (10.77.6.x) than the candidate's own IP (10.77.7.x) \
              -- a /24-only implementation would wrongly return None here"
         );
@@ -754,7 +754,7 @@ mod tests {
         let server_ip: Ipv4Addr = "10.77.8.50".parse().unwrap();
         let candidates = [
             CandidateInterface {
-                name: "Ethernet 2 (Dante)".to_string(),
+                name: "Ethernet 2 (audio)".to_string(),
                 ip: "10.77.7.204".parse().unwrap(),
                 netmask: Some("255.255.254.0".parse().unwrap()), // /23: 10.77.6.0-10.77.7.255
             },

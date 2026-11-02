@@ -6,7 +6,7 @@ set -euo pipefail
 
 # Installs a pre-push hook that runs scripts/purge-target.sh, so the local Cargo target/ is
 # bounded automatically before each push (it purges when target/ crosses the size budget, and is
-# safe — it skips while the dantesync daemon/tray is running). This is the BACKSTOP to the root
+# safe — it skips while the dsync daemon/tray is running). This is the BACKSTOP to the root
 # fix in CLAUDE.md's Local Build Policy (cheap checks only locally, never a release build). See
 # #61 — mirrors camera-box's scripts/install-git-hooks.sh (#185).
 #
@@ -27,7 +27,7 @@ mkdir -p "$HOOKS_DIR"
 cat > "$PRE_PUSH" <<'HOOK'
 #!/usr/bin/env bash
 # Managed by scripts/install-git-hooks.sh (#61) — bounds the local Cargo target/.
-# Purges target/ when it crosses the size budget (skips while the dantesync daemon/tray is
+# Purges target/ when it crosses the size budget (skips while the dsync daemon/tray is
 # running). Non-blocking: a purge failure must never stop a push.
 set -uo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0

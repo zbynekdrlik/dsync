@@ -147,7 +147,7 @@ fn test_sync_status_ntp_deadband_us_roundtrips_and_defaults_none_83() {
     );
 }
 
-/// Additive only: today's JSON (camera-box's DanteSync gate parses it) must
+/// Additive only: today's JSON (camera-box's dsync gate parses it) must
 /// keep deserializing unchanged.
 #[test]
 fn test_sync_status_pre_68_json_still_deserializes() {
@@ -238,7 +238,7 @@ fn test_sync_status_phase_slew_fields_are_additive_97() {
 /// dsync#101: `ntp_step_threshold_us` is additive. A pre-#101 JSON blob (which has the #97
 /// phase-slew fields but not this one) must still deserialize, defaulting to None; and a node
 /// carrying a client-mode adaptive threshold round-trips it. This is the field camera-box's
-/// step-aware DanteSync gate reads for a Windows client that has no journald (camera-box #1129).
+/// step-aware dsync gate reads for a Windows client that has no journald (camera-box #1129).
 #[test]
 fn test_sync_status_ntp_step_threshold_us_is_additive_101() {
     let pre_101 = r#"{"offset_ns":0,"drift_ppm":0.0,"gm_uuid":null,"gm_source_ip":null,
@@ -861,11 +861,11 @@ fn the_state_dir_field_is_additive_147() {
     assert_eq!(old.state_dir, None);
 
     let st = SyncStatus {
-        state_dir: Some("/etc/dantesync".to_string()),
+        state_dir: Some("/etc/dsync".to_string()),
         ..SyncStatus::default()
     };
     let v = serde_json::to_value(&st).expect("json");
-    assert_eq!(v["state_dir"], "/etc/dantesync");
+    assert_eq!(v["state_dir"], "/etc/dsync");
     let back: SyncStatus = serde_json::from_value(v).expect("round-trip");
     assert_eq!(back.state_dir, st.state_dir);
     let fresh = serde_json::to_string(&SyncStatus::default()).expect("json");

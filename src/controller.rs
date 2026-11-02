@@ -1,4 +1,4 @@
-//! PTP Controller - Core synchronization logic for Dante PTP time sync
+//! PTP Controller - Core synchronization logic for PTPv1 time sync
 //!
 //! This controller implements a two-phase frequency synchronization approach:
 //! 1. **Acquisition Phase**: Fast convergence using direct proportional control
@@ -118,7 +118,7 @@ fn should_log_drift_summary(sample_count: u64, interval: u64) -> bool {
 /// - `server_mode` — this node serves UTC to the whole fleet, so its duty to
 ///   track UTC does NOT depend on its own PTP lock. This is the #68 addition:
 ///   `ntp_server_mode` previously disabled the loop outright, leaving the
-///   master free-running at the Dante grandmaster's rate (6-19 ppm measured on
+///   master free-running at the grandmaster's rate (6-19 ppm measured on
 ///   strih ⇒ ~21 ms of UTC error 19 minutes after a restart, 1.04 s over two
 ///   days) with `ntp_failed` reading `false` throughout.
 /// - `is_locked` — ordinary client behaviour, unchanged.
@@ -274,7 +274,7 @@ const MAX_DELTA_NS: i64 = 2_000_000_000; // 2s - reject obviously invalid deltas
 const DRIFT_LOG_SUMMARY_INTERVAL_SAMPLES: u64 = 30;
 
 // Lucky packet filter - minimum time between samples (config override available)
-const DEFAULT_MIN_T1_DELTA_NS: i64 = 100_000_000; // 100ms default (Dante sends ~125ms)
+const DEFAULT_MIN_T1_DELTA_NS: i64 = 100_000_000; // 100ms default (the grandmaster sends ~125ms)
 
 // Periodic NTP UTC alignment (steps clock without changing frequency)
 const NTP_CHECK_INTERVAL_SECS: u64 = 30; // Check NTP every 30 seconds
@@ -288,7 +288,7 @@ const NTP_STEP_AGREEMENT_TOL_US: i64 = NTP_STEP_THRESHOLD_BASE_US; // Same-sign 
 // ============================================================================
 // #71 / #76 -- SERVER-MODE-ONLY discipline constants
 // ============================================================================
-// The master's UTC error is genuine drift (Dante-vs-UTC oscillator error,
+// The master's UTC error is genuine drift (PTP-vs-UTC oscillator error,
 // 6-19 ppm measured live) PLUS real measurement noise from whichever
 // upstream NTP source this node is configured against. #71 fixed the
 // drift-vs-confirmation-lag problem (a magnitude-tolerance agreement check
@@ -351,7 +351,7 @@ const NTP_STEP_AGREEMENT_TOL_US: i64 = NTP_STEP_THRESHOLD_BASE_US; // Same-sign 
 // POST-correction residual and is blind to a stepping-frequency regression).
 // ============================================================================
 const NTP_SERVER_STEP_THRESHOLD_US: i64 = 200; // still >>5-32us measured single-query noise (#53); catches genuine drift earlier than the client's 500us floor
-const NTP_SERVER_CHECK_INTERVAL_SECS: u64 = 10; // independent of calculate_adaptive_ntp_interval, which tracks PTP-vs-Dante-GM lock quality -- irrelevant to this node's UTC duty
+const NTP_SERVER_CHECK_INTERVAL_SECS: u64 = 10; // independent of calculate_adaptive_ntp_interval, which tracks PTP-vs-GM lock quality -- irrelevant to this node's UTC duty
                                                 // #105 (review 🟡): max consecutive non-slewable cycles that keep applying the held phase-slew DC
                                                 // before the controller gives up and full-resets. Bounds a stale DC during a persistent not-locked
                                                 // spell (e.g. a GM changeover where the true DC may have shifted). 5 checks = ~50-150s (client
@@ -485,12 +485,12 @@ const NTP_SERVER_LOCKED_MAX_STEP_US: i64 = 2_500;
 const NTP_SERVER_MAX_CHECKS_WITHOUT_STEP: u32 = 30;
 
 // #83: while genuinely PTP-locked to a real grandmaster, the master's periodic UTC step was
-// chasing the Dante grandmaster's own REAL, PERSISTENT, UNFIXABLE rate error vs UTC (measured
+// chasing the grandmaster's own REAL, PERSISTENT, UNFIXABLE rate error vs UTC (measured
 // live: ~38-66ppm on strih, vs PTP's own lock to that same grandmaster staying genuinely tight
 // and stable the whole time -- Drift within a few us/s, Adj -4..-6.7ppm, unrelated to the
-// NTP-measured figure). This is architecturally by design: Dante PTP provides frequency
+// NTP-measured figure). This is architecturally by design: PTPv1 provides frequency
 // coherence to the grandmaster's OWN rate, which has no defined relationship to UTC's rate (see
-// this file's own "CRITICAL: Dante Time vs UTC Time" doc, top of controller.rs / README) -- no
+// this file's own "CRITICAL: PTP Time vs UTC Time" doc, top of controller.rs / README) -- no
 // tuning of the confirmation/tolerance/quality-gate machinery below can remove a rate mismatch
 // that is real, external, and correctly invisible to PTP-vs-GM lock quality. #71/#76/#80 all
 // correctly tuned HOW a step is confirmed and applied; #83 changes WHETHER one should fire this
@@ -553,9 +553,9 @@ const NTP_SERVER_LOCKED_DEADBAND_US: i64 = 1_000;
 //
 // The NTP loop CANNOT slew here (PTP owns frequency; a slew is read back by the PTP servo as
 // drift and cancelled -- see clock-discipline-and-testing.md), so a UTC phase error is ALWAYS
-// stepped, and the step RATE is a direct function of the Dante-clock-vs-UTC frequency error.
+// stepped, and the step RATE is a direct function of the grandmaster-clock-vs-UTC frequency error.
 // A genuinely-PTP-locked healthy master steps at the locked deadband cadence, bounded by the
-// Dante grandmaster's own real rate error: the worst ever measured on strih is 66ppm (#83).
+// grandmaster's own real rate error: the worst ever measured on strih is 66ppm (#83).
 // Pre-#94 that was ~72 steps/h at the old 2500us deadband; #94 lowered the trigger to 1000us to
 // keep every realized step inside the 2500us proven band, which by conservation RAISES the
 // healthy-66ppm ceiling to ~120 steps/h (capping each step to <=2500us at 66ppm's 237.6ms/h of
@@ -601,7 +601,7 @@ const GM_RESOLVE_ON_DROP_COOLDOWN: Duration = Duration::from_secs(5);
 /// dsync#114 review — initial acquisition grace. Until the node has locked
 /// ONCE, a still-acquiring (not-yet-locked) clock within this window from start
 /// is NOT treated as a lost clock, so a normal service restart / rig reboot does
-/// not emit a spurious "NO DANTE CLOCK" alarm during convergence. A genuine hard
+/// not emit a spurious "NO PTP CLOCK" alarm during convergence. A genuine hard
 /// failure (no PTP packets at all → stale, or an unresolvable hostname) still
 /// fires immediately. 120 s comfortably covers LOCK/NANO convergence.
 const ACQUISITION_GRACE: Duration = Duration::from_secs(120);
@@ -655,7 +655,7 @@ where
     /// it has (and within `ACQUISITION_GRACE`), a not-yet-locked clock is normal
     /// boot acquisition, not a loss (no spurious reboot alarm).
     ever_locked: bool,
-    /// dsync#114 — the loud NO-DANTE-CLOCK alarm state machine, evaluated on
+    /// dsync#114 — the loud NO-PTP-CLOCK alarm state machine, evaluated on
     /// every 10 s `tick_status()` (so it fires even when NO PTP packets arrive —
     /// the whole point, since a lost clock means no packets). Silent while
     /// PTP-locked to an allowed grandmaster; otherwise one notification per
@@ -969,8 +969,8 @@ where
             // Self-tuning servo state (dsync#136: the shared rate servo)
             rate: RateServo::new(),
             // NTP UTC tracking - enabled on BOTH platforms
-            // PTP (Dante) controls frequency only, NTP maintains UTC alignment
-            // Dante provides device uptime, NOT UTC - so NTP is needed for real time
+            // PTP (the grandmaster) controls frequency only, NTP maintains UTC alignment
+            // The grandmaster provides device uptime, NOT UTC - so NTP is needed for real time
             last_ntp_check: now,
             ntp_offset_samples: VecDeque::with_capacity(NTP_SAMPLE_COUNT + 2),
             // #68: set by configure_ntp_server_mode() when this node serves the fleet
@@ -1155,13 +1155,13 @@ where
     /// This keeps all computers aligned to real UTC time by:
     /// - Checking NTP offset every 30 seconds (only in production mode)
     /// - Stepping clock if offset exceeds 500µs threshold
-    /// - ONLY sets time value - does NOT change frequency (Dante stays locked)
+    /// - ONLY sets time value - does NOT change frequency (PTP stays locked)
     ///
     /// Key insight: step_clock() and adjust_frequency() are independent:
     /// - step_clock() = SetSystemTime() - sets absolute time value
     /// - adjust_frequency() = SetSystemTimeAdjustmentPrecise() - sets tick rate
     ///
-    /// Stepping time does NOT affect the Dante-tuned frequency!
+    /// Stepping time does NOT affect the PTP-tuned frequency!
     pub fn check_ntp_utc_tracking(&mut self) {
         // dsync#134: not while the boot NTP reading is on its way — this query would block the
         // loop on the same (still unanswered) upstream; the boot reading comes first.
@@ -1174,9 +1174,9 @@ where
             return;
         }
         // #71: server mode uses a dedicated, UTC-relevant cadence instead of
-        // the PTP-vs-Dante-GM lock-quality signal `calculate_adaptive_ntp_interval`
+        // the PTP-vs-GM lock-quality signal `calculate_adaptive_ntp_interval`
         // is actually driven by (accumulated_phase_error_us tracks this
-        // node's own frequency-lock error against the Dante grandmaster, not
+        // node's own frequency-lock error against the grandmaster, not
         // against UTC -- see the NTP_SERVER_* doc comment above). Every other
         // node's adaptive-interval behavior is unchanged.
         //
@@ -1283,7 +1283,7 @@ where
                         && !phase_slew::should_step(offset_us)
                     {
                         // Log-surface CONTRACT: the whole camera-box gate ecosystem parses the
-                        // exact `[NTP] offset:{:+}us` line for FRESHNESS (dantesync_offset_verdict,
+                        // exact `[NTP] offset:{:+}us` line for FRESHNESS (dsync_offset_verdict,
                         // the #326 painter gate, verify-device (d)). The slew replaces the STEP,
                         // never the telemetry — keep emitting the line on every slewed cycle, or
                         // every freshness consumer reads a phase-slew box as stale/UNKNOWN and
@@ -1322,7 +1322,7 @@ where
                 // `calculate_ntp_adaptive_threshold` models JITTER — it widens by
                 // 5x the MAD of recent samples so a noisy LAN does not provoke
                 // constant stepping. On the master the samples are not jitter:
-                // they are a deterministic monotonic ramp (the Dante-vs-UTC
+                // they are a deterministic monotonic ramp (the PTP-vs-UTC
                 // frequency error integrating at 6-19 ppm). The MAD of a 7-point
                 // ramp with per-interval step `s` is exactly `2s`, so the
                 // threshold self-inflates to `500 + 10s` — ten times the accrual
@@ -1622,7 +1622,7 @@ where
     }
 
     /// #105 — disengage the phase SLEW for a step / brief flap WITHOUT discarding the learned
-    /// frequency DC. A step corrects PHASE; the ~50 ppm Dante-vs-UTC frequency relationship the
+    /// frequency DC. A step corrects PHASE; the ~50 ppm PTP-vs-UTC frequency relationship the
     /// integrator holds is unchanged by a phase jump, so it is KEPT and continues to be applied
     /// (`pending_f_phase_ppm = i`) — zeroing it on every non-slew cycle is what let a high-DC box run
     /// away and loop step→reset→step. `note_phase_step` re-enters fast acquisition so the servo
@@ -1698,7 +1698,7 @@ where
     /// machine IS the time source". That is true of the FLEET's mutual
     /// coherence and false of UTC — no oscillator is a source of UTC. With the
     /// loop off, the master's only UTC measurement was the boot-time one-shot,
-    /// after which it free-ran at the Dante grandmaster's rate: 6-19 ppm
+    /// after which it free-ran at the grandmaster's rate: 6-19 ppm
     /// measured on strih, i.e. ~21 ms of error 19 minutes after a restart and
     /// 1.04 s over two days, with the whole fleet coherently following it.
     ///
@@ -1943,7 +1943,7 @@ where
         // #113: re-resolve hostname allowlist entries periodically so a DNS/lease
         // change propagates without a restart (before the alarm samples health).
         self.maybe_reresolve_gm();
-        // #114: evaluate + emit the loud NO-DANTE-CLOCK alarm. Runs on the 10 s
+        // #114: evaluate + emit the loud NO-PTP-CLOCK alarm. Runs on the 10 s
         // tick regardless of packet arrival, so a lost clock (which means NO PTP
         // packets, hence no servo update) still fires the per-minute alarm.
         self.evaluate_clock_alarm();
@@ -1986,7 +1986,7 @@ where
         Self::log_gm_resolve_outcome(&outcome, &self.gm_allowlist);
     }
 
-    /// #114: sample the current Dante-clock health for the alarm decision.
+    /// #114: sample the current grandmaster-clock health for the alarm decision.
     fn sample_clock_health(&self) -> ClockHealth {
         let ptp_stale = self.ptp_stale_at(Instant::now());
         // mode ∈ {LOCK, NANO} — the genuinely PTP-locked modes. dsync#146: under the phase
@@ -2059,7 +2059,7 @@ where
         if tick.emit_notification {
             if let Some(reason) = &health.config_problem {
                 error!(
-                    "[CONFIG] {} -- fix the file and restart dantesync (it is never overwritten)",
+                    "[CONFIG] {} -- fix the file and restart dsync (it is never overwritten)",
                     reason
                 );
             }
@@ -2215,7 +2215,7 @@ where
                 );
                 self.current_sync_source = Some(source_uuid);
                 // Soft reset: clear stale data but KEEP current frequency
-                // Both Dante devices should have similar frequencies since they're
+                // Both audio devices should have similar frequencies since they're
                 // synchronized to the same grandmaster time
                 self.pending_syncs.clear();
                 self.sample_window.clear();
@@ -2439,7 +2439,7 @@ where
         }
     }
 
-    // NOTE: PTP stepping removed - Dante provides device uptime, not UTC.
+    // NOTE: PTP stepping removed - The grandmaster provides device uptime, not UTC.
     // NTP handles all time stepping via check_ntp_utc_tracking().
 
     fn should_add_sample(&self, t1_ns: i64) -> bool {
@@ -2453,7 +2453,7 @@ where
         if self.prev_t1_ns == 0 {
             return true;
         }
-        // Use config value if > 0, otherwise default (Dante sends packets every ~125ms)
+        // Use config value if > 0, otherwise default (the grandmaster sends packets every ~125ms)
         let min_delta = if self.config.filters.min_delta_ns > 0 {
             self.config.filters.min_delta_ns
         } else {
@@ -2511,9 +2511,9 @@ where
     /// 2. When offset is small, learn drift from the total correction
     /// 3. This naturally converges to the right drift baseline
     fn apply_self_tuning_servo(&mut self, offset_us: f64) {
-        // DANTE PTP FREQUENCY SYNC - Rate-of-Change Based Servo
+        // PTPV1 FREQUENCY SYNC - Rate-of-Change Based Servo
         //
-        // Key insight: Dante PTP timestamps are device uptime, NOT UTC.
+        // Key insight: PTPv1 timestamps are device uptime, NOT UTC.
         // The absolute offset (e.g., 182ms) is meaningless for time accuracy.
         // What matters is the RATE OF CHANGE of offset:
         // - If offset is stable → frequencies are matched ✓
@@ -4806,7 +4806,7 @@ mod tests {
 
     // ========================================================================
     // #83 -- while genuinely PTP-locked, the master's periodic UTC step was
-    // chasing the Dante grandmaster's own real, unfixable rate error vs UTC
+    // chasing the grandmaster's own real, unfixable rate error vs UTC
     // (measured live: ~38-66ppm, entirely unrelated to PTP's own lock quality,
     // which stayed tight and stable throughout). A large deadband replaces the
     // routine tight threshold while genuinely locked; not-locked keeps the
@@ -5323,7 +5323,7 @@ mod tests {
 
     /// dsync#91 — the zero-false-alarm boundary, LOCKED (not just asserted
     /// in a comment). A genuinely-PTP-locked master at the worst-ever measured
-    /// Dante-GM rate error (66ppm, #83) steps at the deadband cadence, which is
+    /// GM rate error (66ppm, #83) steps at the deadband cadence, which is
     /// the CEILING of healthy operation. #94 raised that ceiling: bounding every
     /// step to the <=2500us proven band at 66ppm's 237.6ms/h of drift FORCES ~120
     /// steps/h (conservation), so the healthy ceiling now sits AT the 120/h alarm
@@ -5862,7 +5862,7 @@ mod tests {
     // `ntp_server_mode` used to call `disable_ntp_tracking()`, so a healthy
     // master (`ptp_offline == false`) took exactly ONE UTC measurement in its
     // whole lifetime — the boot-time `run_ntp_sync()` — and then free-ran at
-    // the Dante grandmaster's rate, which is not UTC's rate. Measured live on
+    // the grandmaster's rate, which is not UTC's rate. Measured live on
     // strih: 6–19 ppm ⇒ ~21 ms of UTC error 19 minutes after a restart, 1.04 s
     // over two days. A restart is NOT the remedy; a closed loop is.
     // ========================================================================
@@ -5946,7 +5946,7 @@ mod tests {
 
     // ========================================================================
     // #83 -- server_step_threshold_us: a large deadband while genuinely PTP-locked
-    // (chasing the Dante grandmaster's own real, unfixable rate error vs UTC is
+    // (chasing the grandmaster's own real, unfixable rate error vs UTC is
     // pointless once the confirmation/tolerance/quality machinery is provably
     // correct, per #71/#76/#80); tight tracking otherwise, unchanged.
     // ========================================================================
@@ -6188,7 +6188,7 @@ mod tests {
     // it) beside `ntp_offset_us`/`ntp_spread_us`/`ntp_sample_count` that were
     // 18 hours old, with `ntp_failed: false` throughout. After the restart the
     // same triple read 0/0/0 — never measured, and still `ntp_failed: false`.
-    // A consumer (camera-box's DanteSync gate) cannot distinguish either state
+    // A consumer (camera-box's dsync gate) cannot distinguish either state
     // from a healthy node.
     // ========================================================================
 
@@ -6362,7 +6362,7 @@ mod tests {
     /// **The blocker.** `calculate_ntp_adaptive_threshold()` models JITTER: it
     /// widens the step threshold by 5x the MAD of recent samples. On the master
     /// the samples are not jitter — they are a deterministic monotonic ramp (the
-    /// Dante-vs-UTC frequency error integrating at 6-19 ppm), and the MAD of a
+    /// PTP-vs-UTC frequency error integrating at 6-19 ppm), and the MAD of a
     /// 7-point ramp with per-interval step `s` is exactly `2s`, so the threshold
     /// self-inflates to `500 + 10s` — ten times the accrual it is meant to catch.
     ///

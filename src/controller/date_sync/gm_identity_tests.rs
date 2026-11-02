@@ -11,10 +11,10 @@ use crate::clock::MockSystemClock;
 use crate::ptp::{PtpV1Header, LEGACY_MISREAD_GM_UUID};
 use crate::traits::MockNtpSource;
 
-/// A real Dante Sync, captured read-only (`tests/fixtures/ptpv1/README.md`).
-const DANTE_SYNC: &[u8] =
-    include_bytes!("../../../crates/dsync-ptp/tests/fixtures/ptpv1/dante-sync.bin");
-const DANTE_GM: [u8; 6] = [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14];
+/// A real PTPv1 Sync, captured read-only (`tests/fixtures/ptpv1/README.md`).
+const PTPV1_SYNC: &[u8] =
+    include_bytes!("../../../crates/dsync-ptp/tests/fixtures/ptpv1/ptpv1-sync.bin");
+const PTPV1_GM: [u8; 6] = [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14];
 /// Another port of an Audinate clock: another MAC, so another PTPv1 UUID.
 const OTHER_PORT: [u8; 6] = [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x15];
 
@@ -33,13 +33,13 @@ fn the_first_real_grandmaster_uuid_after_a_start_is_no_grandmaster_change_129() 
     // a restart starts from `None`).
     let (mut c, _) = anchored_controller(MockSystemClock::new(), MockNtpSource::new(), false);
     c.current_gm_uuid = None;
-    feed_sync(&mut c, DANTE_SYNC);
-    assert_eq!(c.current_gm_uuid, Some(DANTE_GM));
+    feed_sync(&mut c, PTPV1_SYNC);
+    assert_eq!(c.current_gm_uuid, Some(PTPV1_GM));
     assert!(
         !c.date_sync.core.rebase_pending(),
         "learning the identity is no change"
     );
-    feed_sync(&mut c, DANTE_SYNC);
+    feed_sync(&mut c, PTPV1_SYNC);
     assert!(
         !c.date_sync.core.rebase_pending(),
         "the same grandmaster again"
@@ -51,8 +51,8 @@ fn a_real_grandmaster_uuid_change_re_anchors_129() {
     // The detector now tells grandmasters apart: the same sender relaying another grandmaster.
     let (mut c, _) = anchored_controller(MockSystemClock::new(), MockNtpSource::new(), false);
     c.current_gm_uuid = None;
-    feed_sync(&mut c, DANTE_SYNC);
-    let mut other = DANTE_SYNC.to_vec();
+    feed_sync(&mut c, PTPV1_SYNC);
+    let mut other = PTPV1_SYNC.to_vec();
     other[54..60].copy_from_slice(&OTHER_PORT);
     feed_sync(&mut c, &other);
     assert_eq!(c.current_gm_uuid, Some(OTHER_PORT));
@@ -115,14 +115,14 @@ fn the_real_sync_publishes_the_ptp_sender_and_its_grandmaster_on_status_129() {
     // and `gm_uuid` is the real grandmaster, not the misread constant.
     let (mut c, _) = anchored_controller(MockSystemClock::new(), MockNtpSource::new(), false);
     c.current_gm_uuid = None;
-    feed_sync(&mut c, DANTE_SYNC);
+    feed_sync(&mut c, PTPV1_SYNC);
     c.update_shared_status();
     let st = c.get_status_shared();
     let st = st.read().expect("status");
-    assert_eq!(st.gm_uuid, Some(DANTE_GM));
+    assert_eq!(st.gm_uuid, Some(PTPV1_GM));
     assert_eq!(st.ptp_version, Some(1));
     assert_eq!(st.ptp_subdomain.as_deref(), Some("_DFLT"));
-    assert_eq!(st.ptp_source_uuid, Some(DANTE_GM));
+    assert_eq!(st.ptp_source_uuid, Some(PTPV1_GM));
 }
 
 #[test]
@@ -131,11 +131,11 @@ fn a_foreign_version_or_subdomain_is_reported_never_dropped_129() {
     // is enforced only after the live identities of both VLANs are recorded on issue 129).
     let (mut c, _) = anchored_controller(MockSystemClock::new(), MockNtpSource::new(), false);
     c.current_gm_uuid = None;
-    let mut foreign = DANTE_SYNC.to_vec();
+    let mut foreign = PTPV1_SYNC.to_vec();
     foreign[1] = 2; // versionPTP = 2
     foreign[4..9].copy_from_slice(b"_ALT1");
     feed_sync(&mut c, &foreign);
-    assert_eq!(c.current_gm_uuid, Some(DANTE_GM), "still followed");
+    assert_eq!(c.current_gm_uuid, Some(PTPV1_GM), "still followed");
     c.update_shared_status();
     let st = c.get_status_shared();
     let st = st.read().expect("status");

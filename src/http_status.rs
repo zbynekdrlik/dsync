@@ -200,7 +200,7 @@ fn handle_connection(
 }
 
 /// dsync#126 — `POST /date/step`: refused unless the peer is loopback, the `Host` a loopback
-/// name and the request carries the `X-DanteSync-Step` header (403); otherwise the request goes to
+/// name and the request carries the `X-Dsync-Step` header (403); otherwise the request goes to
 /// the sync loop, whose answer is `202` (one coordinated step announced) or `409` (refused, with
 /// the reason), or `503` when the loop does not take it in time — then the request is abandoned
 /// and nothing is ever announced for it (`StepClaim::abandon`) — or `500` when the loop took it
@@ -231,7 +231,7 @@ fn handle_date_step(
         return (
             403,
             date_step_trigger::refusal_body(
-                "a date step needs the X-DanteSync-Step header (no web page can send it)",
+                "a date step needs the X-Dsync-Step header (no web page can send it)",
             ),
         );
     }
@@ -515,7 +515,7 @@ mod tests {
         port
     }
 
-    const POST_STEP: &[u8] = b"POST /date/step HTTP/1.1\r\nHost: 127.0.0.1:8898\r\nX-DanteSync-Step: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    const POST_STEP: &[u8] = b"POST /date/step HTTP/1.1\r\nHost: 127.0.0.1:8898\r\nX-Dsync-Step: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
     #[test]
     fn a_loopback_post_date_step_reaches_the_sync_loop_and_answers_202_126() {
@@ -631,7 +631,7 @@ mod tests {
         );
         assert!(headers.starts_with("HTTP/1.1 403 Forbidden"), "{headers}");
         assert!(body.contains(r#""accepted":false"#), "{body}");
-        assert!(body.contains("X-DanteSync-Step"), "{body}");
+        assert!(body.contains("X-Dsync-Step"), "{body}");
     }
 
     #[test]
@@ -644,7 +644,7 @@ mod tests {
         }));
         let (headers, body) = exchange(
             port,
-            b"POST /date/step HTTP/1.1\r\nHost: strih.lan:8898\r\nX-DanteSync-Step: 1\r\nConnection: close\r\n\r\n",
+            b"POST /date/step HTTP/1.1\r\nHost: strih.lan:8898\r\nX-Dsync-Step: 1\r\nConnection: close\r\n\r\n",
         );
         assert!(headers.starts_with("HTTP/1.1 403 Forbidden"), "{headers}");
         assert!(body.contains("loopback Host"), "{body}");

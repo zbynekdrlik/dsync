@@ -1,7 +1,7 @@
 //! The tray's platform-neutral view of the daemon status (dsync#132).
 //!
 //! `dsync-tray` runs on Windows (winit event loop, status over the named pipe
-//! `\\.\pipe\dantesync`) and on Linux (gtk main loop, status over the daemon's HTTP
+//! `\\.\pipe\dsync`) and on Linux (gtk main loop, status over the daemon's HTTP
 //! endpoint `127.0.0.1:8898/status`). Both shells draw the SAME icon with the SAME
 //! colour for the same clock state and show the same menu text, so every decision
 //! that does not need a window system lives here, once, with its unit tests:
@@ -13,7 +13,7 @@
 //!   never a stale green;
 //! - [`render_icon_rgba`]: the 32x32 RGBA pixels of that icon;
 //! - [`status_texts`] / [`offline_texts`]: the tooltip and the read-only menu lines;
-//! - [`ClockAlarmCadence`]: when the Windows tray raises the dsync#114 NO DANTE CLOCK
+//! - [`ClockAlarmCadence`]: when the Windows tray raises the dsync#114 NO PTP CLOCK
 //!   balloon (the Linux daemon already `notify-send`s it itself);
 //! - [`fetch_status`]: one HTTP/1.0 GET of the status endpoint with plain `std::net`
 //!   (the Linux shell's transport), bounded by one deadline; any failure reads as offline;
@@ -70,8 +70,8 @@ pub const STATUS_REQUEST: &[u8] = b"GET /status HTTP/1.0\r\nHost: 127.0.0.1\r\n\
 /// The most bytes [`fetch_status`] keeps from one answer (the status JSON is ~2 KiB).
 pub const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
-/// The balloon text shown once when the NO DANTE CLOCK alarm clears.
-pub const CLOCK_RESTORED_MESSAGE: &str = "Dante clock restored — PTP re-locked";
+/// The balloon text shown once when the NO PTP CLOCK alarm clears.
+pub const CLOCK_RESTORED_MESSAGE: &str = "grandmaster clock restored — PTP re-locked";
 
 /// The fastest the clock-alarm balloon repeats, whatever the daemon publishes.
 pub const CLOCK_ALARM_TRAY_FLOOR_S: u64 = CLOCK_ALARM_INTERVAL_FLOOR_S;
@@ -107,7 +107,7 @@ pub struct TrayStatus {
     pub ntp_failed: bool,
     #[serde(default)]
     pub accumulated_phase_us: f64,
-    /// dsync#114: the NO DANTE CLOCK alarm snapshot.
+    /// dsync#114: the NO PTP CLOCK alarm snapshot.
     #[serde(default)]
     pub clock_alarm: ClockAlarmStatus,
     #[serde(default = "default_clock_alarm_interval_s")]
@@ -306,7 +306,7 @@ pub fn status_texts(status: &TrayStatus, version: &str) -> TrayTexts {
         None => String::new(),
     };
     let tooltip = format!(
-        "DanteSync v{}\nMode: {} | Drift: {}\nFreq Adj: {:+.1}ppm\nNTP Offset: {:+}us{}{}",
+        "dsync v{}\nMode: {} | Drift: {}\nFreq Adj: {:+.1}ppm\nNTP Offset: {:+}us{}{}",
         version, mode, drift, status.drift_ppm, status.ntp_offset_us, phase, gm
     );
     TrayTexts {
@@ -323,7 +323,7 @@ pub fn status_texts(status: &TrayStatus, version: &str) -> TrayTexts {
 /// The texts while the daemon does not answer.
 pub fn offline_texts(version: &str) -> TrayTexts {
     TrayTexts {
-        tooltip: format!("DanteSync v{}\nService Offline", version),
+        tooltip: format!("dsync v{}\nService Offline", version),
         status_line: "Service Offline".to_string(),
         mode_line: "--".to_string(),
         gm_line: "PTP Master: --".to_string(),
@@ -335,7 +335,7 @@ pub fn offline_texts(version: &str) -> TrayTexts {
 pub enum AlarmAction {
     /// Nothing to show.
     Quiet,
-    /// Raise the NO DANTE CLOCK notification with this text.
+    /// Raise the NO PTP CLOCK notification with this text.
     Raise(String),
     /// The alarm just cleared: one reassuring notification ([`CLOCK_RESTORED_MESSAGE`]).
     Cleared,

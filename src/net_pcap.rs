@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime};
 ///
 /// Confirmed live on the stream box: `PcapNtpTransport` used to inherit the
 /// PTP capture device (`find_device(interface_name)`), which fails outright
-/// on a dual-homed host where PTP (Dante) and NTP (LAN) live on different
+/// on a dual-homed host where PTP (the grandmaster) and NTP (LAN) live on different
 /// subnets — the NTP server is genuinely unreachable from that device
 /// (WSAENETUNREACH / os error 10051). This instead enumerates EVERY Npcap
 /// device's IPv4 addresses and picks the one whose subnet contains the

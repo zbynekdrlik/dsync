@@ -100,7 +100,7 @@ mod tests {
     /// captured packet's do.
     #[test]
     fn the_encoder_matches_the_real_sync_fixture_layout() {
-        let real: &[u8] = include_bytes!("../tests/fixtures/ptpv1/dante-sync.bin");
+        let real: &[u8] = include_bytes!("../tests/fixtures/ptpv1/ptpv1-sync.bin");
         let ours = sync(&SENDER, 1, 0);
         assert_eq!(real.len(), ours.len());
         assert_eq!(&real[0..4], &ours[0..4], "versions");

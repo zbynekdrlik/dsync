@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-# WHY (#61): dantesync is Tier-0 — CI's release workflow (.github/workflows/release.yml) builds
+# WHY (#61): dsync is Tier-0 — CI's release workflow (.github/workflows/release.yml) builds
 # and publishes dsync-linux-amd64 + dsync-windows-amd64.exe (+ tray) on tag push, gated
 # all-or-nothing (needs: build); locally we run only cheap checks (cargo check / clippy / test
 # --no-run). But cargo's project-local target/ has NO garbage collection (rust-lang/cargo#5026):
@@ -19,7 +19,7 @@ set -euo pipefail
 #   scripts/purge-target.sh --force      # purge regardless of size
 #   scripts/purge-target.sh --check      # report size only, never purge (exit 0)
 #
-# SAFETY: NEVER purges while the dantesync daemon or its Windows tray companion is running — this
+# SAFETY: NEVER purges while the dsync daemon or its Windows tray companion is running — this
 # repo's own binary is a live PTP sync process; purging out from under a running measurement is
 # not acceptable. See scripts/lib/purge-target-decision.sh for the pure decision functions
 # (unit-tested by tests/purge_target.rs).
@@ -71,7 +71,7 @@ purge_target_main() {
     fi
 
     if purge_target_daemon_live; then
-        echo "purge-target.sh: dantesync daemon/tray is RUNNING (live sync) — skipping purge (safety)." >&2
+        echo "purge-target.sh: dsync daemon/tray is RUNNING (live sync) — skipping purge (safety)." >&2
         return 0
     fi
 

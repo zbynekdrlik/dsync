@@ -43,7 +43,7 @@ where
                 let cause = if delta_ns < -cap {
                     "date correction too large to slew"
                 } else {
-                    "the authority does not slew (an older dantesync?)"
+                    "the authority does not slew (an older dsync?)"
                 };
                 warn!(
                     "[DATE] {}: coordinated BACKWARD date step {:+}us scheduled (seq {}) in {} ms",

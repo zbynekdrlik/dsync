@@ -51,7 +51,7 @@ pub fn get_default_interface() -> Result<(String, Ipv4Addr)> {
 pub enum PinnedLookup {
     /// The NIC exists and carries this routable IPv4 (the first one, in listing order).
     Ready(Ipv4Addr),
-    /// The NIC carries only a link-local IPv4 (169.254/16): a Dante segment without DHCP uses
+    /// The NIC carries only a link-local IPv4 (169.254/16): an audio-network segment without DHCP uses
     /// one for good, but it is also what Windows (APIPA) or avahi assign while DHCP has not
     /// answered yet. Startup takes it only after [`PINNED_STARTUP_GRACE`]; a re-join takes it.
     LinkLocalOnly(Ipv4Addr),
@@ -407,8 +407,8 @@ pub fn create_multicast_socket(port: u16, interface_ip: Ipv4Addr) -> Result<UdpS
 /// interface+group, NOT per port, so the socket's bound source port is
 /// irrelevant to the join (and pcap's own BPF filter, not this socket, selects
 /// the captured traffic). It must therefore bind an EPHEMERAL port — never a
-/// PTP port (319/320), which on a Dante Virtual Soundcard host belong to DVS's
-/// own `ptp.exe`: dantesync (a boot-time service) bound them first, so
+/// PTP port (319/320), which on a virtual soundcard host belong to DVS's
+/// own `ptp.exe`: dsync (a boot-time service) bound them first, so
 /// `ptp.exe` (started later, without `SO_REUSEADDR`) failed its bind with
 /// WSAEADDRINUSE and its PTP follower was starved of Follow_Up/Delay_Resp on
 /// 320.
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn a_link_local_only_pinned_nic_is_taken_after_the_grace_131() {
-        // A Dante segment without DHCP lives on 169.254/16 for good; at boot the same address
+        // An audio-network segment without DHCP lives on 169.254/16 for good; at boot the same address
         // can be a placeholder until DHCP answers.
         let ll = Ipv4Addr::new(169, 254, 9, 9);
         let s = std::time::Duration::from_secs;
@@ -768,8 +768,8 @@ mod tests {
     }
 
     /// dsync#109: the pcap IGMP-join socket must bind an EPHEMERAL port,
-    /// never a PTP port. Binding 319/320 collides with a Dante Virtual
-    /// Soundcard `ptp.exe` on the same host and starves its PTP follower of the
+    /// never a PTP port. Binding 319/320 collides with a virtual
+    /// soundcard `ptp.exe` on the same host and starves its PTP follower of the
     /// PTP general messages (Follow_Up/Delay_Resp) on 320 — the DVS media clock
     /// then free-runs on the host crystal instead of the grandmaster.
     #[test]

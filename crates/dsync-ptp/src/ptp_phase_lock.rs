@@ -1,14 +1,14 @@
-//! dsync#117 — the PTP PHASE LOCK: rate AND phase from the Dante grandmaster, nothing else.
+//! dsync#117 — the PTP PHASE LOCK: rate AND phase from the grandmaster, nothing else.
 //!
 //! # The owner contract (issue #117, ROZHODNUTÉ issuecomment-5836853146)
 //!
-//! RATE = the Dante PTP tick only; NTP = date stepping only. Every PC running dantesync must tick
+//! RATE = the PTPv1 tick only; NTP = date stepping only. Every PC running dsync must tick
 //! exactly with the grandmaster, and all PCs must show the same wall time. Before #117 the PTP
 //! servo was RATE-ONLY: it drove `d(offset)/dt` to zero and never looked at the offset itself
 //! (`initial_epoch_offset_ns` was written once and never read, and NANO mode ignored rates below a
 //! 0.1 µs/s deadband). Rate-only is not phase: two boxes at "the same rate" random-walk apart
 //! (0.1 ppm uncorrected = 360 µs/h), so cross-box agreement was held by NTP — through #97's
-//! `phase_slew`, which steered the RATE by up to ±5-19 ppm away from the Dante tick.
+//! `phase_slew`, which steered the RATE by up to ±5-19 ppm away from the grandmaster tick.
 //!
 //! # What this module does
 //!
@@ -54,9 +54,9 @@
 //! - The NANO 0.1 µs/s deadband has no equivalent here: the phase term corrects every residual,
 //!   so nothing drifts freely.
 //!
-//! # A grandmaster FREQUENCY step (camera-box issue 1372, dantesync slice)
+//! # A grandmaster FREQUENCY step (camera-box issue 1372, dsync slice)
 //!
-//! A Dante leader re-election moves the grandmaster's frequency by up to ~25 ppm at once, and the
+//! A PTP leader re-election moves the grandmaster's frequency by up to ~25 ppm at once, and the
 //! slow PI above would take ~8-12 minutes to follow it (with a phase error near 1 ms on the way).
 //! [`freq_step::FreqStepDetector`] measures the frequency the loop has not learned, from the
 //! open-loop phase over the last 20 s of windows, and confirms a clean step. The core then:

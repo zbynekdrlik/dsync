@@ -2,7 +2,7 @@ use super::*;
 use std::net::TcpListener;
 use std::thread;
 
-/// A real answer of `GET /status HTTP/1.0` from a locked dev1 daemon (dantesync 1.17.0,
+/// A real answer of `GET /status HTTP/1.0` from a locked dev1 daemon (dsync 1.17.0,
 /// captured 14.10.2026 for issue 132).
 const REAL_RESPONSE: &[u8] = include_bytes!("../../tests/fixtures/tray/status_response_200.http");
 
@@ -258,7 +258,7 @@ fn status_texts_match_the_windows_format() {
     let t = status_texts(&s, "1.18.0");
     assert_eq!(
         t.tooltip,
-        "DanteSync v1.18.0\nMode: LOCK | Drift: -1.9us/s\nFreq Adj: +42.0ppm\n\
+        "dsync v1.18.0\nMode: LOCK | Drift: -1.9us/s\nFreq Adj: +42.0ppm\n\
          NTP Offset: +17us\nAccum. Phase: +2527us\nPTP Master: 10.77.9.230"
     );
     assert_eq!(t.status_line, "LOCK | Drift: -1.9us/s");
@@ -277,7 +277,7 @@ fn small_phase_and_missing_master_are_left_out() {
     let t = status_texts(&s, "1.0.0");
     assert_eq!(
         t.tooltip,
-        "DanteSync v1.0.0\nMode: NANO | Drift: +0.0us/s\nFreq Adj: +0.0ppm\nNTP Offset: -3us"
+        "dsync v1.0.0\nMode: NANO | Drift: +0.0us/s\nFreq Adj: +0.0ppm\nNTP Offset: -3us"
     );
     assert_eq!(t.gm_line, "PTP Master: --");
 }
@@ -292,7 +292,7 @@ fn mode_name_falls_back_for_an_old_daemon() {
 #[test]
 fn offline_texts_are_the_windows_offline_texts() {
     let t = offline_texts("1.18.0");
-    assert_eq!(t.tooltip, "DanteSync v1.18.0\nService Offline");
+    assert_eq!(t.tooltip, "dsync v1.18.0\nService Offline");
     assert_eq!(t.status_line, "Service Offline");
     assert_eq!(t.mode_line, "--");
     assert_eq!(t.gm_line, "PTP Master: --");

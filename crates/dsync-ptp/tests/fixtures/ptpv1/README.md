@@ -1,15 +1,15 @@
-# Real Dante PTPv1 packets (issue 129)
+# Real PTPv1 packets (issue 129)
 
 Two UDP payloads, byte for byte as they arrived:
 
-- `dante-sync.bin` (124 bytes): a Sync on 224.0.1.129:319.
-- `dante-follow-up.bin` (52 bytes): its Follow_Up on 224.0.1.129:320, the same sequence id 0xb27a.
+- `ptpv1-sync.bin` (124 bytes): a Sync on 224.0.1.129:319.
+- `ptpv1-follow-up.bin` (52 bytes): its Follow_Up on 224.0.1.129:320, the same sequence id 0xb27a.
 
 ## Provenance
 
 - **Box:** dev1 (`10.77.9.109/23`), interface `enp2s0`, the SNV rig's video VLAN.
 - **Time:** 2026-10-09T21:17:17Z.
-- **Sender:** the Dante grandmaster `10.77.9.230`, source UUID `00:1d:c1:08:02:14` (Audinate OUI).
+- **Sender:** the grandmaster `10.77.9.230`, source UUID `00:1d:c1:08:02:14` (Audinate OUI).
 - **Capture:** read-only, nothing restarted or reconfigured:
   `sudo tcpdump -i enp2s0 -c 20 -w dev1-ptpv1.pcap 'udp port 319 or udp port 320'`.
   The pcap held 10 Sync + 10 Follow_Up, every 250 ms (`syncInterval` −2). Packets 0 and 1 were

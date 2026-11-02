@@ -1,14 +1,14 @@
 //! dsync#119 — the coordinated date SLEW: how a BACKWARD fleet date correction is applied.
 //!
 //! A backward step makes wall time run back on every box at once, and wall-time consumers
-//! downstream (Dante DVS/ASIO, the camera-box stream OBS) lose that much audio. So the direction
+//! downstream (the virtual soundcard DVS (ASIO), the camera-box stream OBS) lose that much audio. So the direction
 //! decides ([`correction_kind`]): forward = the coordinated step, backward = a [`DateSlew`] every
 //! box follows. Pure (explicit time inputs, no I/O), like the rest of `crate::date_offset`.
 
 use super::DateAnnounce;
 
 /// dsync#119 — the default slew rate of a backward correction: 100 ppm pays 50 ms in 500 s.
-/// Every box moves by this rate against the Dante tick while a slew runs; camera-box's ASRC takes
+/// Every box moves by this rate against the grandmaster tick while a slew runs; camera-box's ASRC takes
 /// it as a rate (it tracks hundreds of ppm) and 100 ppm of pitch is inaudible.
 pub const DEFAULT_SLEW_PPM: u32 = 100;
 
@@ -54,7 +54,7 @@ pub fn slew_cap_ns(step_bound_ns: i64) -> i64 {
 
 /// dsync#119 — THE direction decision. `correction_ns` is the change of `D` (`UTC − wall`):
 /// positive moves the wall forward, which every consumer tolerates (a forward step lost no audio
-/// on the rig); negative would move it BACKWARDS, which Dante DVS/ASIO turns into lost samples,
+/// on the rig); negative would move it BACKWARDS, which the virtual soundcard DVS (ASIO) turns into lost samples,
 /// so it is slewed — unless it is larger than [`slew_cap_ns`] of `step_bound_ns`.
 pub fn correction_kind(correction_ns: i64, step_bound_ns: i64) -> CorrectionKind {
     if correction_ns >= 0 {

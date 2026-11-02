@@ -764,7 +764,7 @@ fn run_sync_loop(
             Ok(mut ntp_srv) => {
                 // #68: KEEP querying upstream. This host is the fleet's time
                 // source, not UTC's — with the periodic queries off it free-ran
-                // at the Dante grandmaster's rate (1.04 s of UTC drift over two
+                // at the grandmaster's rate (1.04 s of UTC drift over two
                 // days, with the whole fleet coherently following it).
                 controller.configure_ntp_server_mode(ntp_server_config.max_step_us);
 

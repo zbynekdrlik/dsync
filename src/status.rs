@@ -15,8 +15,8 @@ pub struct SyncStatus {
     // ========================================================================
     // Core PTP Status (existing fields)
     // ========================================================================
-    /// Current phase offset from Dante master (nanoseconds)
-    /// Note: Absolute value is meaningless for Dante (device uptime, not UTC)
+    /// Current phase offset from grandmaster (nanoseconds)
+    /// Note: Absolute value is meaningless for PTPv1 (device uptime, not UTC)
     pub offset_ns: i64,
 
     /// Current frequency adjustment being applied (PPM)
@@ -130,11 +130,11 @@ pub struct SyncStatus {
     /// `server_step_threshold_us(is_locked, ptp_offline)`, independent of `ntp_offset_us`'s
     /// own freshness). A residual in `ntp_offset_us` up to roughly this value is EXPECTED,
     /// healthy behavior, not drift or instability: while genuinely PTP-locked, this node
-    /// deliberately uses a large deadband (the Dante grandmaster's own real, unfixable rate
+    /// deliberately uses a large deadband (the grandmaster's own real, unfixable rate
     /// error vs UTC is operationally irrelevant to the fleet's internal consistency, so UTC
     /// phase is corrected only every few minutes instead of every ~20-40s) rather than the
     /// tight tracking used while not yet locked. Any consumer grading `ntp_offset_us` for
-    /// stability (e.g. camera-box's own E2E DanteSync gate) should read this field FIRST and
+    /// stability (e.g. camera-box's own E2E dsync gate) should read this field FIRST and
     /// grade against it, not against a fixed assumed bound.
     #[serde(default)]
     pub ntp_deadband_us: Option<i64>,
@@ -143,7 +143,7 @@ pub struct SyncStatus {
     /// hour — the honest "steps/h" health metric #67 asked for. `None` on a
     /// client node (or a node that has never served in server mode). A healthy,
     /// genuinely-PTP-locked master tops out near ~84/h (the 2500us deadband at
-    /// the worst-ever 66ppm Dante-GM rate error, #83); a sustained value above
+    /// the worst-ever 66ppm GM rate error, #83); a sustained value above
     /// `NTP_STEP_STORM_THRESHOLD_PER_HOUR` means this master's PTP FREQUENCY
     /// reference is degraded (a GM outage drops it to the tight 200us threshold,
     /// which then step-storms at every check) and the whole NTP fleet is chasing
@@ -167,7 +167,7 @@ pub struct SyncStatus {
     /// adaptive threshold, the SAME quantity the journal logs as `[NTP] offset:+Nus (threshold:Mus,
     /// adaptive)`. `ntp_deadband_us` (#83) deliberately reports this ONLY in server mode (`None` on
     /// a client); this field fills that gap so a CLIENT's threshold is machine-readable too. Why it
-    /// matters: camera-box's DanteSync E2E gate makes a client's median AND stability (spread)
+    /// matters: camera-box's dsync E2E gate makes a client's median AND stability (spread)
     /// bounds step-aware from this threshold — a Linux cam reads it from journald, but a Windows
     /// client is HTTP-only, so without this field the gate fell back to a fixed 700us term and a
     /// healthy step-straddle spread false-UNSTABLE'd the run (camera-box #1129). `None` only on a
@@ -178,7 +178,7 @@ pub struct SyncStatus {
     // ========================================================================
     // Phase-slew telemetry (dsync#97) — all additive, all default to the
     // pre-#97 "feature off" reading so an old JSON blob still deserializes and
-    // camera-box's DanteSync gate is unaffected until a box opts in.
+    // camera-box's dsync gate is unaffected until a box opts in.
     // ========================================================================
     /// dsync#97: true when the bounded PI phase-slew servo is enabled on this node (the
     /// `system.phase_slew.enabled` flag). `false` (default) = the classic step-only UTC path.
@@ -196,7 +196,7 @@ pub struct SyncStatus {
     pub f_phase_p_ppm: f64,
 
     /// dsync#97: the integral part of `f_phase` (ppm) — on a master it converges toward the
-    /// node's constant Dante-vs-UTC rate error (≈23 ppm), so the phase error trims to ~0.
+    /// node's constant PTP-vs-UTC rate error (≈23 ppm), so the phase error trims to ~0.
     #[serde(default)]
     pub f_phase_i_ppm: f64,
 
@@ -219,9 +219,9 @@ pub struct SyncStatus {
     // ========================================================================
     // Clock alarm (dsync#114) — all additive, all default to the pre-#114
     // "no alarm / 60 s cadence" reading so an old JSON blob still deserializes
-    // and camera-box's DanteSync gate is unaffected.
+    // and camera-box's dsync gate is unaffected.
     // ========================================================================
-    /// dsync#114: the loud "NO DANTE CLOCK" alarm snapshot — `{active, since,
+    /// dsync#114: the loud "NO PTP CLOCK" alarm snapshot — `{active, since,
     /// reason}`. `active` is true while this node is NOT PTP-locked to an allowed
     /// grandmaster; `since` is the unix epoch second the current episode began
     /// (`null` when inactive); `reason` is a human string (empty when inactive).
@@ -413,7 +413,7 @@ pub struct SyncStatus {
     // ========================================================================
     // PTP phase lock (dsync#117) — additive.
     // ========================================================================
-    /// dsync#117: `"ptp_phase_lock"` (rate AND phase from the Dante grandmaster, NTP only
+    /// dsync#117: `"ptp_phase_lock"` (rate AND phase from the grandmaster, NTP only
     /// moves the date) or `"legacy"` (the pre-#117 rate-only servo + NTP steps / phase_slew).
     /// Empty in a pre-#117 blob.
     #[serde(default)]
@@ -447,7 +447,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub last_ptp_rx_age_s: Option<u64>,
 
-    /// dsync#112: allowed PTP packets per second over the last 10 s (a Dante grandmaster sends
+    /// dsync#112: allowed PTP packets per second over the last 10 s (a grandmaster sends
     /// about 16: 8 Sync + 8 Follow_Up). 0 while stale.
     #[serde(default)]
     pub ptp_rx_pps: f64,
@@ -461,7 +461,7 @@ pub struct SyncStatus {
     // Grandmaster frequency-step follow (camera-box issue 1372) — additive.
     // ========================================================================
     /// Grandmaster FREQUENCY steps the phase lock detected and followed since the process started
-    /// (a Dante leader re-election can move the grandmaster's frequency by ~25 ppm at once). 0 in
+    /// (a PTP leader re-election can move the grandmaster's frequency by ~25 ppm at once). 0 in
     /// a pre-1.14 blob.
     #[serde(default)]
     pub freq_steps: u32,
@@ -491,8 +491,8 @@ pub struct SyncStatus {
     // ========================================================================
     // The PTP sender's identity (dsync#129, 1.17) — additive, report-only.
     // ========================================================================
-    /// From the header of the last Sync this node followed: `versionPTP` (Dante: 1), the subdomain
-    /// (Dante: `"_DFLT"`, up to the first NUL) and the sender's `sourceUuid` (a grandmaster's own
+    /// From the header of the last Sync this node followed: `versionPTP` (the audio network: 1), the subdomain
+    /// (the audio network: `"_DFLT"`, up to the first NUL) and the sender's `sourceUuid` (a grandmaster's own
     /// port, or a boundary clock relaying it; `gm_uuid` is the grandmaster). Reported only: no
     /// packet is filtered on them yet. `null` until a Sync arrives, and in a pre-1.17 blob.
     #[serde(default)]

@@ -1,12 +1,12 @@
 //! dsync#119 (1.12) — the fleet date corrected by ONE coordinated step per NIGHT.
 //!
 //! Owner decision (issue 119, comment 5849932587). The 1.11 micro-corrections (a coordinated step
-//! of 500 µs every 20 s) break the Dante Virtual Soundcard on the stream box: every
+//! of 500 µs every 20 s) break the virtual soundcard on the stream box: every
 //! `NtSetSystemTime` starves its ASIO input, and OBS then ratchets its audio buffering (85 → 405
 //! ms). One step per 10 min starved nothing. The grandmaster (a PCIe card with no clock input)
 //! cannot be locked to UTC, so the fleet date has to be stepped. It is now stepped ONCE A NIGHT.
 //!
-//! - All day nothing is corrected. The fleet date runs at the Dante tick and drifts from UTC at
+//! - All day nothing is corrected. The fleet date runs at the grandmaster tick and drifts from UTC at
 //!   the grandmaster's rate (+17.6 ppm on the rig: ~1.5 s a day). Every box shares that drift, so
 //!   the boxes still agree to the µs.
 //! - In a window that opens at `daily_step_utc` (02:00 by default: 04:00 CEST / 03:00 CET, with

@@ -14,7 +14,7 @@ pub(super) fn log_daily_authority(
     let tod_s = cfg.step_tod_ns / 1_000_000_000;
     info!(
         "[DATE] this NTP master is the fleet DATE-OFFSET AUTHORITY: D={}ns — the fleet date \
-             runs at the Dante tick all day and is corrected ONCE A NIGHT: one coordinated \
+             runs at the grandmaster tick all day and is corrected ONCE A NIGHT: one coordinated \
              step of the UTC error rounded to whole {} ms, either direction, when the window \
              opens at {:02}:{:02}:{:02} UTC (up to {} min while UTC is unavailable), announced \
              {} s ahead; only an error beyond {} ms is stepped at once, unrounded (correction = \
