@@ -77,6 +77,11 @@ on either platform skips `publish` — no release with a missing asset).
 - Dante stability gate (#98): `gate.yml` on the `companion` runner, the pass rule, and the
   tree-hash release coupling in `auto-release`. The gate must be green on dev's tree BEFORE merging
   to master, or the release is refused → `docs/dante-gate.md`
+- The library form (#136, v1.24): `crates/dsync-ptp` holds the shared PTP code and the in-process
+  follower. It covers the workspace and re-export layout, the extracted `RateServo` steps, the
+  virtual clock over the RAW counter, the stamp conversion that drops a packet straddling a wall
+  step, why followers on one PC read bit-identical times, and the real-socket acceptance test
+  beside the service → `.claude/rules/ptp-library.md` (auto-loads on `crates/dsync-ptp/**`)
 - Windows-only (`#[cfg(windows)]`) code — what CI actually verifies + a free local compile-check
   without the Npcap SDK → `.claude/rules/windows-only-code.md` (auto-loads on its `paths:`)
 - Editing `.github/workflows/*.yml` — local `actionlint` validation, and why a workflow being
@@ -280,6 +285,11 @@ design-gate's `cd` resolution.
 DanteSync is a high-precision PTP (Precision Time Protocol) synchronization tool for Dante Audio networks. It implements PTPv1 over UDP multicast (ports 319/320) with a hybrid NTP+PTP approach.
 
 ### Core Components
+
+Since v1.24 (#136) the PTP code lives in the workspace crate `crates/dsync-ptp`: the files below
+marked (crate). The service re-exports them, so `crate::ptp::…` paths are unchanged. Applications
+link the same crate's `follower` to lock to Dante PTP in their own process.
+
 
 - **`main.rs`** - Entry point, CLI parsing, Windows service logic, IPC server setup, and main sync loop orchestration
 - **`controller.rs`** - `PtpController<C, N, S>` - Generic controller that coordinates PTP sync. Contains rate-based servo logic, mode transitions (ACQ→PROD→LOCK), and clock adjustments

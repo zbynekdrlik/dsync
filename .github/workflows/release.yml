@@ -99,11 +99,11 @@ jobs:
 
       - name: Run Tests (Linux Only)
         if: runner.os == 'Linux'
-        run: cargo test --verbose
+        run: cargo test --workspace --verbose
 
       - name: Run Tests (Windows Only)
         if: runner.os == 'Windows'
-        run: cargo test --verbose
+        run: cargo test --workspace --verbose
 
       - name: Build Main (Linux)
         if: runner.os == 'Linux'
