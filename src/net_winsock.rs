@@ -204,7 +204,7 @@ impl WinsockPtpNetwork {
                 };
                 error!(
                     "Failed to bind PTP UDP port {} (WSA error {}{}). Another PTP daemon \
-                     (e.g. virtual soundcard's ptp.exe) likely owns this port -- \
+                     (e.g. a DVS ptp.exe) likely owns this port -- \
                      dsync's Winsock PTP receive on port {} cannot start.",
                     port, err, inuse_hint, port
                 );

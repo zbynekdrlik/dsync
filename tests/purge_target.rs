@@ -154,7 +154,7 @@ fn purge_target_daemon_live_true_when_a_matching_process_is_found() {
     let cmd = format!(
         r#"set -uo pipefail
 . {path}
-pgrep() {{ [ "$1" = "-x" ] && [ "$2" = "dsync|dsync-tray" ] && return 0; return 1; }}
+pgrep() {{ [ "$1" = "-x" ] && [ "$2" = "dsync|dsync-tray|dantesync|dantesync-tray" ] && return 0; return 1; }}
 purge_target_daemon_live && echo LIVE || echo NOTLIVE
 "#,
         path = lib_script().display()

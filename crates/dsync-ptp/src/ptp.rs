@@ -143,7 +143,7 @@ pub struct PtpTimestamp {
 impl PtpTimestamp {
     /// Convert timestamp to nanoseconds.
     /// Uses saturating arithmetic to prevent overflow from malformed packets.
-    /// Note: PTPv1 uses device uptime (not Unix epoch), so seconds values
+    /// Note: the grandmaster's PTPv1 time is its device uptime (not Unix epoch), so seconds values
     /// are typically small, but we handle edge cases defensively.
     pub fn to_nanos(&self) -> i64 {
         (self.seconds as i64)

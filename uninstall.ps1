@@ -5,12 +5,8 @@ $ErrorActionPreference = "Stop"
 
 $ServiceName = "dsync"
 $InstallDir = "C:\Program Files\dsync"
-# dsync#147: the daemon uses C:\ProgramData\dsync, else the pre-1.25 dir in place.
-if (Test-Path "C:\ProgramData\dsync") {
-    $DataDir = "C:\ProgramData\dsync"
-} else {
-    $DataDir = "C:\ProgramData\DanteSync"
-}
+# dsync#147: the daemon uses C:\ProgramData\dsync, else the pre-1.25 dir in place; offer both.
+$DataDirs = @("C:\ProgramData\dsync", "C:\ProgramData\DanteSync")
 # The pre-1.25 installation, removed too.
 $LegacyServiceName = "dantesync"
 $LegacyInstallDir = "C:\Program Files\DanteSync"
@@ -94,14 +90,16 @@ foreach ($Dir in @($InstallDir, $LegacyInstallDir)) {
     }
 }
 
-# 6. Ask about data directory (contains config and logs)
-if (Test-Path $DataDir) {
-    $Response = Read-Host "Remove configuration and logs at $DataDir? (y/N)"
-    if ($Response -eq 'y' -or $Response -eq 'Y') {
-        Remove-Item -Path $DataDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "  - Removed $DataDir" -ForegroundColor Gray
-    } else {
-        Write-Host "  - Kept $DataDir (config and logs preserved)" -ForegroundColor Gray
+# 6. Ask about each data directory (contains config and logs)
+foreach ($DataDir in $DataDirs) {
+    if (Test-Path $DataDir) {
+        $Response = Read-Host "Remove configuration and logs at $DataDir? (y/N)"
+        if ($Response -eq 'y' -or $Response -eq 'Y') {
+            Remove-Item -Path $DataDir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "  - Removed $DataDir" -ForegroundColor Gray
+        } else {
+            Write-Host "  - Kept $DataDir (config and logs preserved)" -ForegroundColor Gray
+        }
     }
 }
 

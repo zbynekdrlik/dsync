@@ -917,3 +917,24 @@ canary evidence before continuing.
   - Acceptance on dev1: all locked in 51.9 s. Over 30 s, service vs follower was 27.1 µs worst and
     14.0 µs mean, and follower vs follower 0.0 µs (the same kernel stamp).
   - CI runs everything with `--workspace`.
+
+- #147 (v1.25.0, the rename): dsync everywhere. Commits: bump `64ba9f2`, package/paths `cf7e165`,
+  state dir + service/pipe/tray/installers `c3ed01b`, gate `8c34f40`, wording `8370170`.
+  - Decision (ROZHODNUTÉ #147): the state dir is RESOLVED (`src/state_dir.rs`): `/etc/dsync`, else
+    the legacy dir in place, else create. Never copied: a second `drift.json` would seed the gate's
+    `--cold` run. Tests: `state_dir::tests::*` (all three cases + both existing), `status::tests::
+    the_state_dir_field_is_additive_147`.
+  - `gate.yml` keeps its file name: the release check looks runs up by it (pinned by
+    `test_the_release_check_looks_up_this_workflow_file_147`).
+  - `POST /date/step` takes `X-Dsync-Step` and still the pre-1.25 header
+    (`the_legacy_step_header_is_still_accepted_147`). The alarm text says NO PTP CLOCK; the
+    `[CLOCK-ALARM]` tag is unchanged.
+  - Residual "dante": legacy paths/units the code and installers must find, dstack's tool,
+    camera-box-owned names, quoted owner text, CHANGELOG history.
+  - Review (fresh context, 0 🔴 3 🟡 5 🔵), fixed in the review commit: the singleton takes the new
+    AND the legacy lock file / mutex (an old and a new daemon never both run during a unit switch;
+    `the_singleton_takes_the_new_and_the_legacy_lock_147`), the purge-target guard also matches
+    the pre-1.25 process names, rollout doc paths say "the state dir", a DVS `ptp.exe` named
+    again, uninstall offers both data dirs. Not verifiable from here: the `dsync-gate` runner label
+    (403 listing runners; the gate run proves it) and whether camera-box greps the alarm's human
+    text (now "NO PTP CLOCK"; the `[CLOCK-ALARM]` tag is unchanged) — relayed to dstack.

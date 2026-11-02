@@ -779,7 +779,7 @@ impl Default for SystemConfig {
         // 1. PTP (the grandmaster) → frequency synchronization only (adjust_frequency)
         // 2. NTP → UTC phase alignment (step_clock)
         //
-        // CRITICAL: PTPv1 provides DEVICE UPTIME, not UTC time!
+        // CRITICAL: the grandmaster's PTPv1 time is DEVICE UPTIME, not UTC time!
         // - NTP handles all time stepping via periodic UTC corrections
         // - PTP locks the frequency while NTP keeps absolute time correct
         //

@@ -123,7 +123,8 @@ on either platform skips `publish` — no release with a missing asset).
   `.claude/rules/phase-slew-servo.md` (auto-loads on `src/phase_slew.rs`)
 - Adding a config key / loading `config.json` (the `serde_json` `IndexMut` startup-panic trap,
   serde defaults, flooring nonsense values, #116: a failed parse never writes the file, the
-  last-good copy + alarm, BOM decoding) → `.claude/rules/config-migration.md`
+  last-good copy + alarm, BOM decoding; #147: the state dir is resolved by `src/state_dir.rs`, never
+  copied, never a fresh `const` path) → `.claude/rules/config-migration.md`
 - PTP receive interface selection (#131: `system.interface` / `--interface` PINS the NIC on every
   platform — wait for it, never another NIC, alarm naming it; unpinned: net.rs/net_pcap.rs/gm_filter.rs — pick the NIC on the
   trusted GM subnet, reuse the #53 selector, pure-logic-in-gm_filter vs Windows-glue split, overlap
@@ -174,7 +175,7 @@ The airuleset design-gate hook (`hooks/post-record-design-comment.sh`, external 
 classifies a posted `gh issue comment` as a design/validated/reviewed marker resolves which repo
 the comment belongs to from the **session's own ambient working directory**, not from a `cd
 <path> &&` prefix inside the SAME Bash command. A worker whose session launched in a sibling repo
-(e.g. `camera-box`) and runs `cd /home/newlevel/devel/dsync && gh issue comment 71 -F
+(e.g. `camera-box`) and runs `cd /home/dsync/devel/dsync && gh issue comment 71 -F
 body.md` — even though the comment genuinely posts to the right repo (confirmed by the returned
 `.../dsync/issues/71#issuecomment-...` URL) — has that comment silently classified against
 the WRONG repo (or not at all), because the hook's own `cwd` metadata never followed the `cd`.
@@ -212,7 +213,7 @@ inline `cd <path> &&`/`cd <path>;` — but ONLY when it is the LITERAL FIRST sta
 Bash tool call the `git commit` itself runs in. A shape like:
 
 ```bash
-cd /home/newlevel/devel/dsync && git add file1 file2
+cd /home/dsync/devel/dsync && git add file1 file2
 git commit -m "$(cat <<'EOF'
 ...
 EOF
@@ -229,7 +230,7 @@ heredoc's OWN body lines are part of the SAME statement, not new top-level ones,
 break this):
 
 ```bash
-cd /home/newlevel/devel/dsync && git add file1 file2 && git commit -m "$(cat <<'EOF'
+cd /home/dsync/devel/dsync && git add file1 file2 && git commit -m "$(cat <<'EOF'
 ...
 EOF
 )"
@@ -308,7 +309,7 @@ link the same crate's `follower` to lock to the grandmaster in their own process
 
 ### CRITICAL: PTP Time vs UTC Time
 
-**PTPv1 provides DEVICE UPTIME, not UTC time.** This is fundamental to the architecture:
+**The grandmaster's PTPv1 time is DEVICE UPTIME, not UTC time.** This is fundamental to the architecture:
 
 - The grandmaster clock uses device uptime (time since power-on), NOT real UTC.
 - The owner contract (#117): **RATE = the PTPv1 tick only; NTP = date stepping only.**

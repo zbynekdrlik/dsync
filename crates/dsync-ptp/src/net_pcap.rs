@@ -402,7 +402,7 @@ fn device_with_ip(ip: Ipv4Addr) -> Option<Device> {
 fn open_ptp_capture(device: Device, iface_ip: Ipv4Addr) -> Result<PtpCapture> {
     // CRITICAL: Join the multicast group via ONE ephemeral-port socket to
     // trigger IGMP membership (dsync#109: NOT bound to 319/320, so a
-    // the virtual soundcard's ptp.exe on the same host keeps both PTP ports).
+    // a DVS ptp.exe on the same host keeps both PTP ports).
     let igmp_sock = join_multicast(iface_ip)?;
     info!(
         "Joined PTP multicast group 224.0.1.129 on {} via an ephemeral-port IGMP socket \

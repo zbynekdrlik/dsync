@@ -415,7 +415,39 @@ fn enable_realtime_priority() {
 
 #[cfg(unix)]
 struct SingleInstanceGuard {
-    _file: File,
+    _files: Vec<File>,
+}
+
+/// dsync#147: the singleton lock files. The pre-1.25 daemon held only the legacy one, so this
+/// build takes BOTH: an old and a new daemon on one box (a deployer's unit switch half done) must
+/// never both discipline the clock.
+#[cfg(unix)]
+const SINGLETON_LOCK_PATHS: [&str; 2] = ["/var/run/dsync.lock", "/var/run/dantesync.lock"];
+
+/// Take an exclusive, non-blocking `flock` on every path in order; the first one held by another
+/// process is an error naming it.
+#[cfg(unix)]
+fn lock_files_exclusive(paths: &[&str]) -> Result<Vec<File>> {
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|e| anyhow!("Failed to create lock file {}: {}", path, e))?;
+        match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
+            Ok(_) => files.push(file),
+            Err(nix::errno::Errno::EAGAIN) => {
+                return Err(anyhow!(
+                    "Another instance of dsync is already running! (Lockfile: {})",
+                    path
+                ))
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(files)
 }
 
 #[cfg(unix)]
@@ -427,8 +459,14 @@ impl std::fmt::Debug for SingleInstanceGuard {
 
 #[cfg(windows)]
 struct SingleInstanceGuard {
-    _handle: HANDLE,
+    _handles: Vec<HANDLE>,
 }
+
+/// dsync#147: the singleton mutexes — this build's and the pre-1.25 daemon's (see the Unix lock
+/// files): an old and a new daemon must never both run.
+#[cfg(windows)]
+const SINGLETON_MUTEX_NAMES: [&str; 2] =
+    ["Global\\DsyncDaemonMutex", "Global\\DanteSyncDaemonMutex"];
 
 #[cfg(windows)]
 impl std::fmt::Debug for SingleInstanceGuard {
@@ -440,8 +478,10 @@ impl std::fmt::Debug for SingleInstanceGuard {
 #[cfg(windows)]
 impl Drop for SingleInstanceGuard {
     fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self._handle);
+        for handle in &self._handles {
+            unsafe {
+                let _ = CloseHandle(*handle);
+            }
         }
     }
 }
@@ -449,40 +489,39 @@ impl Drop for SingleInstanceGuard {
 fn acquire_singleton_lock() -> Result<SingleInstanceGuard> {
     #[cfg(unix)]
     {
-        let lock_path = "/var/run/dsync.lock";
-        let file = File::create(lock_path)
-            .map_err(|e| anyhow!("Failed to create lock file {}: {}", lock_path, e))?;
-
-        match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
-            Ok(_) => Ok(SingleInstanceGuard { _file: file }),
-            Err(nix::errno::Errno::EAGAIN) => Err(anyhow!(
-                "Another instance of dsync is already running! (Lockfile: {})",
-                lock_path
-            )),
-            Err(e) => Err(e.into()),
-        }
+        lock_files_exclusive(&SINGLETON_LOCK_PATHS)
+            .map(|files| SingleInstanceGuard { _files: files })
     }
     #[cfg(windows)]
     {
         use anyhow::anyhow;
 
-        let mutex_name: Vec<u16> = "Global\\DsyncDaemonMutex\0".encode_utf16().collect();
-
-        unsafe {
-            match CreateMutexW(None, false, PCWSTR(mutex_name.as_ptr())) {
-                Ok(handle) => {
-                    // Check if mutex already existed (another instance is running)
-                    if let Err(e) = GetLastError() {
-                        if e.code() == ERROR_ALREADY_EXISTS.to_hresult() {
-                            let _ = CloseHandle(handle);
-                            return Err(anyhow!("Another instance of dsync is already running!"));
+        let mut guard = SingleInstanceGuard {
+            _handles: Vec::with_capacity(SINGLETON_MUTEX_NAMES.len()),
+        };
+        for name in SINGLETON_MUTEX_NAMES {
+            let mutex_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+            unsafe {
+                match CreateMutexW(None, false, PCWSTR(mutex_name.as_ptr())) {
+                    Ok(handle) => {
+                        // Check if mutex already existed (another instance is running)
+                        if let Err(e) = GetLastError() {
+                            if e.code() == ERROR_ALREADY_EXISTS.to_hresult() {
+                                let _ = CloseHandle(handle);
+                                // `guard` drops here and closes the mutexes taken so far.
+                                return Err(anyhow!(
+                                    "Another instance of dsync is already running! ({})",
+                                    name
+                                ));
+                            }
                         }
+                        guard._handles.push(handle);
                     }
-                    Ok(SingleInstanceGuard { _handle: handle })
+                    Err(e) => return Err(anyhow!("Failed to create singleton mutex: {:?}", e)),
                 }
-                Err(e) => Err(anyhow!("Failed to create singleton mutex: {:?}", e)),
             }
         }
+        Ok(guard)
     }
 }
 
@@ -1336,6 +1375,32 @@ mod tests {
     // ========================================================================
     // SINGLE INSTANCE LOCK TESTS
     // ========================================================================
+
+    /// dsync#147: the new AND the legacy lock file are both taken; either one held by another
+    /// holder (a pre-1.25 daemon holds only the legacy one) refuses the start.
+    #[cfg(unix)]
+    #[test]
+    fn the_singleton_takes_the_new_and_the_legacy_lock_147() {
+        let dir = tempfile::tempdir().unwrap();
+        let new = dir.path().join("dsync.lock");
+        let legacy = dir.path().join("legacy.lock");
+        let paths = [new.to_str().unwrap(), legacy.to_str().unwrap()];
+
+        // A pre-1.25 daemon holding only the legacy lock blocks the start.
+        let old = lock_files_exclusive(&paths[1..]).expect("the old daemon's lock");
+        let err = lock_files_exclusive(&paths).expect_err("the legacy lock is held");
+        assert!(err.to_string().contains("already running"), "{err}");
+        assert!(err.to_string().contains("legacy.lock"), "{err}");
+        drop(old);
+
+        // Free: both taken; a second instance is refused on the new one.
+        let first = lock_files_exclusive(&paths).expect("both locks free");
+        assert_eq!(first.len(), 2);
+        let err = lock_files_exclusive(&paths).expect_err("held by the first");
+        assert!(err.to_string().contains("dsync.lock"), "{err}");
+        drop(first);
+        assert!(lock_files_exclusive(&paths).is_ok());
+    }
 
     #[cfg(windows)]
     #[test]

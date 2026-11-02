@@ -86,9 +86,9 @@ addresses, transports and credentials are not in this repository: they are in
   absorbs the new session (≤ 100 µs) instead of stepping; and upgraded followers HOLD the
   fleet date through the master's restart instead of stepping on their own NTP 30 s in.
   - **Roll check on the master:** its journal shows `[DATE] no saved fleet date offset at
-    /etc/dsync/date-offset.json` on this first start, then the file exists (it is written
+    <state dir>/date-offset.json` on this first start (`/status.state_dir`), then the file exists (it is written
     on every change of the authority). No follower journal shows `[DATE] stepped` around it.
-  - **The acceptance (a daytime restart, after that):** `systemctl restart dsync` on the
+  - **The acceptance (a daytime restart, after that):** a restart of the daemon's unit on the
     master. Its journal: `[DATE] saved fleet date offset found … the boot step is skipped`,
     `[DATE] boot step of … SKIPPED`, then at its first lock `[DATE] RESTORED the fleet date
     offset …`; `/status` `date_offset_restored: true` with the SAME `date_offset_seq` and
@@ -97,7 +97,8 @@ addresses, transports and credentials are not in this repository: they are in
     with `date_authority_hold_age_s` while the master is away, then `… heard again after
     holding …` and `"follower"`; NO `[DATE] stepped` and no `[StepClock]` anywhere.
   - **The coordinated step on request** (acceptance tests only): on the MASTER itself,
-    `curl -s -X POST -H 'X-Dsync-Step: 1' http://127.0.0.1:8898/date/step` → `202` +
+    `curl -s -X POST -H 'X-Dsync-Step: 1' http://127.0.0.1:8898/date/step` (a pre-1.25 master
+    needs its old header name; 1.25+ accepts both) → `202` +
     `{"accepted":true,"amount_ns":…,"land_ptp_ns":…,"due_in_ms":…,"seq":…}`; every box then logs
     ONE `[DATE] stepped +…us (coordinated, seq N)` at the instant. Refused with a reason (`409`)
     while another change is in flight, without a settled UTC estimate, or for a fleet ahead of

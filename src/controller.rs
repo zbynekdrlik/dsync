@@ -2439,7 +2439,7 @@ where
         }
     }
 
-    // NOTE: PTP stepping removed - The grandmaster provides device uptime, not UTC.
+    // NOTE: PTP stepping removed - the grandmaster provides device uptime, not UTC.
     // NTP handles all time stepping via check_ntp_utc_tracking().
 
     fn should_add_sample(&self, t1_ns: i64) -> bool {
