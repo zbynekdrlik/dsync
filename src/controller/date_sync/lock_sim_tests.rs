@@ -93,14 +93,24 @@ fn print_boot(label: &str, s: &Sim) {
 fn a_boot_reports_lock_only_within_the_bound_and_never_flaps_146() {
     for jitter in JITTERS_US {
         for &noise in &SEEDS {
-            for (kind, seed) in [
-                ("cold", None),
-                ("seeded", Some(LEARNED_PPM)),
+            for (kind, seed, fast) in [
+                ("cold", None, false),
+                ("seeded", Some(LEARNED_PPM), true),
                 // A seed the judge keeps but a few ppm off (a warmer box): the rate servo hands
                 // over up to its 5 us/s lock criterion off, and the continued fit re-seeds.
-                ("seeded 4 ppm off", Some(LEARNED_PPM + 4.0)),
-                ("seeded 4 ppm off", Some(LEARNED_PPM - 4.0)),
+                ("seeded 4 ppm off", Some(LEARNED_PPM + 4.0), true),
+                ("seeded 4 ppm off", Some(LEARNED_PPM - 4.0), true),
+                // Further off, still kept by the #142 judge (up to 20 us/s): the rate servo may
+                // lock with the phase lock's start 8-9 ppm off, and the phase lock's own retiring
+                // of it must not read as a lock loss (review of #146).
+                ("seeded 7 ppm off", Some(LEARNED_PPM + 7.0), false),
+                ("seeded 7 ppm off", Some(LEARNED_PPM - 7.0), false),
+                ("seeded 10 ppm off", Some(LEARNED_PPM + 10.0), false),
+                ("seeded 10 ppm off", Some(LEARNED_PPM - 10.0), false),
+                ("seeded 15 ppm off", Some(LEARNED_PPM + 15.0), false),
+                ("seeded 15 ppm off", Some(LEARNED_PPM - 15.0), false),
             ] {
+                // `fast`: a seed within a few ppm, which #142 meant to lock in ~10 s.
                 let label = format!("{kind} boot, {jitter} us jitter, noise {noise:x}");
                 let mut s = Sim::new(NATURAL_PPM, seed, noise, jitter);
                 s.run(600);
@@ -126,7 +136,7 @@ fn a_boot_reports_lock_only_within_the_bound_and_never_flaps_146() {
                 // goal); at the pessimistic 30 us the rate servo's acquisition is noisy (its
                 // integrator walks a few ppm), and the PI trims that before [41].
                 let seeded_bound_s = if jitter <= 10.0 { 15.0 } else { 30.0 };
-                if seed.is_some() {
+                if fast {
                     assert!(
                         first as f64 * WINDOW_S <= seeded_bound_s,
                         "{label}: a seeded boot sets [41] at {:.1} s",
