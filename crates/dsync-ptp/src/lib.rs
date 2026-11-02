@@ -20,6 +20,7 @@ pub mod network;
 pub mod ptp;
 pub mod ptp_phase_lock;
 pub mod ptp_rejoin;
+pub mod rate_servo;
 pub mod spike_filter;
 
 #[cfg(unix)]

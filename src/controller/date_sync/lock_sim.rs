@@ -148,8 +148,8 @@ impl Sim {
     pub(super) fn window(&mut self) -> Obs {
         self.n += 1;
         let median_us = self.advance();
-        if self.c.last_offset_us.is_some() {
-            self.c.last_offset_time = Some(Instant::now() - Duration::from_secs_f64(WINDOW_S));
+        if self.c.rate.last_offset_us.is_some() {
+            self.c.rate.last_offset_time = Some(Instant::now() - Duration::from_secs_f64(WINDOW_S));
         }
         self.c.date_sync.pending_median_ns = Some(BASE_NS + (median_us * 1_000.0).round() as i64);
         self.c.date_sync.pending_t1_ns = self.t1_ns;

@@ -160,7 +160,7 @@ pub(super) struct DateSync {
     pub(super) unsafe_since: Option<Instant>,
     /// dantesync#146 — the phase lock's last two words minus its integrator (ppm), oldest first:
     /// the deviation the rate servo's measurement is decoupled from (0 = the rate servo's word).
-    pub(super) word_deviation_ppm: [f64; 2],
+    pub(super) word_deviation: crate::rate_servo::WordDeviation,
 }
 
 impl DateSync {
@@ -240,7 +240,7 @@ impl DateSync {
             last_freq_step_ts: None,
             restart: restart::RestartState::new(config),
             lock_gate: crate::lock_gate::PhaseLockGate::new(),
-            word_deviation_ppm: [0.0; 2],
+            word_deviation: crate::rate_servo::WordDeviation::default(),
             unsafe_since: None,
         }
     }
@@ -353,7 +353,7 @@ where
         self.date_sync.last_t1_ns = Some(t1);
         let was_engaged = self.date_sync.core.engaged();
         let reseeded_before = self.date_sync.core.boot_reseed().is_some();
-        let locked = self.is_locked && !self.ptp_offline;
+        let locked = self.rate.is_locked && !self.ptp_offline;
         let out = self
             .date_sync
             .core
@@ -398,16 +398,16 @@ where
                 }
                 // Keep the rate servo's baseline on the learned frequency, so a hand-back (lock
                 // loss) is bumpless.
-                self.drift_baseline_ppm = self.date_sync.core.integrator_ppm();
+                self.rate.drift_baseline_ppm = self.date_sync.core.integrator_ppm();
                 word
             }
             None => {
                 if was_engaged {
-                    self.drift_baseline_ppm = self.date_sync.core.integrator_ppm();
+                    self.rate.drift_baseline_ppm = self.date_sync.core.integrator_ppm();
                     info!(
                         "[PHASE-LOCK] disengaged (PTP lock lost) — the rate servo holds the \
                          learned {:+.3}ppm",
-                        self.drift_baseline_ppm
+                        self.rate.drift_baseline_ppm
                     );
                 }
                 total_correction
@@ -504,8 +504,8 @@ where
         self.pending_syncs.clear();
         self.prev_t1_ns = 0;
         self.prev_t2_ns = 0;
-        self.last_offset_us = None;
-        self.last_offset_time = None;
+        self.rate.last_offset_us = None;
+        self.rate.last_offset_time = None;
         // dantesync#146: no PTP, no phase lock: [41] clears at once, and the acquisition fit
         // starts again after the outage (its `dt` across it is not the outage's length).
         self.clear_reported_lock();
@@ -513,7 +513,7 @@ where
         if self.date_sync.core.engaged() {
             self.date_sync.core.disengage();
             let word = self.date_sync.core.integrator_ppm();
-            self.drift_baseline_ppm = word;
+            self.rate.drift_baseline_ppm = word;
             // Hold the LEARNED frequency (not the last word, which carries the last P term), so
             // the free-run through the outage is as small as the oscillator allows.
             self.last_adj_ppm = word;

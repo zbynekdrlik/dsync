@@ -16,7 +16,7 @@ use crate::config::SystemConfig;
 use crate::gm_filter::{GmAllowlist, ResolveOutcome, Resolver, StdResolver};
 use crate::phase_slew::{self, PhaseSlewOutput, PhaseSlewServo};
 use crate::ptp::{PtpV1Control, PtpV1FollowUpBody, PtpV1Header, PtpV1SyncMessageBody};
-use crate::spike_filter::{FilterMode, JitterEstimator, SpikeFilter};
+use crate::rate_servo::{RateServo, DRIFT_MAX_PPM, LOCK_STABLE_COUNT};
 use crate::status::SyncStatus;
 use crate::time_server::DateAuthoritySource;
 use crate::traits::{NtpSource, PtpNetwork};
@@ -257,25 +257,8 @@ const MAX_DELTA_NS: i64 = 2_000_000_000; // 2s - reject obviously invalid deltas
 //   - Auto-adaptive drift learning
 // ==========================================================================
 
-// Acquisition phase (FAST convergence)
-const P_GAIN_ACQ: f64 = 0.8; // Aggressive P-term for quick lock
-const P_MAX_ACQ_PPM: f64 = 200.0; // Limit to prevent wild swings
-
-// Production phase (gentle stability)
-const P_GAIN_PROD: f64 = 0.1; // Gentle P-term in production
-const P_MAX_PROD_PPM: f64 = 100.0; // Allow enough for high drift rates
-
-// NANO phase (ultra-precise for sub-µs capable systems)
-// Entry: drift < 0.5 µs/s sustained for 30 samples
-// Exit: drift > 1.0 µs/s for 5 samples (hysteresis)
-const P_GAIN_NANO: f64 = 0.01; // 10x smaller than PROD - minimize hunting
-const P_MAX_NANO_PPM: f64 = 10.0; // Tiny corrections only
-const I_GAIN_NANO: f64 = 0.005; // 10x smaller I-term
-const NANO_ENTER_RATE_US: f64 = 0.5; // Enter NANO if drift < 0.5 µs/s
-const NANO_EXIT_RATE_US: f64 = 1.0; // Exit NANO if drift > 1.0 µs/s
-const NANO_SUSTAIN_COUNT: usize = 15; // 15 samples (~15s) to enter NANO
-const NANO_EXIT_COUNT: usize = 5; // 5 consecutive samples above threshold to exit (hysteresis)
-const NANO_DEADBAND_US: f64 = 0.1; // Ignore drift < 0.1 µs/s (noise floor)
+// dantesync#136: the gains, the NANO thresholds, `DRIFT_MAX_PPM` and `LOCK_STABLE_COUNT` live with
+// the extracted rate servo (`dsync_ptp::rate_servo`).
 
 // ==========================================================================
 // #679 — PER-SAMPLE DRIFT LOG THROTTLE
@@ -289,12 +272,6 @@ const NANO_DEADBAND_US: f64 = 0.1; // Ignore drift < 0.1 µs/s (noise floor)
 // already only log on a real state change, not per sample.
 // ==========================================================================
 const DRIFT_LOG_SUMMARY_INTERVAL_SAMPLES: u64 = 30;
-
-// Max drift baseline limit
-const DRIFT_MAX_PPM: f64 = 500.0;
-
-// Lock detection
-const LOCK_STABLE_COUNT: usize = 5;
 
 // Lucky packet filter - minimum time between samples (config override available)
 const DEFAULT_MIN_T1_DELTA_NS: i64 = 100_000_000; // 100ms default (Dante sends ~125ms)
@@ -737,25 +714,10 @@ where
     // ==========================================================================
     // P-term creates oscillation, drift baseline is learned from average correction
     // ==========================================================================
-    /// Learned drift baseline (auto-tuned from average correction when stable)
-    drift_baseline_ppm: f64,
-
-    /// Lock state - true when synchronized and stable
-    is_locked: bool,
-    lock_stable_count: usize,
-
-    /// Production mode state (with hysteresis)
-    in_production_mode: bool,
-
-    /// NANO mode state (ultra-precise for sub-µs capable systems)
-    in_nano_mode: bool,
-    nano_sustain_count: usize, // Track consecutive sub-threshold samples for entry
-    nano_exit_count: usize,    // Track consecutive above-threshold samples for exit (hysteresis)
-
-    // Rate-of-change tracking for Dante servo
-    last_offset_us: Option<f64>,
-    last_offset_time: Option<Instant>,
-    smoothed_rate_ppm: f64, // Exponential moving average of rate
+    /// dantesync#136: the rate servo's whole state (drift baseline, lock, gain modes, the rate
+    /// measurement, the spike filter and the jitter estimator), shared with the in-process
+    /// follower through `dsync_ptp::rate_servo`.
+    rate: RateServo<Instant>,
 
     // Periodic NTP UTC tracking state
     last_ntp_check: Instant,
@@ -795,10 +757,6 @@ where
     /// or escape-valve), or on any under-threshold check. Client mode never touches this field.
     ntp_server_checks_since_step: u32,
 
-    // Accumulated phase error tracking (estimated drift between NTP steps)
-    accumulated_phase_error_us: f64,
-    last_phase_accumulation_time: Option<Instant>,
-
     /// #91: monotonic timestamps of recent successful NTP `step_clock` calls, for
     /// step-storm rate detection on a server-mode master. Pruned to the trailing
     /// `NTP_STEP_STORM_WINDOW`; its length is the published `ntp_steps_last_hour`.
@@ -823,25 +781,6 @@ where
     /// #68: process start, so "never measured" can be graded against uptime
     /// instead of alarming instantly at boot.
     started_at: Instant,
-
-    // ==========================================================================
-    // ADAPTIVE SPIKE DETECTION
-    // ==========================================================================
-    // Robust outlier detection using MAD (Median Absolute Deviation)
-    // Auto-adapts to each computer's noise profile
-    // ==========================================================================
-    /// Spike filter for rejecting timestamp noise spikes
-    spike_filter: SpikeFilter,
-
-    // ==========================================================================
-    // ADAPTIVE JITTER SMOOTHING
-    // ==========================================================================
-    // Measures jitter (stddev of drift rate) and adjusts EMA smoothing factor.
-    // Low-jitter systems (strih.lan): α=0.3 for responsive tracking
-    // High-jitter systems (stream.lan): α=0.1 for heavy smoothing
-    // ==========================================================================
-    /// Jitter estimator for adaptive EMA alpha
-    jitter_estimator: JitterEstimator,
 
     /// #679 — running per-sample counter gating the throttled drift summary
     /// log line (`should_log_drift_summary`). Increments once per call to
@@ -1027,17 +966,8 @@ where
             applied_freq_ppm: 0.0,
             warmup_start: now,
             warmup_complete: false,
-            // Self-tuning servo state
-            drift_baseline_ppm: 0.0,
-            is_locked: false,
-            lock_stable_count: 0,
-            in_production_mode: false,
-            in_nano_mode: false,
-            nano_sustain_count: 0,
-            nano_exit_count: 0,
-            last_offset_us: None,
-            last_offset_time: None,
-            smoothed_rate_ppm: 0.0,
+            // Self-tuning servo state (dantesync#136: the shared rate servo)
+            rate: RateServo::new(),
             // NTP UTC tracking - enabled on BOTH platforms
             // PTP (Dante) controls frequency only, NTP maintains UTC alignment
             // Dante provides device uptime, NOT UTC - so NTP is needed for real time
@@ -1049,9 +979,6 @@ where
             ntp_pending_step: None,
             last_ntp_step: None,
             ntp_server_checks_since_step: 0,
-            // Accumulated phase error tracking
-            accumulated_phase_error_us: 0.0,
-            last_phase_accumulation_time: None,
             // #91: step-storm detection state (server mode)
             ntp_step_times: VecDeque::new(),
             last_step_storm_warn: None,
@@ -1066,10 +993,6 @@ where
             last_ntp_success: None,
             last_ntp_success_epoch: None,
             started_at: now,
-            // Adaptive spike detection
-            spike_filter: SpikeFilter::new(),
-            // Adaptive jitter smoothing
-            jitter_estimator: JitterEstimator::new(),
             // #679 — throttled drift summary log counter
             drift_log_sample_count: 0,
             // #97 — phase-slew servo; Some only when the flag is set, so None = pre-#97 behaviour
@@ -1273,7 +1196,7 @@ where
         if !ntp_discipline_due(
             self.ntp_server_mode,
             self.ptp_offline,
-            self.is_locked,
+            self.rate.is_locked,
             self.ntp_measurement_is_stale(),
             self.last_ntp_check.elapsed(),
             Duration::from_secs(ntp_interval_secs),
@@ -1355,7 +1278,10 @@ where
                 // (`None`, the default) this whole block is skipped and the step path is
                 // byte-identical to before.
                 if self.phase_slew.is_some() {
-                    if self.is_locked && !self.ptp_offline && !phase_slew::should_step(offset_us) {
+                    if self.rate.is_locked
+                        && !self.ptp_offline
+                        && !phase_slew::should_step(offset_us)
+                    {
                         // Log-surface CONTRACT: the whole camera-box gate ecosystem parses the
                         // exact `[NTP] offset:{:+}us` line for FRESHNESS (dantesync_offset_verdict,
                         // the #326 painter gate, verify-device (d)). The slew replaces the STEP,
@@ -1420,7 +1346,7 @@ where
                 // doc comment. Not locked (still acquiring, or ptp_offline) keeps the
                 // original tight threshold above, unchanged.
                 let step_threshold = if self.ntp_server_mode {
-                    server_step_threshold_us(self.is_locked, self.ptp_offline)
+                    server_step_threshold_us(self.rate.is_locked, self.ptp_offline)
                 } else {
                     self.calculate_ntp_adaptive_threshold()
                 };
@@ -1522,7 +1448,8 @@ where
                     // ntp_server_max_step_us -- see that constant's own doc comment for the full
                     // incident (an escape-valve-forced step at ppm > ~75 could otherwise apply
                     // ~20-26ms unconfirmed, in one step). Not-locked path: completely unchanged.
-                    let locked_now = self.ntp_server_mode && self.is_locked && !self.ptp_offline;
+                    let locked_now =
+                        self.ntp_server_mode && self.rate.is_locked && !self.ptp_offline;
                     let effective_max_step_us = if locked_now {
                         if self.ntp_server_max_step_us > 0 {
                             self.ntp_server_max_step_us
@@ -1745,18 +1672,18 @@ where
         // Set grace period to skip PTP samples for 2s after step
         self.last_ntp_step = Some(Instant::now());
         // Reset drift tracking to avoid false spike from step
-        self.last_offset_us = None;
-        self.last_offset_time = None;
+        self.rate.last_offset_us = None;
+        self.rate.last_offset_time = None;
         // Reset prev timestamps so min_delta filter works correctly after grace period
         self.prev_t1_ns = 0;
         self.prev_t2_ns = 0;
         // Clear spike filter to prevent false positives from step transient
-        self.spike_filter.clear();
+        self.rate.spike_filter.clear();
         // NOTE: jitter_estimator is NOT cleared on NTP step because
         // jitter is a hardware property that persists across steps
         // Reset accumulated phase error - we just aligned to UTC
-        self.accumulated_phase_error_us = 0.0;
-        self.last_phase_accumulation_time = None;
+        self.rate.accumulated_phase_error_us = 0.0;
+        self.rate.last_phase_accumulation_time = None;
     }
 
     /// True while this node is the fleet's NTP server (#68).
@@ -1878,7 +1805,8 @@ where
             // #83 correction: the agreement tolerance is WIDER while genuinely locked (see
             // server_agreement_tolerance_us's own doc comment) -- everything else in this
             // branch is unchanged from #76.
-            let agreement_tol_us = server_agreement_tolerance_us(self.is_locked, self.ptp_offline);
+            let agreement_tol_us =
+                server_agreement_tolerance_us(self.rate.is_locked, self.ptp_offline);
             return match self.ntp_pending_step {
                 Some((cand, n)) => {
                     let same_sign = (cand > 0) == (offset_us > 0);
@@ -1993,7 +1921,7 @@ where
     ///
     /// Returns: interval in seconds (10, 15, or 30 based on accumulated error)
     fn calculate_adaptive_ntp_interval(&self) -> u64 {
-        let abs_error = self.accumulated_phase_error_us.abs();
+        let abs_error = self.rate.accumulated_phase_error_us.abs();
 
         if abs_error > 50.0 {
             10 // Tighter: check every 10s when drifting significantly
@@ -2066,7 +1994,7 @@ where
         // lock an engaged phase lock that has not held [41] for 2 min is not locked
         // (`alarm_sees_lock`; legacy: never set, the rate lock as before).
         let locked = self.alarm_sees_lock();
-        let mode_locked = self.in_nano_mode || locked;
+        let mode_locked = self.rate.in_nano_mode || locked;
         // A grandmaster source is present AND permitted by the (resolved) allowlist.
         let gm_allowed = match self.current_sync_source_ip {
             Some(ip) => self.gm_allowlist.allows(ip),
@@ -2111,7 +2039,7 @@ where
     fn evaluate_clock_alarm(&mut self) {
         // #114 review: once locked, the acquisition grace no longer applies (a
         // later unlock is a real loss and alarms immediately).
-        if self.is_locked {
+        if self.rate.is_locked {
             self.ever_locked = true;
         }
         let health = self.sample_clock_health();
@@ -2300,7 +2228,7 @@ where
                 // Stay in production mode - let servo naturally adjust if needed
                 info!(
                     "Soft reset: keeping freq={:.1}ppm, drift_baseline={:.1}ppm",
-                    self.applied_freq_ppm, self.drift_baseline_ppm
+                    self.applied_freq_ppm, self.rate.drift_baseline_ppm
                 );
             }
             None => {
@@ -2608,42 +2536,14 @@ where
             }
         }
 
-        // Track offset for rate calculation
-        let now = Instant::now();
-        let dt_secs = self
-            .last_offset_time
-            .map(|t| now.duration_since(t).as_secs_f64())
-            .unwrap_or(1.0);
-
-        // dantesync#142: a window without a previous offset (the first after warmup, the first
-        // after any measurement reset: a clock step, a PTP outage) has no rate to measure. It only
-        // records the offset: no spike-filter or smoothing input, no gain-mode change, no
-        // integrator step and no lock count. Before 1.22 it went on as a measured 0 µs/s, which
-        // switched a cold box to PROD for one window and counted toward LOCK (gen3, dstack).
-        let measured = self.last_offset_us.is_some();
-
-        // Calculate instantaneous rate of change (drift rate in ppm)
-        // delta_offset / delta_time gives us the frequency error
-        let raw_rate_ppm = if let Some(prev_offset) = self.last_offset_us {
-            if dt_secs > 0.1 {
-                // Need meaningful time delta
-                let delta_offset = offset_us - prev_offset;
-                // Convert: us/s = ppm.
-                // #97 (review 🔵): the ±500 spike clamp moved to AFTER the decoupling below, so it
-                // bounds the RESIDUAL the PTP servo actually consumes, not the pre-decoupled raw
-                // (which would corrupt the residual if `true_drift + f_phase` ever exceeded 500 —
-                // unreachable on this fleet, but the residual is the correct thing to bound).
-                delta_offset / dt_secs
-            } else {
-                self.smoothed_rate_ppm // Keep previous
-            }
-        } else {
-            0.0
-        };
-
-        // Store for next iteration
-        self.last_offset_us = Some(offset_us);
-        self.last_offset_time = Some(now);
+        // dantesync#136: step 1 of the shared rate servo (`dsync_ptp::rate_servo`): the window's
+        // raw rate `d(offset)/dt` (dantesync#142: none without a previous offset), and the offset
+        // kept for the next window.
+        let crate::rate_servo::OffsetMeasurement {
+            measured,
+            dt_secs,
+            raw_rate_ppm,
+        } = self.rate.measure_offset(offset_us, Instant::now());
 
         // #97: FEED-FORWARD DECOUPLING (the carrier line). Subtract the phase slew that was
         // actually in effect over THIS interval from the raw PTP rate observation, so the PTP
@@ -2689,175 +2589,19 @@ where
         };
 
         let rate_ppm = if measured {
-            self.measure_servo_rate(raw_rate_ppm)
+            self.rate.measure(raw_rate_ppm, Instant::now())
         } else {
             // Intended: the unmeasured window keeps the last smoothed rate for its P term (a
             // reset is a step or an outage, not evidence that the rate went to 0). Once the phase
             // lock is engaged it sets the word anyway.
-            self.smoothed_rate_ppm
+            self.rate.smoothed_rate_ppm
         };
-        let abs_rate = rate_ppm.abs();
         if measured {
-            self.update_servo_modes(rate_ppm);
+            self.rate.update_modes(rate_ppm);
         }
-        self.finish_servo_window(rate_ppm, abs_rate, measured, phase_median_ns, dt_secs);
+        self.finish_servo_window(rate_ppm, measured, phase_median_ns, dt_secs);
         // dantesync#142: while LOCKED, the learned frequency is saved every 10 minutes.
         self.tick_drift_file();
-    }
-
-    /// The rate of a MEASURED window (dantesync#142: never called for a window without a previous
-    /// offset): the spike filter, the smoothed rate and the accumulated phase error.
-    fn measure_servo_rate(&mut self, raw_rate_ppm: f64) -> f64 {
-        // =======================================================================
-        // ADAPTIVE SPIKE DETECTION
-        // =======================================================================
-        // Filter raw rate through MAD-based outlier detector.
-        // Uses current mode for threshold selection (stricter in LOCK/NANO).
-        // Spikes from timestamp jitter are replaced with median of window.
-        // =======================================================================
-        let filter_mode = if self.in_nano_mode {
-            FilterMode::Nano
-        } else if self.is_locked {
-            FilterMode::Lock
-        } else if self.in_production_mode {
-            FilterMode::Prod
-        } else {
-            FilterMode::Acq
-        };
-
-        let filter_result = self.spike_filter.filter(raw_rate_ppm, filter_mode);
-        let filtered_rate_ppm = filter_result.value;
-
-        // Log when spike is detected and rejected
-        if filter_result.is_spike {
-            info!(
-                "[Spike] REJECTED {:+.1}us/s (dev={:.1}, thresh={:.1}, median={:.1})",
-                raw_rate_ppm,
-                filter_result.deviation,
-                filter_result.threshold,
-                filter_result.median
-            );
-        }
-
-        // Log spike statistics periodically (every 100 samples)
-        let (total, rejected, ratio) = self.spike_filter.stats();
-        if total > 0 && total % 100 == 0 {
-            debug!(
-                "[Spike] Stats: {}/{} rejected ({:.1}%), MAD={:.2}",
-                rejected, total, ratio, filter_result.mad
-            );
-        }
-
-        // Smooth rate with exponential moving average (on FILTERED rate)
-        // Use adaptive alpha from jitter estimator:
-        // - Low-jitter systems (strih.lan): α=0.3 for responsive tracking
-        // - High-jitter systems (stream.lan): α=0.1 for heavy smoothing
-        let adaptive_alpha = self.jitter_estimator.add_sample(filtered_rate_ppm);
-        self.smoothed_rate_ppm =
-            self.smoothed_rate_ppm * (1.0 - adaptive_alpha) + filtered_rate_ppm * adaptive_alpha;
-        let rate_ppm = self.smoothed_rate_ppm;
-
-        // Log jitter statistics periodically (every 50 samples when adjusted)
-        if self.jitter_estimator.sample_count() > 0
-            && self.jitter_estimator.sample_count() % 50 == 0
-            && (adaptive_alpha - 0.3).abs() > 0.01
-        {
-            info!(
-                "[Jitter] stddev={:.2}µs/s α={:.2} (samples={})",
-                self.jitter_estimator.last_jitter(),
-                adaptive_alpha,
-                self.jitter_estimator.sample_count()
-            );
-        }
-
-        // =======================================================================
-        // ACCUMULATED PHASE ERROR TRACKING
-        // =======================================================================
-        // Track estimated phase drift between NTP steps for monitoring.
-        // Uses smoothed rate (µs/s) integrated over time to estimate
-        // how much UTC alignment has drifted since last NTP step.
-        // =======================================================================
-        let now_phase = Instant::now();
-        if let Some(last_time) = self.last_phase_accumulation_time {
-            let dt = now_phase.duration_since(last_time).as_secs_f64();
-            // rate_ppm is in µs/s, so rate_ppm * dt gives µs of accumulated error
-            self.accumulated_phase_error_us += rate_ppm * dt;
-        }
-        self.last_phase_accumulation_time = Some(now_phase);
-        rate_ppm
-    }
-
-    /// The servo's gain mode after a MEASURED window (dantesync#142: never moved by a window
-    /// without a previous offset): NANO entry/exit while locked, then ACQ/PROD.
-    fn update_servo_modes(&mut self, rate_ppm: f64) {
-        // THREE-PHASE CONTROL: ACQ → PROD → NANO based on rate stability
-        let abs_rate = rate_ppm.abs();
-
-        // NANO mode transitions (from LOCK state only)
-        if self.is_locked {
-            if abs_rate < NANO_ENTER_RATE_US {
-                self.nano_sustain_count += 1;
-                self.nano_exit_count = 0; // Reset exit counter when drift is good
-                                          // Log progress towards NANO every 10 samples
-                #[allow(clippy::manual_is_multiple_of)]
-                if self.nano_sustain_count % 10 == 0 && !self.in_nano_mode {
-                    debug!(
-                        "[NANO] Sustain count: {}/{}",
-                        self.nano_sustain_count, NANO_SUSTAIN_COUNT
-                    );
-                }
-                if self.nano_sustain_count >= NANO_SUSTAIN_COUNT && !self.in_nano_mode {
-                    self.in_nano_mode = true;
-                    info!(
-                        "[PTP] === NANO MODE === Ultra-precise servo engaged (after {} samples)",
-                        NANO_SUSTAIN_COUNT
-                    );
-                }
-            } else if abs_rate > NANO_EXIT_RATE_US {
-                // Above exit threshold - count towards exit (hysteresis)
-                self.nano_exit_count += 1;
-                if self.in_nano_mode {
-                    if self.nano_exit_count >= NANO_EXIT_COUNT {
-                        self.in_nano_mode = false;
-                        self.nano_sustain_count = 0;
-                        self.nano_exit_count = 0;
-                        info!("[PTP] === LOCK MODE === Exiting NANO (drift {:+.2}us/s for {} samples)",
-                              rate_ppm, NANO_EXIT_COUNT);
-                    } else {
-                        debug!(
-                            "[NANO] Exit warning {}/{}: drift {:+.2}us/s",
-                            self.nano_exit_count, NANO_EXIT_COUNT, rate_ppm
-                        );
-                    }
-                }
-                // Reset sustain count when we exceed exit threshold (even if not in NANO yet)
-                // This ensures we need CONSECUTIVE samples below threshold to enter
-                if self.nano_sustain_count > 0 {
-                    debug!(
-                        "[NANO] Reset entry counter: drift {:+.2}us/s > exit threshold",
-                        abs_rate
-                    );
-                    self.nano_sustain_count = 0;
-                }
-            } else {
-                // Between thresholds (0.5-1.0): reset exit counter but don't change entry counter
-                self.nano_exit_count = 0;
-            }
-        } else {
-            // Not locked - can't be in NANO
-            self.in_nano_mode = false;
-            self.nano_sustain_count = 0;
-            self.nano_exit_count = 0;
-        }
-
-        // ACQ/PROD transitions
-        if abs_rate < 5.0 {
-            // Rate stable within 5µs/s
-            self.in_production_mode = true;
-        } else if abs_rate > 20.0 {
-            // Rate unstable above 20µs/s
-            self.in_production_mode = false;
-        }
     }
 
     /// The frequency word for this window: the gains of the current mode, the integrator and the
@@ -2866,67 +2610,17 @@ where
     fn finish_servo_window(
         &mut self,
         rate_ppm: f64,
-        abs_rate: f64,
         measured: bool,
         phase_median_ns: Option<i64>,
         dt_secs: f64,
     ) {
-        // Select gains based on mode
-        let (p_gain, p_max, i_gain, phase_name) = if self.in_nano_mode {
-            (P_GAIN_NANO, P_MAX_NANO_PPM, I_GAIN_NANO, "NANO")
-        } else if self.in_production_mode {
-            (P_GAIN_PROD, P_MAX_PROD_PPM, 0.05, "PROD")
-        } else {
-            (P_GAIN_ACQ, P_MAX_ACQ_PPM, 0.05, "ACQ")
-        };
-
-        // P-term: responds to rate of change (not absolute offset!)
-        // NANO mode: apply deadband - don't correct tiny rates (noise)
-        let effective_rate = if self.in_nano_mode && abs_rate < NANO_DEADBAND_US {
-            0.0 // Within deadband, no correction needed
-        } else {
-            rate_ppm
-        };
-
-        // Negative rate = clock too slow, need positive adjustment
-        let p_term = (-effective_rate * p_gain).clamp(-p_max, p_max);
-
-        // I-term: Integrate rate error to learn true drift
-        // Uses mode-appropriate gain
-        let i_term = -effective_rate * i_gain;
-        if measured {
-            self.drift_baseline_ppm =
-                (self.drift_baseline_ppm + i_term).clamp(-DRIFT_MAX_PPM, DRIFT_MAX_PPM);
-        }
-
-        // Total correction = drift baseline + P-term
-        let total_correction =
-            (self.drift_baseline_ppm + p_term).clamp(-DRIFT_MAX_PPM, DRIFT_MAX_PPM);
-
-        // Lock state: based on rate stability, not absolute offset
-        let rate_stable = abs_rate < 5.0; // Within 5ppm
-        if !measured {
-            // dantesync#142: no rate, no lock evidence either way.
-        } else if rate_stable {
-            self.lock_stable_count += 1;
-            if self.lock_stable_count >= LOCK_STABLE_COUNT && !self.is_locked {
-                self.is_locked = true;
-                info!(
-                    "[PTP] === LOCKED === Adj:{:+.1}ppm",
-                    self.drift_baseline_ppm
-                );
-            }
-        } else if self.phase_lock_holds_rate_lock() {
-            // dantesync#146: the phase lock owns the word; see `phase_lock_holds_rate_lock`.
-        } else {
-            if self.lock_stable_count > 0 {
-                self.lock_stable_count -= 1; // Gradual unlock
-            }
-            if self.lock_stable_count == 0 && self.is_locked {
-                self.is_locked = false;
-                info!("[PTP] === UNLOCKED === Drift:{:+.1}us/s", rate_ppm);
-            }
-        }
+        // dantesync#136: step 4 of the shared rate servo: the gains of the current mode, the
+        // integrator and the lock count (dantesync#146: held while the phase lock owns the word).
+        let hold_lock = self.phase_lock_holds_rate_lock();
+        let crate::rate_servo::ServoWord {
+            word_ppm: total_correction,
+            phase_name,
+        } = self.rate.word(rate_ppm, measured, hold_lock);
 
         // #117: THE PTP PHASE LOCK owns the frequency word once PTP-locked (controller/date_sync.rs).
         let applied_word = self.phase_lock_word(phase_median_ns, total_correction, dt_secs);
@@ -2965,13 +2659,7 @@ where
         };
         let factor = 1.0 + (f_total / 1_000_000.0);
 
-        let status = if self.in_nano_mode {
-            "NANO"
-        } else if self.is_locked {
-            "LOCK"
-        } else {
-            phase_name
-        };
+        let status = self.rate.status_name(phase_name);
 
         // User-friendly log: drift rate (stability) and frequency adjustment
         // NANO mode shows nanoseconds for sub-µs precision visibility.
@@ -2985,7 +2673,7 @@ where
         );
         self.drift_log_sample_count = self.drift_log_sample_count.wrapping_add(1);
         if log_drift_summary {
-            if self.in_nano_mode {
+            if self.rate.in_nano_mode {
                 let drift_ns = rate_ppm * 1000.0; // Convert µs/s to ns/s
                 info!(
                     "[PTP] {:4}  Drift:{:+7.0}ns/s  Adj:{:+6.2}ppm",
@@ -3110,22 +2798,24 @@ where
             status.is_locked = reported_lock && !stale;
             // dantesync#142: the frequency seed from the drift file.
             self.publish_freq_seed(&mut status);
-            status.smoothed_rate_ppm = self.smoothed_rate_ppm;
+            status.smoothed_rate_ppm = self.rate.smoothed_rate_ppm;
             status.mode = if stale {
                 ptp_liveness::PTP_STALE_MODE.to_string()
-            } else if self.in_nano_mode && (reported_lock || !self.date_sync.enabled) {
+            } else if self.rate.in_nano_mode && (reported_lock || !self.date_sync.enabled) {
                 // Legacy: NANO exactly as before 1.23 (it may outlive the rate lock by a window).
                 "NANO".to_string()
             } else if reported_lock {
                 "LOCK".to_string()
-            } else if self.in_production_mode || (self.date_sync.enabled && self.is_locked) {
+            } else if self.rate.in_production_mode
+                || (self.date_sync.enabled && self.rate.is_locked)
+            {
                 // Under the phase lock a rate lock not yet within the phase bound is PROD.
                 "PROD".to_string()
             } else {
                 "ACQ".to_string()
             };
             // Accumulated phase error since last NTP step
-            status.accumulated_phase_us = self.accumulated_phase_error_us;
+            status.accumulated_phase_us = self.rate.accumulated_phase_error_us;
             // NTP offset/quality are published by record_ntp_success(). Only the
             // AGE is recomputed here (#68), so it keeps ticking up beside the
             // frozen reading it describes instead of staying at whatever it was
@@ -3141,7 +2831,10 @@ where
             status.ntp_deadband_us = if authority_active {
                 Some(self.date_sync.step_bound_ns / 1_000)
             } else if self.ntp_server_mode {
-                Some(server_step_threshold_us(self.is_locked, self.ptp_offline))
+                Some(server_step_threshold_us(
+                    self.rate.is_locked,
+                    self.ptp_offline,
+                ))
             } else {
                 None
             };
@@ -3155,7 +2848,7 @@ where
             status.ntp_step_threshold_us = Some(if authority_active {
                 self.date_sync.step_bound_ns / 1_000
             } else if self.ntp_server_mode {
-                server_step_threshold_us(self.is_locked, self.ptp_offline)
+                server_step_threshold_us(self.rate.is_locked, self.ptp_offline)
             } else {
                 self.calculate_ntp_adaptive_threshold()
             });
@@ -3223,7 +2916,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    // dantesync#136: the rate servo's gains and thresholds (they moved with it).
     use crate::clock::MockSystemClock;
+    use crate::rate_servo::*;
     use crate::traits::{MockNtpSource, MockPtpNetwork};
     use mockall::predicate::*;
 
@@ -3371,7 +3066,7 @@ mod tests {
         );
 
         // Genuinely locked -- the large deadband, through the real wiring.
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
         c.update_shared_status();
         assert_eq!(
@@ -3415,7 +3110,7 @@ mod tests {
                 "in server mode the step threshold equals the deadband"
             );
         }
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
         c.update_shared_status();
         assert_eq!(
@@ -3625,8 +3320,8 @@ mod tests {
         controller.clock_alarm_notifier = Box::new(NoopAlarmNotifier);
 
         // Force the lost condition: not locked, no adopted source, PTP stale.
-        controller.is_locked = false;
-        controller.in_nano_mode = false;
+        controller.rate.is_locked = false;
+        controller.rate.in_nano_mode = false;
         controller.current_sync_source_ip = None;
         controller.last_ptp_packet = Instant::now() - Duration::from_secs(PTP_TIMEOUT_SECS + 5);
 
@@ -3645,7 +3340,7 @@ mod tests {
 
         // Now genuinely locked to an allowed grandmaster (default allowlist is
         // unrestricted, so any adopted source is allowed).
-        controller.is_locked = true;
+        controller.rate.is_locked = true;
         controller.current_sync_source_ip = Some("10.77.9.184".parse().unwrap());
         controller.last_ptp_packet = Instant::now();
 
@@ -4054,10 +3749,13 @@ mod tests {
         let (controller, _) = create_nano_test_controller();
 
         // Verify initial state: not locked, not in NANO
-        assert!(!controller.is_locked, "Should not be locked initially");
-        assert!(!controller.in_nano_mode, "Should not be in NANO initially");
-        assert_eq!(controller.nano_sustain_count, 0);
-        assert_eq!(controller.nano_exit_count, 0);
+        assert!(!controller.rate.is_locked, "Should not be locked initially");
+        assert!(
+            !controller.rate.in_nano_mode,
+            "Should not be in NANO initially"
+        );
+        assert_eq!(controller.rate.nano_sustain_count, 0);
+        assert_eq!(controller.rate.nano_exit_count, 0);
     }
 
     #[test]
@@ -4065,19 +3763,19 @@ mod tests {
         let (mut controller, _) = create_nano_test_controller();
 
         // Simulate locked state
-        controller.is_locked = true;
-        controller.in_production_mode = true;
+        controller.rate.is_locked = true;
+        controller.rate.in_production_mode = true;
         controller.warmup_complete = true;
         controller.clock_settled = true;
 
         // Simulate sustained low drift (< 0.5 µs/s) for NANO_SUSTAIN_COUNT samples
         for i in 0..NANO_SUSTAIN_COUNT {
             // Manually increment nano_sustain_count as the rate calculation would
-            controller.nano_sustain_count += 1;
+            controller.rate.nano_sustain_count += 1;
 
             if i < NANO_SUSTAIN_COUNT - 1 {
                 assert!(
-                    !controller.in_nano_mode,
+                    !controller.rate.in_nano_mode,
                     "Should NOT enter NANO before {} samples, currently at {}",
                     NANO_SUSTAIN_COUNT,
                     i + 1
@@ -4086,11 +3784,11 @@ mod tests {
         }
 
         // After NANO_SUSTAIN_COUNT samples, should enter NANO mode
-        if controller.nano_sustain_count >= NANO_SUSTAIN_COUNT {
-            controller.in_nano_mode = true;
+        if controller.rate.nano_sustain_count >= NANO_SUSTAIN_COUNT {
+            controller.rate.in_nano_mode = true;
         }
         assert!(
-            controller.in_nano_mode,
+            controller.rate.in_nano_mode,
             "Should enter NANO after {} sustained samples",
             NANO_SUSTAIN_COUNT
         );
@@ -4101,25 +3799,25 @@ mod tests {
         let (mut controller, _) = create_nano_test_controller();
 
         // Put controller in NANO mode
-        controller.is_locked = true;
-        controller.in_production_mode = true;
-        controller.in_nano_mode = true;
-        controller.nano_sustain_count = NANO_SUSTAIN_COUNT;
-        controller.nano_exit_count = 0;
+        controller.rate.is_locked = true;
+        controller.rate.in_production_mode = true;
+        controller.rate.in_nano_mode = true;
+        controller.rate.nano_sustain_count = NANO_SUSTAIN_COUNT;
+        controller.rate.nano_exit_count = 0;
 
         // Single spike above threshold - should NOT exit NANO (hysteresis)
-        controller.nano_exit_count = 1;
+        controller.rate.nano_exit_count = 1;
 
         // The hysteresis requires NANO_EXIT_COUNT (5) consecutive samples
         assert!(
-            controller.in_nano_mode,
+            controller.rate.in_nano_mode,
             "Single spike should NOT exit NANO mode (hysteresis requires {} samples)",
             NANO_EXIT_COUNT
         );
         assert!(
-            controller.nano_exit_count < NANO_EXIT_COUNT,
+            controller.rate.nano_exit_count < NANO_EXIT_COUNT,
             "Exit count {} should be less than threshold {}",
-            controller.nano_exit_count,
+            controller.rate.nano_exit_count,
             NANO_EXIT_COUNT
         );
     }
@@ -4129,41 +3827,41 @@ mod tests {
         let (mut controller, _) = create_nano_test_controller();
 
         // Put controller in NANO mode
-        controller.is_locked = true;
-        controller.in_production_mode = true;
-        controller.in_nano_mode = true;
-        controller.nano_sustain_count = NANO_SUSTAIN_COUNT;
-        controller.nano_exit_count = 0;
+        controller.rate.is_locked = true;
+        controller.rate.in_production_mode = true;
+        controller.rate.in_nano_mode = true;
+        controller.rate.nano_sustain_count = NANO_SUSTAIN_COUNT;
+        controller.rate.nano_exit_count = 0;
 
         // Simulate NANO_EXIT_COUNT - 1 consecutive spikes - should NOT exit
         for i in 1..NANO_EXIT_COUNT {
-            controller.nano_exit_count = i;
+            controller.rate.nano_exit_count = i;
             assert!(
-                controller.in_nano_mode,
+                controller.rate.in_nano_mode,
                 "Should NOT exit NANO with only {} spikes (need {})",
                 i, NANO_EXIT_COUNT
             );
         }
 
         // Simulate the NANO_EXIT_COUNT-th spike - NOW should exit
-        controller.nano_exit_count = NANO_EXIT_COUNT;
-        if controller.nano_exit_count >= NANO_EXIT_COUNT {
-            controller.in_nano_mode = false;
-            controller.nano_sustain_count = 0;
-            controller.nano_exit_count = 0;
+        controller.rate.nano_exit_count = NANO_EXIT_COUNT;
+        if controller.rate.nano_exit_count >= NANO_EXIT_COUNT {
+            controller.rate.in_nano_mode = false;
+            controller.rate.nano_sustain_count = 0;
+            controller.rate.nano_exit_count = 0;
         }
 
         assert!(
-            !controller.in_nano_mode,
+            !controller.rate.in_nano_mode,
             "Should exit NANO after {} consecutive spikes",
             NANO_EXIT_COUNT
         );
         assert_eq!(
-            controller.nano_sustain_count, 0,
+            controller.rate.nano_sustain_count, 0,
             "Sustain count should reset on NANO exit"
         );
         assert_eq!(
-            controller.nano_exit_count, 0,
+            controller.rate.nano_exit_count, 0,
             "Exit count should reset on NANO exit"
         );
     }
@@ -4173,20 +3871,20 @@ mod tests {
         let (mut controller, _) = create_nano_test_controller();
 
         // Put controller in NANO mode with some exit counter
-        controller.is_locked = true;
-        controller.in_production_mode = true;
-        controller.in_nano_mode = true;
-        controller.nano_sustain_count = NANO_SUSTAIN_COUNT;
-        controller.nano_exit_count = 3; // Some spikes, but not enough to exit
+        controller.rate.is_locked = true;
+        controller.rate.in_production_mode = true;
+        controller.rate.in_nano_mode = true;
+        controller.rate.nano_sustain_count = NANO_SUSTAIN_COUNT;
+        controller.rate.nano_exit_count = 3; // Some spikes, but not enough to exit
 
         // Good sample (low drift) should reset exit counter
         // Simulating what happens when abs_rate < NANO_ENTER_RATE_US
-        controller.nano_exit_count = 0;
-        controller.nano_sustain_count += 1;
+        controller.rate.nano_exit_count = 0;
+        controller.rate.nano_sustain_count += 1;
 
-        assert!(controller.in_nano_mode, "Should remain in NANO mode");
+        assert!(controller.rate.in_nano_mode, "Should remain in NANO mode");
         assert_eq!(
-            controller.nano_exit_count, 0,
+            controller.rate.nano_exit_count, 0,
             "Exit counter should reset on good sample"
         );
     }
@@ -4217,31 +3915,31 @@ mod tests {
         let (mut controller, _) = create_nano_test_controller();
 
         // Put controller in NANO mode
-        controller.is_locked = true;
-        controller.in_nano_mode = true;
-        controller.nano_sustain_count = NANO_SUSTAIN_COUNT;
-        controller.nano_exit_count = 2;
+        controller.rate.is_locked = true;
+        controller.rate.in_nano_mode = true;
+        controller.rate.nano_sustain_count = NANO_SUSTAIN_COUNT;
+        controller.rate.nano_exit_count = 2;
 
         // Simulate loss of lock
-        controller.is_locked = false;
+        controller.rate.is_locked = false;
 
         // The controller logic resets NANO state when not locked
-        if !controller.is_locked {
-            controller.in_nano_mode = false;
-            controller.nano_sustain_count = 0;
-            controller.nano_exit_count = 0;
+        if !controller.rate.is_locked {
+            controller.rate.in_nano_mode = false;
+            controller.rate.nano_sustain_count = 0;
+            controller.rate.nano_exit_count = 0;
         }
 
         assert!(
-            !controller.in_nano_mode,
+            !controller.rate.in_nano_mode,
             "Should exit NANO when lock is lost"
         );
         assert_eq!(
-            controller.nano_sustain_count, 0,
+            controller.rate.nano_sustain_count, 0,
             "Sustain count should reset when lock is lost"
         );
         assert_eq!(
-            controller.nano_exit_count, 0,
+            controller.rate.nano_exit_count, 0,
             "Exit count should reset when lock is lost"
         );
     }
@@ -4279,12 +3977,12 @@ mod tests {
             PtpController::new(mock_clock, mock_net, mock_ntp, status.clone(), config);
 
         // Set up controller in LOCK state with learned frequency
-        controller.is_locked = true;
-        controller.in_production_mode = true;
+        controller.rate.is_locked = true;
+        controller.rate.in_production_mode = true;
         controller.warmup_complete = true;
         controller.clock_settled = true;
         controller.applied_freq_ppm = 35.0;
-        controller.drift_baseline_ppm = 33.5;
+        controller.rate.drift_baseline_ppm = 33.5;
         controller.current_sync_source = Some([0x00, 0x1D, 0xC1, 0x51, 0xD0, 0xD9]);
         controller.current_gm_uuid = Some([0x00, 0x00, 0x00, 0x00, 0x01, 0x00]);
 
@@ -4332,7 +4030,7 @@ mod tests {
         let (mut controller, _) = create_locked_controller();
 
         let old_freq = controller.applied_freq_ppm;
-        let old_drift = controller.drift_baseline_ppm;
+        let old_drift = controller.rate.drift_baseline_ppm;
 
         // Simulate sync source change (soft reset logic)
         let new_source = [0x00, 0x1D, 0xC1, 0x1A, 0x44, 0x30];
@@ -4350,10 +4048,10 @@ mod tests {
             controller.applied_freq_ppm
         );
         assert!(
-            (controller.drift_baseline_ppm - old_drift).abs() < 0.01,
+            (controller.rate.drift_baseline_ppm - old_drift).abs() < 0.01,
             "Soft reset should preserve drift_baseline_ppm: expected {}, got {}",
             old_drift,
-            controller.drift_baseline_ppm
+            controller.rate.drift_baseline_ppm
         );
     }
 
@@ -4400,9 +4098,12 @@ mod tests {
         let (mut controller, _) = create_locked_controller();
 
         // Verify LOCK state before
-        assert!(controller.is_locked, "Should be locked before soft reset");
         assert!(
-            controller.in_production_mode,
+            controller.rate.is_locked,
+            "Should be locked before soft reset"
+        );
+        assert!(
+            controller.rate.in_production_mode,
             "Should be in production mode before soft reset"
         );
 
@@ -4416,11 +4117,11 @@ mod tests {
         // Key: is_locked and in_production_mode are NOT reset
 
         assert!(
-            controller.is_locked,
+            controller.rate.is_locked,
             "Soft reset should NOT change lock state"
         );
         assert!(
-            controller.in_production_mode,
+            controller.rate.in_production_mode,
             "Soft reset should NOT change production mode"
         );
     }
@@ -4430,8 +4131,8 @@ mod tests {
         let (mut controller, _) = create_locked_controller();
 
         // Put in NANO mode
-        controller.in_nano_mode = true;
-        controller.nano_sustain_count = NANO_SUSTAIN_COUNT;
+        controller.rate.in_nano_mode = true;
+        controller.rate.nano_sustain_count = NANO_SUSTAIN_COUNT;
 
         // Simulate soft reset
         let new_source = [0x00, 0x1D, 0xC1, 0x1A, 0x44, 0x30];
@@ -4443,11 +4144,11 @@ mod tests {
         // Soft reset does NOT touch nano mode state
 
         assert!(
-            controller.in_nano_mode,
+            controller.rate.in_nano_mode,
             "Soft reset should NOT exit NANO mode"
         );
         assert_eq!(
-            controller.nano_sustain_count, NANO_SUSTAIN_COUNT,
+            controller.rate.nano_sustain_count, NANO_SUSTAIN_COUNT,
             "Soft reset should NOT reset nano_sustain_count"
         );
     }
@@ -4514,9 +4215,9 @@ mod tests {
 
         // Hard reset (what reset_filter does): clears frequency
         hard_controller.applied_freq_ppm = 0.0;
-        hard_controller.drift_baseline_ppm = 0.0;
-        hard_controller.is_locked = false;
-        hard_controller.in_production_mode = false;
+        hard_controller.rate.drift_baseline_ppm = 0.0;
+        hard_controller.rate.is_locked = false;
+        hard_controller.rate.in_production_mode = false;
 
         assert!(
             (soft_controller.applied_freq_ppm - original_freq).abs() < 0.01,
@@ -4526,8 +4227,8 @@ mod tests {
             (hard_controller.applied_freq_ppm - 0.0).abs() < 0.01,
             "Hard reset clears frequency to 0"
         );
-        assert!(soft_controller.is_locked, "Soft reset stays locked");
-        assert!(!hard_controller.is_locked, "Hard reset loses lock");
+        assert!(soft_controller.rate.is_locked, "Soft reset stays locked");
+        assert!(!hard_controller.rate.is_locked, "Hard reset loses lock");
     }
 
     // ========================================================================
@@ -4976,7 +4677,7 @@ mod tests {
     ) {
         let (mut c, _) = create_nano_test_controller();
         c.configure_ntp_server_mode(100_000);
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
         let readings = [1467, 691, 1668, 1801, 570, 1622, 1157];
         let mut step_count = 0;
@@ -5142,7 +4843,7 @@ mod tests {
         config.filters.warmup_secs = 0.0;
         let mut c = PtpController::new(mock_clock, MockPtpNetwork::new(), mock_ntp, status, config);
         c.configure_ntp_server_mode(100_000);
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
 
         let accrual_us = ppm * NTP_SERVER_CHECK_INTERVAL_SECS as i64;
@@ -5257,7 +4958,7 @@ mod tests {
         config.filters.warmup_secs = 0.0;
         let mut c = PtpController::new(mock_clock, MockPtpNetwork::new(), mock_ntp, status, config);
         c.configure_ntp_server_mode(100_000);
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
 
         const ACCRUAL_US: i64 = 38 * NTP_SERVER_CHECK_INTERVAL_SECS as i64; // 38ppm -- today's live-measured strih rate (issue #83 evidence)
@@ -5358,7 +5059,7 @@ mod tests {
         config.filters.warmup_secs = 0.0;
         let mut c = PtpController::new(mock_clock, MockPtpNetwork::new(), mock_ntp, status, config);
         c.configure_ntp_server_mode(100_000);
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
 
         const ACCRUAL_US: i64 = 66 * NTP_SERVER_CHECK_INTERVAL_SECS as i64; // 66ppm -- top of the live-measured range (issue #83 evidence)
@@ -5452,7 +5153,7 @@ mod tests {
         config.filters.warmup_secs = 0.0;
         let mut c = PtpController::new(mock_clock, MockPtpNetwork::new(), mock_ntp, status, config);
         c.configure_ntp_server_mode(100_000);
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
 
         const ACCRUAL_US: i64 = 80 * NTP_SERVER_CHECK_INTERVAL_SECS as i64; // 80ppm -- past the ~75ppm tolerance breakeven (issue #83, 2nd review round)
@@ -5566,7 +5267,7 @@ mod tests {
         c.configure_ntp_server_mode(100_000);
         // The degraded regime: PTP grandmaster unreachable -> not genuinely
         // locked -> the tight 200us threshold (NTP is the only UTC reference).
-        c.is_locked = false;
+        c.rate.is_locked = false;
         c.ptp_offline = true;
 
         // ~30ppm of real oscillator error per 10s check (300us): above the
@@ -5663,7 +5364,7 @@ mod tests {
         // Genuinely PTP-locked -> the #94 1000us deadband, chasing only the GM's
         // own real 66ppm rate error (the worst ever measured): the healthy ceiling,
         // which #94 raises to ~120/h (each step now <=2500us, so more of them).
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
 
         const ACCRUAL_US: i64 = 66 * NTP_SERVER_CHECK_INTERVAL_SECS as i64;
@@ -5703,9 +5404,9 @@ mod tests {
     fn not_locked_master_keeps_the_pre_83_tight_tracking_83() {
         let (mut c, _) = create_nano_test_controller();
         c.configure_ntp_server_mode(100_000);
-        assert!(!c.is_locked, "default state: not yet locked");
+        assert!(!c.rate.is_locked, "default state: not yet locked");
         assert_eq!(
-            server_step_threshold_us(c.is_locked, c.ptp_offline),
+            server_step_threshold_us(c.rate.is_locked, c.ptp_offline),
             NTP_SERVER_STEP_THRESHOLD_US,
             "not-locked must keep using the routine tight threshold, unaffected by #83"
         );
@@ -5774,7 +5475,7 @@ mod tests {
         config.filters.warmup_secs = 0.0;
         let mut c = PtpController::new(mock_clock_no_step, mock_net, mock_ntp, status, config);
         c.configure_ntp_server_mode(100_000);
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
 
         for _ in 0..(UNDER_THRESHOLD_CHECKS + 2) {
@@ -6321,7 +6022,7 @@ mod tests {
     fn not_locked_agreement_gate_still_rejects_the_76_wild_jump_after_the_83_correction() {
         let (mut c, _) = create_nano_test_controller();
         c.configure_ntp_server_mode(100_000);
-        assert!(!c.is_locked, "default state: not yet locked");
+        assert!(!c.rate.is_locked, "default state: not yet locked");
         assert!(
             !c.ntp_step_gate(2_500, 1_000),
             "first over-threshold sample is only a candidate"
@@ -6376,7 +6077,7 @@ mod tests {
         config.filters.warmup_secs = 0.0;
         let mut c = PtpController::new(mock_clock, MockPtpNetwork::new(), mock_ntp, status, config);
         c.configure_ntp_server_mode(1_000); // deliberately small -- forces a genuine clamp
-        assert!(!c.is_locked, "default state: not yet locked");
+        assert!(!c.rate.is_locked, "default state: not yet locked");
 
         c.last_ntp_check = Instant::now() - Duration::from_secs(60);
         c.check_ntp_utc_tracking(); // forms candidate, no step yet
@@ -6456,7 +6157,7 @@ mod tests {
 
         c.configure_ntp_server_mode(100_000);
         assert!(
-            !c.is_locked,
+            !c.rate.is_locked,
             "the master is deliberately NOT PTP-locked here"
         );
 
@@ -6553,7 +6254,7 @@ mod tests {
         config.filters.warmup_secs = 0.0;
         let mut c = PtpController::new(mock_clock, mock_net, mock_ntp, status.clone(), config);
 
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.last_ntp_check = Instant::now() - Duration::from_secs(60);
         c.check_ntp_utc_tracking();
         c.tick_status();
@@ -6920,7 +6621,7 @@ mod tests {
             status.clone(),
             slew_config(),
         );
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
 
         c.last_ntp_check = Instant::now() - Duration::from_secs(60);
@@ -6960,7 +6661,7 @@ mod tests {
             status,
             slew_config(),
         );
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
 
         // Two agreeing over-boundary samples: candidate then step (the #50 agreement gate).
@@ -7002,7 +6703,7 @@ mod tests {
             status,
             slew_config(),
         );
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = false;
 
         // Prime the servo's integrator toward a learned DC (several acquisition updates).
@@ -7060,7 +6761,7 @@ mod tests {
             status,
             slew_config(),
         );
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = true;
 
         {
@@ -7116,7 +6817,7 @@ mod tests {
         // is_locked=true so the slew gate's `!ptp_offline` clause is what actually rejects the
         // slew (review 🔵: with is_locked=false the `is_locked` clause short-circuits first and the
         // test would pass even if the ptp_offline guard were removed).
-        c.is_locked = true;
+        c.rate.is_locked = true;
         c.ptp_offline = true;
 
         c.last_ntp_check = Instant::now() - Duration::from_secs(60);
@@ -7147,14 +6848,14 @@ mod tests {
             Arc::new(RwLock::new(SyncStatus::default())),
             slew_config(),
         );
-        c.is_locked = true;
-        c.drift_baseline_ppm = 30.0;
+        c.rate.is_locked = true;
+        c.rate.drift_baseline_ppm = 30.0;
         c.pending_f_phase_ppm = 50.0;
         c.last_applied_f_phase_ppm = 50.0;
         // Feed a rate equal to the applied slew ⇒ decoupling drives the PTP-observed rate to ~0,
         // so f_ptp stays at the 30ppm baseline.
-        c.last_offset_us = Some(0.0);
-        c.last_offset_time = Some(Instant::now() - Duration::from_secs(1));
+        c.rate.last_offset_us = Some(0.0);
+        c.rate.last_offset_time = Some(Instant::now() - Duration::from_secs(1));
         c.apply_self_tuning_servo(50.0);
 
         let ppm = (*captured.lock().expect("cap lock") - 1.0) * 1_000_000.0;
@@ -7193,7 +6894,7 @@ mod tests {
             config,
         );
         assert!(c.phase_slew.is_none());
-        c.drift_baseline_ppm = 30.0;
+        c.rate.drift_baseline_ppm = 30.0;
         c.pending_f_phase_ppm = 999.0; // must be ignored when disabled
         c.apply_self_tuning_servo(0.0); // rate 0 ⇒ f_ptp = baseline
 
@@ -7230,18 +6931,18 @@ mod tests {
                 Arc::new(RwLock::new(SyncStatus::default())),
                 config,
             );
-            c.is_locked = true;
+            c.rate.is_locked = true;
             if decoupled {
                 c.pending_f_phase_ppm = 50.0;
                 c.last_applied_f_phase_ppm = 50.0;
             }
             let mut offset = 0.0_f64;
             for _ in 0..30 {
-                c.last_offset_time = Some(Instant::now() - Duration::from_secs(1));
+                c.rate.last_offset_time = Some(Instant::now() - Duration::from_secs(1));
                 c.apply_self_tuning_servo(offset);
                 offset += 50.0; // +50us per ~1s ⇒ raw observed rate ≈ +50ppm
             }
-            c.smoothed_rate_ppm
+            c.rate.smoothed_rate_ppm
         }
         let decoupled = smoothed_after(true).abs();
         let raw = smoothed_after(false).abs();

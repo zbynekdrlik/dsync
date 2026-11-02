@@ -60,7 +60,7 @@ fn a_usable_drift_file_seeds_the_servo_and_the_clock_before_the_warmup_142() {
     let (mut c, words) = controller();
     c.open_drift_file(&path);
 
-    assert_eq!(c.drift_baseline_ppm, 35.25);
+    assert_eq!(c.rate.drift_baseline_ppm, 35.25);
     assert_eq!(c.applied_freq_ppm, 35.25);
     let written = words.lock().expect("words").clone();
     assert_eq!(written.len(), 1, "written to the clock at once");
@@ -70,8 +70,8 @@ fn a_usable_drift_file_seeds_the_servo_and_the_clock_before_the_warmup_142() {
     assert_eq!(s.freq_seed_ppm, Some(35.25));
     assert_eq!(s.freq_seed_source.as_deref(), Some("file"));
     // LOCK is not touched by a seed.
-    assert!(!c.is_locked);
-    assert_eq!(c.lock_stable_count, 0);
+    assert!(!c.rate.is_locked);
+    assert_eq!(c.rate.lock_stable_count, 0);
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn every_unusable_file_falls_back_to_the_cold_learn_and_says_why_142() {
         prepare(&path);
         let (mut c, words) = controller();
         c.open_drift_file(&path);
-        assert_eq!(c.drift_baseline_ppm, 0.0, "{name}: learn from 0");
+        assert_eq!(c.rate.drift_baseline_ppm, 0.0, "{name}: learn from 0");
         assert!(
             words.lock().expect("words").is_empty(),
             "{name}: no seed written"
@@ -127,7 +127,7 @@ fn the_drift_file_is_saved_only_while_locked_every_ten_minutes_142() {
     let path = dir.path().join("drift.json");
     let (mut c, _) = controller();
     c.open_drift_file(&path);
-    c.drift_baseline_ppm = 35.5;
+    c.rate.drift_baseline_ppm = 35.5;
 
     // Not locked: never saved, no timer.
     c.tick_drift_file();
@@ -136,7 +136,7 @@ fn the_drift_file_is_saved_only_while_locked_every_ten_minutes_142() {
 
     // dantesync#146: the rate servo's lock alone is not "locked" — [41] (the phase within the
     // bound) is; an engaged phase lock holds the rate lock while it still slews.
-    c.is_locked = true;
+    c.rate.is_locked = true;
     c.tick_drift_file();
     assert!(
         c.freq_seed.next_save.is_none(),
@@ -158,12 +158,12 @@ fn the_drift_file_is_saved_only_while_locked_every_ten_minutes_142() {
     assert!(c.freq_seed.next_save.expect("re-armed") > Instant::now());
 
     // Lock lost (or PTP offline): the timer stops, nothing more is written.
-    c.drift_baseline_ppm = 99.0;
+    c.rate.drift_baseline_ppm = 99.0;
     c.ptp_offline = true;
     c.tick_drift_file();
     assert!(c.freq_seed.next_save.is_none());
     c.ptp_offline = false;
-    c.is_locked = false;
+    c.rate.is_locked = false;
     c.clear_reported_lock();
     c.tick_drift_file();
     assert_eq!(
@@ -180,11 +180,11 @@ fn shutdown_saves_only_a_locked_frequency_142() {
     let path = dir.path().join("drift.json");
     let (mut c, _) = controller();
     c.open_drift_file(&path);
-    c.drift_baseline_ppm = 12.0;
+    c.rate.drift_baseline_ppm = 12.0;
     c.save_drift_file_at_shutdown();
     assert!(!path.exists(), "not locked: nothing saved");
 
-    c.is_locked = true;
+    c.rate.is_locked = true;
     c.save_drift_file_at_shutdown();
     assert!(
         !path.exists(),
@@ -206,7 +206,7 @@ fn shutdown_saves_only_a_locked_frequency_142() {
 #[test]
 fn a_controller_without_a_drift_file_never_writes_one_142() {
     let (mut c, _) = controller();
-    c.is_locked = true;
+    c.rate.is_locked = true;
     c.lock_reported_for_test();
     c.tick_drift_file();
     c.save_drift_file_at_shutdown();
@@ -216,8 +216,8 @@ fn a_controller_without_a_drift_file_never_writes_one_142() {
 
 /// One window 0.5 s after the previous one.
 fn window(c: &mut Ctl, offset_us: f64) {
-    if c.last_offset_us.is_some() {
-        c.last_offset_time = Some(Instant::now() - Duration::from_millis(500));
+    if c.rate.last_offset_us.is_some() {
+        c.rate.last_offset_time = Some(Instant::now() - Duration::from_millis(500));
     }
     c.apply_self_tuning_servo(offset_us);
 }
@@ -239,21 +239,21 @@ fn a_seed_the_first_measured_windows_disagree_with_is_dropped_before_any_lock_14
         offset += (50.0 + (word - 85.0)) * 0.5;
         if n + 1 == drift_file::SEED_JUDGE_WINDOWS {
             // Whatever the lock count reached against the seed, a rejection starts it over.
-            c.lock_stable_count = 3;
+            c.rate.lock_stable_count = 3;
         }
         window(&mut c, offset);
     }
     assert!(c.freq_seed.judge.is_none(), "judged");
     let source = status(&c).freq_seed_source.expect("source");
     assert!(source.starts_with("rejected: "), "{source}");
-    assert_eq!(c.lock_stable_count, 0, "the lock count starts over");
+    assert_eq!(c.rate.lock_stable_count, 0, "the lock count starts over");
     assert_eq!(
-        c.spike_filter.window_len(),
+        c.rate.spike_filter.window_len(),
         1,
         "the spike filter starts over (only the rebased window in it)"
     );
     assert_eq!(
-        c.jitter_estimator.sample_count(),
+        c.rate.jitter_estimator.sample_count(),
         1,
         "and the jitter estimate (only the rebased window)"
     );
@@ -264,15 +264,23 @@ fn a_seed_the_first_measured_windows_disagree_with_is_dropped_before_any_lock_14
         "the rejected seed stays visible"
     );
     assert!(
-        c.drift_baseline_ppm.abs() < 10.0,
+        c.rate.drift_baseline_ppm.abs() < 10.0,
         "back to the cold learn (one window's integrator step): {}",
-        c.drift_baseline_ppm
+        c.rate.drift_baseline_ppm
     );
     // Rebased to a word of 0: the oscillator needs +35 (85 − 50), so the integrator's first step
     // from 0 goes up, and the smoothed rate reads the oscillator against 0 (about −35).
-    assert!(c.drift_baseline_ppm > 0.0, "{}", c.drift_baseline_ppm);
-    assert!(c.smoothed_rate_ppm < -20.0, "{}", c.smoothed_rate_ppm);
-    assert!(!c.is_locked);
+    assert!(
+        c.rate.drift_baseline_ppm > 0.0,
+        "{}",
+        c.rate.drift_baseline_ppm
+    );
+    assert!(
+        c.rate.smoothed_rate_ppm < -20.0,
+        "{}",
+        c.rate.smoothed_rate_ppm
+    );
+    assert!(!c.rate.is_locked);
 }
 
 #[test]
@@ -290,7 +298,7 @@ fn a_seed_the_first_measured_windows_agree_with_is_kept_142() {
     }
     assert!(c.freq_seed.judge.is_none(), "judged");
     assert_eq!(status(&c).freq_seed_source.as_deref(), Some("file"));
-    assert!((c.drift_baseline_ppm - 35.0).abs() < 1.0);
+    assert!((c.rate.drift_baseline_ppm - 35.0).abs() < 1.0);
 }
 
 #[test]
@@ -323,9 +331,9 @@ fn the_judge_charges_each_window_half_to_the_previous_word_and_half_to_the_last_
 fn a_failing_save_warns_once_and_recovers_142() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (mut c, _) = controller();
-    c.is_locked = true;
+    c.rate.is_locked = true;
     c.lock_reported_for_test();
-    c.drift_baseline_ppm = 20.0;
+    c.rate.drift_baseline_ppm = 20.0;
     // A directory that does not exist (a read-only root answers EROFS the same way: no file).
     let missing = dir.path().join("no-such-dir").join("drift.json");
     c.open_drift_file(&missing);

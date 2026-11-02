@@ -26,13 +26,13 @@ impl DateSync {
     /// The phase lock wrote `word`: remember its deviation from the learned frequency (0 when the
     /// rate servo's word applies).
     pub(super) fn note_word_deviation(&mut self, engaged_word: Option<f64>) {
-        let deviation = engaged_word.map_or(0.0, |w| w - self.core.integrator_ppm());
-        self.word_deviation_ppm = [self.word_deviation_ppm[1], deviation];
+        let integrator = self.core.integrator_ppm();
+        self.word_deviation.note(engaged_word, integrator);
     }
 
     /// The deviation in force over the last measured span: the average of the last two words'.
     pub(super) fn span_deviation_ppm(&self) -> f64 {
-        (self.word_deviation_ppm[0] + self.word_deviation_ppm[1]) / 2.0
+        self.word_deviation.span_ppm()
     }
 }
 
@@ -70,7 +70,7 @@ where
         if self.date_sync.enabled {
             self.date_sync.lock_gate.locked()
         } else {
-            self.is_locked
+            self.rate.is_locked
         }
     }
 
@@ -89,7 +89,7 @@ where
     /// lock is held while engaged, so it alone would never say a broken reference is lost: an
     /// engaged phase lock that has not held [41] for [`PHASE_UNSAFE_ALARM_AFTER`] is not locked.
     pub(in crate::controller) fn alarm_sees_lock(&self) -> bool {
-        self.is_locked
+        self.rate.is_locked
             && self
                 .date_sync
                 .unsafe_since
@@ -112,7 +112,7 @@ where
         if !self.date_sync.core.engaged() {
             self.date_sync
                 .core
-                .on_window(0, true, self.drift_baseline_ppm, 0.5);
+                .on_window(0, true, self.rate.drift_baseline_ppm, 0.5);
         }
         for _ in 0..crate::lock_gate::LOCK_WINDOWS {
             self.judge_reported_lock(Some(0));
@@ -121,7 +121,7 @@ where
 
     /// The phase lock disengaged outside a window (the PTP-offline edge): [41] clears at once.
     pub(in crate::controller) fn clear_reported_lock(&mut self) {
-        self.date_sync.word_deviation_ppm = [0.0; 2];
+        self.date_sync.word_deviation.clear();
         self.date_sync.unsafe_since = None;
         let event = self.date_sync.lock_gate.reset();
         log_gate_event(event);

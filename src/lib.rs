@@ -22,6 +22,7 @@ pub mod pinned_wait;
 pub use dsync_ptp::ptp;
 pub use dsync_ptp::ptp_phase_lock;
 pub use dsync_ptp::ptp_rejoin;
+pub use dsync_ptp::rate_servo;
 pub use dsync_ptp::spike_filter;
 pub mod status;
 pub mod sync_loop;

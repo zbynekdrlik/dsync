@@ -222,8 +222,8 @@ fn a_failed_rejoin_is_published_and_retried_on_the_schedule_never_fatal_112() {
 fn while_ptp_is_stale_status_is_not_locked_and_lock_returns_with_the_packets_112() {
     // The dev1 / imag / strih-lx case: locked, then no PTP packet — /status kept LOCK for days.
     let (mut c, st) = controller(MockPtpNetwork::new());
-    c.is_locked = true;
-    c.in_nano_mode = true;
+    c.rate.is_locked = true;
+    c.rate.in_nano_mode = true;
     c.clock_settled = true;
     // dantesync#146: the reported lock is the phase lock's, within the bound (its offline edge
     // then holds the learned frequency: one clock write).
