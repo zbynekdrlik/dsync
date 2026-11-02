@@ -43,16 +43,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      contents: read
     steps:
       - name: Dispatch gate.yml on dev unless its head already passed
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           head=$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)
-          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/gate.yml/runs?head_sha=$head&status=success&per_page=100" \
-            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")] | length')
-          if [ "$passed" -gt 0 ]; then
-            echo "dev head $head already passed the gate ($passed runs): nothing to do"
+          # Passed, or still queued / running (a late push): either way no second run on the rig.
+          covered=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/gate.yml/runs?head_sha=$head&per_page=100" \
+            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")
+                   | select(.status != "completed" or .conclusion == "success")] | length')
+          if [ "$covered" -gt 0 ]; then
+            echo "dev head $head already passed or is being gated ($covered runs): nothing to do"
             exit 0
           fi
           gh workflow run gate.yml --repo "$GITHUB_REPOSITORY" --ref dev
@@ -164,6 +167,7 @@ jobs:
           mkdir -p gate-logs
           (
             set +e
+            next=$(date +%s)
             while :; do
               ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
               if body=$(curl -fsS -m 5 http://127.0.0.1:8898/status 2>/dev/null); then
@@ -171,7 +175,10 @@ jobs:
               else
                 printf '{"ts":"%s","status":null}\n' "$ts"
               fi
-              sleep 10
+              # A fixed 10 s cadence: a slow curl does not stretch the interval.
+              next=$(( next + 10 ))
+              wait_s=$(( next - $(date +%s) ))
+              [ "$wait_s" -gt 0 ] && sleep "$wait_s"
             done
           ) > gate-logs/status.jsonl &
           sampler=$!
@@ -194,9 +201,9 @@ jobs:
             echo "::error title=Status sampler died::the /status sampler stopped before the measurement ended"
             exit 1
           fi
-          samples=$(wc -l < gate-logs/status.jsonl)
+          samples=$(grep -vc '"status":null}$' gate-logs/status.jsonl || true)
           if [ "$samples" -lt $(( GATE_SECONDS * 9 / 100 )) ]; then
-            echo "::error title=Status samples missing::$samples /status samples, need at least $(( GATE_SECONDS * 9 / 100 ))"
+            echo "::error title=Status samples missing::$samples answered /status samples, need at least $(( GATE_SECONDS * 9 / 100 ))"
             exit 1
           fi
 
@@ -214,7 +221,20 @@ jobs:
       # production.
       - name: Restore previous dantesync
         if: always() && steps.install.outputs.attempted == '1' && steps.install.outputs.lease_refused != '1'
-        run: sudo -n "$GATE_INSTALL" --restore
+        run: |
+          set +e
+          sudo -n "$GATE_INSTALL" --restore
+          rc=$?
+          set -e
+          if [ "$rc" -eq 3 ]; then
+            echo "::error title=Restore refused, candidate still installed::dsync-gate-install --restore exit 3: a production took the rig lease during the gate. The gate candidate is STILL the running dantesync on companion. Do NOT re-run this job (it would install again). When the lease is free, ask airuleset (the runner's owner) to run dsync-gate-install --restore on companion."
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=Restore failed, candidate may still be installed::dsync-gate-install --restore exit $rc"
+            exit 1
+          fi
+          echo "previous dantesync restored"
 
   verdict:
     name: Verdict

@@ -116,6 +116,11 @@ to be free. Then gate the tree again:
 `stable` toolchain of that day. The gate run's step summary records the candidate's version,
 `rustc -V`, commit, tree and sha256, so a release can be compared with what was gated.
 
+**Restore refused (exit 3 on `--restore`).** A production took the lease during the hour, so the
+candidate is still the running `dantesync` on companion. The job fails with an error that says so.
+Do not re-run the job, because that installs again. Ask airuleset (the runner's owner) to run
+`dsync-gate-install --restore` once the lease is free.
+
 ## Known side effects (camera-box conditions)
 
 - Companion (the application) is never restarted, only `dantesync` through the helper.
