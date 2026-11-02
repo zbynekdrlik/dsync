@@ -681,6 +681,15 @@ reading is wrong by the whole correction, and that same epoch is served as the N
 Timestamp, where a node running ahead of UTC would advertise a reftime in the FUTURE (RFC 5905 has
 conforming clients discard such a reply outright).
 
+One exception, and it is not a wall time either: the rate servo's window SPAN is the grandmaster's
+time (`rate_servo::GmNs`, the window's t1), since 1.25. The offset it differentiates is in PTP
+time, so dividing it by `Instant::now()` at processing mixed two time bases. In the e2e sims every
+span was under 0.1 s of wall time (no measurement at all), and a 110 ms pause during convergence
+divided a simulated offset by a real span: the word hit the ±500 ppm clamp
+(`test_auto_adaptive_drift_rates`, AvgRate 249.95 µs/s, reproduced by injecting a sleep every 97th
+iteration). A hand-driven test sets the span with `servo_window_after(offset_us, span_s)`, never
+`last_offset_time = Instant::now() - d`.
+
 ## `/status` is a cross-repo contract — additive only
 
 camera-box's dsync gate and `src/bin/tray.rs`'s own duplicate struct both parse this JSON. Add

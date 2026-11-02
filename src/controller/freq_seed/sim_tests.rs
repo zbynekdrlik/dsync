@@ -6,7 +6,7 @@
 //! testing.md`). A window is 4 Syncs at 8 Hz = 0.5 s, each sample with seeded jitter, the word
 //! held through the window (it changes at the window's end, as in the controller) and the
 //! window's offset the controller's median (`sorted[len / 2]`), which sits mid-window. The
-//! window's time base is set by hand (`last_offset_time`), so a run takes no wall time. Window 1
+//! window's span is grandmaster time, set by hand (`servo_window_after`): a run takes no wall time. Window 1
 //! is the first window after "Sync established" (the warmup is before it).
 //!
 //! Measured on this model (printed by `cargo test --lib freq_seed::sim_tests -- --nocapture`;
@@ -127,10 +127,7 @@ fn run_for(seed: Option<f64>, noise_seed: u64, jitter_us: f64, windows: usize) -
             *sample = true_offset_us + jitter_us * noise.gauss();
         }
         samples.sort_by(|a, b| a.total_cmp(b));
-        if c.rate.last_offset_us.is_some() {
-            c.rate.last_offset_time = Some(Instant::now() - Duration::from_secs_f64(WINDOW_S));
-        }
-        c.apply_self_tuning_servo(samples[SAMPLES / 2]);
+        c.servo_window_after(samples[SAMPLES / 2], WINDOW_S);
         if c.rate.in_production_mode && !prod {
             out.prod_entries.push(n);
         }

@@ -207,7 +207,7 @@ fn window_at(
     c.last_ntp_step = None;
     c.date_sync.pending_median_ns = Some(anchor + e_ns);
     c.date_sync.pending_t1_ns = super::tests::PL_PTP_NOW_NS + k * 500_000_000;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
 }
 
 #[test]

@@ -96,7 +96,7 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
         c.check_ptp_status();
         c.date_sync.pending_median_ns = Some(d + 3_000_000);
         c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + 30 * S;
-        c.apply_self_tuning_servo(0.0);
+        c.servo_window_after(0.0, 0.5);
         assert!(
             c.date_sync.core.engaged(),
             "daily={daily}: the phase lock re-engaged in the same process"
@@ -117,7 +117,7 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
             c.last_ntp_step = Some(Instant::now() - Duration::from_secs(3));
             c.date_sync.pending_median_ns = Some(d);
             c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + (30 + k) * S;
-            c.apply_self_tuning_servo(0.0);
+            c.servo_window_after(0.0, 0.5);
         }
         c.update_shared_status();
         let st = c.get_status_shared();

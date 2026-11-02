@@ -721,7 +721,7 @@ where
     /// dsync#136: the rate servo's whole state (drift baseline, lock, gain modes, the rate
     /// measurement, the spike filter and the jitter estimator), shared with the in-process
     /// follower through `dsync_ptp::rate_servo`.
-    rate: RateServo<Instant>,
+    rate: RateServo<crate::rate_servo::GmNs>,
 
     // Periodic NTP UTC tracking state
     last_ntp_check: Instant,
@@ -850,6 +850,25 @@ struct PendingSync {
 // ============================================================================
 // IMPLEMENTATION
 // ============================================================================
+
+#[cfg(test)]
+impl<C, N, S> PtpController<C, N, S>
+where
+    C: SystemClock,
+    N: PtpNetwork,
+    S: NtpSource,
+{
+    /// A servo window `span_s` of grandmaster time after the previous one (the first at
+    /// `span_s`): the window's span is GM time, so a test sets it exactly, in no wall time.
+    pub(crate) fn servo_window_after(&mut self, offset_us: f64, span_s: f64) {
+        let last = self
+            .rate
+            .last_offset_time
+            .unwrap_or(crate::rate_servo::GmNs(0));
+        let at = crate::rate_servo::GmNs(last.0 + (span_s * 1e9).round() as i64);
+        self.apply_self_tuning_servo(offset_us, at);
+    }
+}
 
 impl<C, N, S> PtpController<C, N, S>
 where
@@ -2499,8 +2518,9 @@ where
 
         self.date_sync.close_raw_window(master_time_ns); // #117: the phase lock's window
 
-        // Apply self-tuning servo
-        self.apply_self_tuning_servo(offset_us);
+        // Apply self-tuning servo. The window's span is measured in the grandmaster's time, the
+        // time its offsets are in (1.25, #147 lane: not the wall time it is processed at).
+        self.apply_self_tuning_servo(offset_us, crate::rate_servo::GmNs(master_time_ns));
 
         self.sample_window.clear();
     }
@@ -2514,7 +2534,7 @@ where
     /// 1. Use P-term to respond to offset (creates oscillation)
     /// 2. When offset is small, learn drift from the total correction
     /// 3. This naturally converges to the right drift baseline
-    fn apply_self_tuning_servo(&mut self, offset_us: f64) {
+    fn apply_self_tuning_servo(&mut self, offset_us: f64, at: crate::rate_servo::GmNs) {
         // PTPV1 FREQUENCY SYNC - Rate-of-Change Based Servo
         //
         // Key insight: PTPv1 timestamps are device uptime, NOT UTC.
@@ -2546,7 +2566,7 @@ where
             measured,
             dt_secs,
             raw_rate_ppm,
-        } = self.rate.measure_offset(offset_us, Instant::now());
+        } = self.rate.measure_offset(offset_us, at);
 
         // #97: FEED-FORWARD DECOUPLING (the carrier line). Subtract the phase slew that was
         // actually in effect over THIS interval from the raw PTP rate observation, so the PTP
@@ -2592,7 +2612,7 @@ where
         };
 
         let rate_ppm = if measured {
-            self.rate.measure(raw_rate_ppm, Instant::now)
+            self.rate.measure(raw_rate_ppm, || at)
         } else {
             // Intended: the unmeasured window keeps the last smoothed rate for its P term (a
             // reset is a step or an outage, not evidence that the rate went to 0). Once the phase
@@ -6870,8 +6890,8 @@ mod tests {
         // Feed a rate equal to the applied slew ⇒ decoupling drives the PTP-observed rate to ~0,
         // so f_ptp stays at the 30ppm baseline.
         c.rate.last_offset_us = Some(0.0);
-        c.rate.last_offset_time = Some(Instant::now() - Duration::from_secs(1));
-        c.apply_self_tuning_servo(50.0);
+        c.rate.last_offset_time = Some(crate::rate_servo::GmNs(0));
+        c.servo_window_after(50.0, 1.0);
 
         let ppm = (*captured.lock().expect("cap lock") - 1.0) * 1_000_000.0;
         assert!(
@@ -6911,7 +6931,7 @@ mod tests {
         assert!(c.phase_slew.is_none());
         c.rate.drift_baseline_ppm = 30.0;
         c.pending_f_phase_ppm = 999.0; // must be ignored when disabled
-        c.apply_self_tuning_servo(0.0); // rate 0 ⇒ f_ptp = baseline
+        c.servo_window_after(0.0, 1.0); // rate 0 ⇒ f_ptp = baseline
 
         let ppm = (*captured.lock().expect("cap lock") - 1.0) * 1_000_000.0;
         assert!(
@@ -6953,8 +6973,7 @@ mod tests {
             }
             let mut offset = 0.0_f64;
             for _ in 0..30 {
-                c.rate.last_offset_time = Some(Instant::now() - Duration::from_secs(1));
-                c.apply_self_tuning_servo(offset);
+                c.servo_window_after(offset, 1.0);
                 offset += 50.0; // +50us per ~1s ⇒ raw observed rate ≈ +50ppm
             }
             c.rate.smoothed_rate_ppm

@@ -81,7 +81,7 @@ pub(super) fn anchored_controller_with(
     let d = wall_now_ns() - PL_PTP_NOW_NS;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     assert_eq!(
         c.date_sync.core.anchor_ns(),
         Some(d),
@@ -213,12 +213,12 @@ fn once_locked_the_phase_lock_owns_the_frequency_word_117() {
     let d = 1_790_000_000_000_000_000_i64;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     // Bumpless: the first word is the rate servo's (12 ppm, rate 0).
     // A +500 µs phase error half a second later (grandmaster time) pulls the word DOWN.
     c.date_sync.pending_median_ns = Some(d + 500_000);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + 500_000_000;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     let words = captured.lock().expect("cap").clone();
     assert!(
         (words[0] - 12.0).abs() < 1e-6,
@@ -428,7 +428,7 @@ fn a_grandmaster_change_re_anchors_and_rebases_the_authority_without_a_step_117(
     let five_days: i64 = 5 * 86_400 * 1_000_000_000;
     c.date_sync.pending_median_ns = Some(d + five_days);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS - five_days;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     assert_eq!(c.date_sync.core.anchor_ns(), Some(d + five_days));
     assert_eq!(c.date_sync.anchor_gm, Some(new_gm));
     assert_eq!(
@@ -739,7 +739,7 @@ fn the_master_re_aligns_only_on_a_fresh_window_and_removes_the_measured_error_88
     c.rate.is_locked = true;
     c.date_sync.pending_median_ns = Some(d - 250_000 + 30_000);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + 1_000_000_000;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     c.service_date_offset();
     assert_eq!(
         c.date_sync.core.anchor_ns(),
@@ -759,7 +759,7 @@ fn a_grandmaster_change_while_the_master_is_off_the_line_shifts_the_fleet_d_117(
     c.date_sync.core.request_rebase();
     c.date_sync.pending_median_ns = Some(d - 5_000_000 + shift);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS - shift;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     assert_eq!(c.date_sync.core.anchor_ns(), Some(d - 5_000_000 + shift));
     let now_ptp_new = wall_now_ns() - (d - 5_000_000 + shift);
     assert_eq!(
@@ -882,11 +882,11 @@ fn a_ptp_outage_holds_the_learned_integrator_not_the_last_word_117() {
     let d = 1_790_000_000_000_000_000_i64;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     // A +500 µs error: the last word carries a large P term on top of the learned frequency.
     c.date_sync.pending_median_ns = Some(d + 500_000);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + 500_000_000;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     let learned = c.date_sync.core.integrator_ppm();
     let last_word = *captured.lock().expect("cap").last().expect("a word");
     assert!(

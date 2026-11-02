@@ -143,12 +143,9 @@ fn an_unstable_measured_window_does_not_unlock_an_engaged_phase_lock_146() {
     c.rate.lock_stable_count = LOCK_STABLE_COUNT;
     c.date_sync.core.on_window(0, true, 0.0, 0.5);
     for (k, offset_us) in [0.0, 100.0, 200.0].into_iter().enumerate() {
-        if c.rate.last_offset_us.is_some() {
-            c.rate.last_offset_time = Some(Instant::now() - Duration::from_millis(500));
-        }
         c.date_sync.pending_median_ns = Some(0);
         c.date_sync.pending_t1_ns = (k as i64 + 1) * 500_000_000;
-        c.apply_self_tuning_servo(offset_us);
+        c.servo_window_after(offset_us, 0.5);
     }
     assert!(c.date_sync.core.engaged());
     assert!(c.rate.is_locked, "still rate-locked");

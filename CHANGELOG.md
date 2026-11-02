@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The release gate is the "Stability Gate" (`gate.yml`, runner label `dsync-gate`,
   `scripts/stability_gate.py`, `docs/stability-gate.md`).
 
+### Fixed
+
+- The rate servo measures a window's span in the grandmaster's time (the window's t1), the time
+  the offset it differentiates is in, not `Instant::now()` when the window is processed. In
+  production the same rate within ppm, minus the processing jitter. In the e2e simulations every
+  span was under 0.1 s of wall time, and a pause under coverage divided a simulated offset by a real
+  span (`test_auto_adaptive_drift_rates` at the ±500 ppm clamp, PR #149). The #146 follow-up (1).
+
 ### Added
 
 - The state dir is resolved at start (`src/state_dir.rs`, ROZHODNUTÉ #147: resolve, never copy):

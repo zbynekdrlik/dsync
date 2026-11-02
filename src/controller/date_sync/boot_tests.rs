@@ -90,7 +90,7 @@ fn window(c: &mut Ctl, median: i64, locked: bool) {
     c.rate.lock_stable_count = if locked { LOCK_STABLE_COUNT } else { 0 };
     c.date_sync.pending_median_ns = Some(median);
     c.date_sync.pending_t1_ns = wall_now_ns() - median;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     assert_eq!(
         c.rate.is_locked, locked,
         "the lock verdict held for this window"

@@ -216,10 +216,7 @@ fn a_controller_without_a_drift_file_never_writes_one_142() {
 
 /// One window 0.5 s after the previous one.
 fn window(c: &mut Ctl, offset_us: f64) {
-    if c.rate.last_offset_us.is_some() {
-        c.rate.last_offset_time = Some(Instant::now() - Duration::from_millis(500));
-    }
-    c.apply_self_tuning_servo(offset_us);
+    c.servo_window_after(offset_us, 0.5);
 }
 
 #[test]

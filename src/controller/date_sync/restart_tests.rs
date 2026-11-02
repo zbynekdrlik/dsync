@@ -72,7 +72,7 @@ fn first_lock(c: &mut Ctl, gm: [u8; 6], anchor: i64) {
     c.rate.is_locked = true;
     c.date_sync.pending_median_ns = Some(anchor);
     c.date_sync.pending_t1_ns = wall_now_ns() - anchor;
-    c.apply_self_tuning_servo(0.0);
+    c.servo_window_after(0.0, 0.5);
     assert_eq!(c.date_sync.core.anchor_ns(), Some(anchor), "the first lock");
 }
 
