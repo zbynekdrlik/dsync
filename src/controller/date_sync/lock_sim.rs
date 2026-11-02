@@ -165,6 +165,16 @@ impl Sim {
         }
     }
 
+    /// Run to the first reported lock (at most `max` windows), then `after` more: each run stops
+    /// where its assertion is decided (the #142 coverage-timing lesson: under tarpaulin every
+    /// instrumented window here slows the timing-sensitive tests running beside it).
+    pub(super) fn run_past_lock(&mut self, max: usize, after: usize) {
+        while self.first_lock().is_none() && self.n < max {
+            self.window();
+        }
+        self.run(after);
+    }
+
     fn observe(&self) -> Obs {
         let st = self.c.get_status_shared();
         let st = st.read().expect("status");

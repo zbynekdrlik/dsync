@@ -321,6 +321,7 @@ fn the_unseeded_cold_start_still_learns_and_locks_142() {
 /// NTP-burst loop-stall bound failed on PR 143's first runs).
 #[test]
 fn closed_loop_simulation_of_the_gen3_cold_boot_142() {
+    let _heavy = crate::controller::heavy_test_guard();
     the_unseeded_cold_start_still_learns_and_locks_142();
     a_good_seed_locks_the_gen3_oscillator_within_ten_seconds_of_sync_established_142();
     the_judge_reads_the_error_against_the_seed_not_against_the_p_term_142();

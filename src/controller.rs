@@ -52,6 +52,19 @@ mod ntp_check;
 #[cfg(test)]
 mod first_window_tests;
 
+/// dantesync#146 (the #142 coverage-timing lesson, round 2): the heavy closed-loop simulations
+/// and the one wall-clock-timing test of this binary take this lock, so they never run beside
+/// each other. Under CI's tarpaulin (one ptrace tracer for every thread) the #142 and #146 sims
+/// together stalled `the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136` to
+/// 473 ms against its 300 ms bound (run 41383299716). The bound is unchanged; only the overlap goes.
+#[cfg(test)]
+pub(crate) fn heavy_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static HEAVY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    HEAVY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// dantesync#142 — the learned frequency across a restart (`crate::drift_file`): the seed at
 /// start, its judge, the save while LOCKED. A child module like `date_sync`; its state is the one
 /// `freq_seed` field.

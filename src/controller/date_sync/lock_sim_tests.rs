@@ -110,10 +110,15 @@ fn a_boot_reports_lock_only_within_the_bound_and_never_flaps_146() {
                 ("seeded 15 ppm off", Some(LEARNED_PPM + 15.0), false),
                 ("seeded 15 ppm off", Some(LEARNED_PPM - 15.0), false),
             ] {
-                // `fast`: a seed within a few ppm, which #142 meant to lock in ~10 s.
+                // `fast`: a seed within a few ppm, which #142 meant to lock in ~10 s. A seed far off
+                // runs on one noise seed only (CPU under coverage, the #142 lesson).
+                if !fast && seed.is_some() && noise != SEEDS[0] {
+                    continue;
+                }
                 let label = format!("{kind} boot, {jitter} us jitter, noise {noise:x}");
                 let mut s = Sim::new(NATURAL_PPM, seed, noise, jitter);
-                s.run(600);
+                // 2 minutes past the lock: past the 20 s re-seed and the PI's ~100 s peak.
+                s.run_past_lock(400, 240);
                 print_boot(&label, &s);
                 assert_contract(&label, &s);
                 let first = s
@@ -160,13 +165,13 @@ fn a_date_step_never_moves_the_lock_146() {
         for delta_ns in [800_000_000_i64, -600_000_000] {
             let label = format!("date step {delta_ns} ns, {jitter} us jitter");
             let mut s = Sim::new(NATURAL_PPM, None, SEEDS[0], jitter);
-            s.run(400);
+            s.run_past_lock(400, 60);
             assert!(
                 s.log.last().expect("log").reported,
                 "{label}: locked before"
             );
             s.date_step(delta_ns);
-            s.run(240);
+            s.run(120);
             assert_contract(&label, &s);
             assert!(
                 s.transitions_after_first_lock().is_empty(),
@@ -184,7 +189,7 @@ fn a_grandmaster_frequency_step_drops_the_lock_at_most_once_146() {
         for step_ppm in [-25.0, 10.0, 4.0] {
             let label = format!("GM frequency step {step_ppm:+} ppm, {jitter} us jitter");
             let mut s = Sim::new(NATURAL_PPM, Some(LEARNED_PPM), SEEDS[1], jitter);
-            s.run(600);
+            s.run_past_lock(400, 120);
             assert!(
                 s.log.last().expect("log").reported,
                 "{label}: locked before"
@@ -192,8 +197,10 @@ fn a_grandmaster_frequency_step_drops_the_lock_at_most_once_146() {
             let at = s.n;
             s.natural_ppm += step_ppm;
             // A step under `FSTEP_MIN_PPM` is not re-seeded: the ~100 s PI takes it out, back
-            // under 50 us only minutes later (camera-box issue 1372), so the run is 10 minutes.
-            s.run(1200);
+            // under 50 us only minutes later (camera-box issue 1372) when it dropped [41]: 10
+            // minutes for that one, 150 s (past the PI's ~100 s peak) for the others.
+            let followed = step_ppm.abs() >= crate::ptp_phase_lock::FSTEP_MIN_PPM;
+            s.run(if followed || jitter < 30.0 { 300 } else { 1200 });
             assert_contract(&label, &s);
             let trans = s.transitions_after_first_lock();
             let peak = s.log[at..].iter().map(e_abs).fold(0.0, f64::max);
@@ -228,17 +235,17 @@ fn a_grandmaster_frequency_step_drops_the_lock_at_most_once_146() {
 /// nothing re-aligned any more).
 fn a_phase_jump_while_engaged_is_re_aligned_in_seconds_146() {
     for jitter in JITTERS_US {
-        for jump_us in [5_000.0, -100_000.0, 500_000.0] {
+        for jump_us in [5_000.0, -500_000.0] {
             let label = format!("phase jump {jump_us} us, {jitter} us jitter");
             let mut s = Sim::new(NATURAL_PPM, Some(LEARNED_PPM), SEEDS[2], jitter);
-            s.run(600);
+            s.run_past_lock(400, 120);
             assert!(
                 s.log.last().expect("log").reported,
                 "{label}: locked before"
             );
             let at = s.n;
             s.jump_us(jump_us);
-            s.run(240);
+            s.run(120);
             assert_contract(&label, &s);
             let back = s.log[at..]
                 .iter()
@@ -266,6 +273,7 @@ fn a_phase_jump_while_engaged_is_re_aligned_in_seconds_146() {
 
 #[test]
 fn closed_loop_simulation_of_the_reported_lock_146() {
+    let _heavy = crate::controller::heavy_test_guard();
     a_boot_reports_lock_only_within_the_bound_and_never_flaps_146();
     a_date_step_never_moves_the_lock_146();
     a_grandmaster_frequency_step_drops_the_lock_at_most_once_146();

@@ -395,6 +395,8 @@ const LOOP_GAP_BOUND: Duration = Duration::from_millis(300);
 
 #[test]
 fn the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136() {
+    // Never beside the heavy closed-loop sims (dantesync#146, `heavy_test_guard`).
+    let _heavy = crate::controller::heavy_test_guard();
     let upstream = SlowNtpUpstream::start(SLOW_ROUND_TRIP);
     let client = Arc::new(NtpClient::new(
         &upstream.server_name(),

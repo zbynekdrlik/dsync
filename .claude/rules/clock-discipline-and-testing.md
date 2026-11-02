@@ -1387,6 +1387,11 @@ start. What was learned:
   measurement); it is recorded on #146 as a follow-up candidate (fixing it needs the e2e harness
   reworked: its spans carry no measurement at all). So the e2e is NOT no-flap evidence (9 of its
   10 audits lock blind); the no-flap proof is `lock_sim_tests.rs`.
-- **Coverage-timing (#142 lesson) kept:** all sim scenarios run serially in ONE `#[test]`
-  (0.5 s in debug).
+- **Coverage-timing (#142 lesson), round 2:** all sim scenarios run serially in ONE `#[test]`,
+  each run stops where its assertion is decided (`Sim::run_past_lock`), far-off seeds on one
+  noise seed (0.47 s in debug). That was NOT enough on its own: under tarpaulin (one ptrace
+  tracer for every thread) the #142 and #146 sims running together stalled
+  `the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136` to 473 ms (bound 300 ms,
+  CI run 41383299716). So the heavy sims and that timing test take `controller::heavy_test_guard()`
+  and never overlap; the bound is unchanged. A new heavy sim in the lib binary takes it too.
 
