@@ -59,7 +59,6 @@ windows-service = "0.7"
 tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "macros", "rt-multi-thread"] }
 winit = "0.29"
 winrt-notification = "0.5"  # Windows toast notifications
-pcap = "2.2"  # Npcap for Windows packet capture with precise timestamps
 reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false }  # HTTP client for version check (native-tls = Windows schannel, drops the rustls-webpki stack — #340 security audit RUSTSEC-2026-0098/0099/0104)
 
 # dsync#132: the tray icon, on Windows (winit + named pipe) and on Linux (gtk main

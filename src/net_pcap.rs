@@ -1,12 +1,12 @@
 //! The Windows Npcap NTP transport (dsync#53). The PTP capture and the shared pcap helpers
-//! (device lookup, the #58 runtime guard, HostHighPrec captures) moved to the `dsync-ptp` crate
+//! (device lookup, the run-time Npcap load, HostHighPrec captures) moved to the `dsync-ptp` crate
 //! (dsync#136) and are re-exported here, so `crate::net_pcap::…` paths are unchanged.
 
 pub use dsync_ptp::net_pcap::*;
 
 use anyhow::{anyhow, Result};
+use dsync_ptp::wpcap::{Capture, Device};
 use log::{debug, info};
-use pcap::{Active, Capture, Device};
 use std::net::{Ipv4Addr, UdpSocket};
 use std::time::{Duration, SystemTime};
 
@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime};
 /// `ntp_packet::select_ntp_pcap_device` — the same decision a manual
 /// `Find-NetRoute` makes, made automatically.
 pub fn find_device_for_ntp_server(server_ip: Ipv4Addr) -> Result<Device> {
-    let devices = list_devices_guarded()?;
+    let devices = list_devices()?;
 
     let mut candidates = Vec::new();
     let mut candidate_device_idx = Vec::new();
@@ -93,7 +93,7 @@ const NTP_PCAP_TIMEOUT: Duration = Duration::from_millis(500);
 /// request leaving the NIC) and t4 (the server's reply arriving) via Npcap
 /// `HostHighPrec` timestamps instead of userspace `SystemTime::now()`.
 pub struct PcapNtpTransport {
-    capture: Capture<Active>,
+    capture: Capture,
     socket: UdpSocket,
     server_ip: Ipv4Addr,
     local_ip: Ipv4Addr,
@@ -165,10 +165,10 @@ impl PcapNtpTransport {
         const MAX_DRAIN_PACKETS: u32 = 64;
         for _ in 0..MAX_DRAIN_PACKETS {
             match self.capture.next_packet() {
-                Ok(_) => {
+                Ok(Some(_)) => {
                     debug!("[NTP][Npcap] drained a stale queued packet before sending");
                 }
-                Err(pcap::Error::TimeoutExpired) => break,
+                Ok(None) => break,
                 Err(_) => break, // any other capture error: nothing more to drain
             }
         }
@@ -183,14 +183,12 @@ impl PcapNtpTransport {
 
         while t4_reply.is_none() && std::time::Instant::now() < deadline {
             match self.capture.next_packet() {
-                Ok(packet) => {
+                Ok(Some(packet)) => {
                     let Some((src_ip, _dst_port, payload)) = parse_udp_frame(packet.data) else {
                         continue;
                     };
-                    let ts = pcap_ts_to_systemtime(
-                        packet.header.ts.tv_sec as i64,
-                        packet.header.ts.tv_usec as i64,
-                    );
+                    let ts =
+                        pcap_ts_to_systemtime(packet.ts.tv_sec as i64, packet.ts.tv_usec as i64);
                     let ts_us = systemtime_to_unix_micros(ts);
 
                     if src_ip == self.local_ip && t1_us.is_none() {
@@ -232,8 +230,8 @@ impl PcapNtpTransport {
                         }
                     }
                 }
-                Err(pcap::Error::TimeoutExpired) => continue,
-                Err(e) => return Err(e.into()),
+                Ok(None) => continue,
+                Err(e) => return Err(e),
             }
         }
 

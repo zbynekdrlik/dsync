@@ -116,8 +116,8 @@ fn test_simulated_ptp_packet_structure() {
     assert!(dst_port == 319 || dst_port == 320, "Should be PTP port");
 }
 
-/// #58 RED->GREEN: `wpcap_runtime_available()` must never panic/crash --
-/// it's the guard that replaces a delay-load crash with a plain bool.
+/// #58: `wpcap_runtime_available()` must never panic/crash. Since dsync#136 it is the run-time
+/// loader itself (`crate::wpcap`), so a missing runtime is a plain `false`.
 #[test]
 fn test_wpcap_runtime_available_never_panics() {
     let _ = wpcap_runtime_available();
@@ -127,11 +127,9 @@ fn test_wpcap_runtime_available_never_panics() {
 /// `windows-latest` CI runner -- confirmed absent by
 /// `wpcap_runtime_available()` returning `false` there), constructing
 /// either capture path must return a graceful `Err`, never crash the
-/// process. Before this fix, `find_device()` called `Device::list()`
-/// unconditionally, which triggered the delay-loaded `wpcap.dll` symbol
-/// resolution and aborted the whole test binary with `0xc06d007e`
-/// (observed live via `NtpClient::new()` in run 30337735289 -- that is
-/// the RED this test proves GREEN). On a real box where Npcap IS
+/// process. Before #58, `find_device()` reached the delay-loaded `wpcap.dll`
+/// and aborted the whole test binary with `0xc06d007e` (run 30337735289);
+/// since dsync#136 nothing imports `wpcap.dll` at all. On a real box where Npcap IS
 /// installed this test is a no-op (skipped) -- it is specifically about
 /// the "runtime missing" degradation path, not normal capture behavior.
 #[test]

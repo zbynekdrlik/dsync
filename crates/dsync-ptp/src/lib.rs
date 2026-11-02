@@ -40,6 +40,8 @@ pub mod net_linux;
 
 #[cfg(windows)]
 pub mod net_pcap;
+#[cfg(windows)]
+pub mod wpcap;
 
 /// This crate's version: always the dsync service version it was released with.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
