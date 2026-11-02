@@ -89,7 +89,7 @@ where
                 self.ptp_offline = true;
                 // #112: the servo keeps its lock state through the outage (the learned frequency
                 // is held), but nothing PTP-derived is live any more: /status says so.
-                if self.is_locked || self.in_nano_mode {
+                if self.rate.is_locked || self.rate.in_nano_mode {
                     info!(
                         "[PTP] === UNLOCKED === (no PTP packets for {}s) -- /status reports {} \
                          until they return",
@@ -132,7 +132,7 @@ where
             self.ptp_offline = false;
             self.ptp_offline_logged = false;
             info!("[PTP] Packets received - PTP sync resumed");
-            if self.is_locked || self.in_nano_mode {
+            if self.rate.is_locked || self.rate.in_nano_mode {
                 info!("[PTP] === LOCKED === (PTP packets back; the servo held its lock through the outage)");
             }
         }

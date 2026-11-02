@@ -41,10 +41,12 @@ use crate::date_offset::{
     same_time_base, CorrectionMode, DateAnnounce, DateAuthority, DateFollower, FollowAction,
     StepKind,
 };
+use crate::phase_window;
 use crate::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
 use crate::time_server::NoAuthority;
 pub use boot::{BootNtpError, BootNtpResult, BootNtpSpawner};
 use daily::log_daily_authority;
+use lock_report::log_gate_event;
 
 /// A reply from the date-offset authority older than this is not acted on (the poller asks once
 /// per second; a stale reply means the master went quiet).
@@ -160,7 +162,7 @@ pub(super) struct DateSync {
     pub(super) unsafe_since: Option<Instant>,
     /// dantesync#146 — the phase lock's last two words minus its integrator (ppm), oldest first:
     /// the deviation the rate servo's measurement is decoupled from (0 = the rate servo's word).
-    pub(super) word_deviation_ppm: [f64; 2],
+    pub(super) word_deviation: crate::rate_servo::WordDeviation,
 }
 
 impl DateSync {
@@ -240,7 +242,7 @@ impl DateSync {
             last_freq_step_ts: None,
             restart: restart::RestartState::new(config),
             lock_gate: crate::lock_gate::PhaseLockGate::new(),
-            word_deviation_ppm: [0.0; 2],
+            word_deviation: crate::rate_servo::WordDeviation::default(),
             unsafe_since: None,
         }
     }
@@ -344,16 +346,13 @@ where
             };
         };
         // dt in GRANDMASTER time (t1). A GM change jumps it; `on_window` clamps that one window.
+        // dsync#136: the window glue is shared with the in-process follower
+        // (`dsync_ptp::phase_window`); the date layer's handling runs between its steps.
         let t1 = self.date_sync.pending_t1_ns;
-        let dt = self
-            .date_sync
-            .last_t1_ns
-            .map(|prev| t1.wrapping_sub(prev) as f64 / 1e9)
-            .unwrap_or(dt_fallback_s);
-        self.date_sync.last_t1_ns = Some(t1);
+        let dt = phase_window::window_dt(&mut self.date_sync.last_t1_ns, t1, dt_fallback_s);
         let was_engaged = self.date_sync.core.engaged();
         let reseeded_before = self.date_sync.core.boot_reseed().is_some();
-        let locked = self.is_locked && !self.ptp_offline;
+        let locked = phase_window::engage_on(self.rate.is_locked, self.ptp_offline);
         let out = self
             .date_sync
             .core
@@ -375,8 +374,20 @@ where
         }
         // dantesync#146: the reported lock is judged on this window's `e`, and the rate servo's
         // next measurement is decoupled from this word's deviation.
-        self.judge_reported_lock(out.error_ns);
-        self.date_sync.note_word_deviation(out.freq_ppm);
+        let close = phase_window::close_window(
+            &self.date_sync.core,
+            &mut self.date_sync.lock_gate,
+            &mut self.date_sync.word_deviation,
+            &out,
+            was_engaged,
+            total_correction,
+        );
+        self.after_reported_lock_judged(close.gate_event);
+        // Keep the rate servo's baseline on the learned frequency, so a hand-back (lock loss) is
+        // bumpless.
+        if let Some(baseline) = close.baseline_ppm {
+            self.rate.drift_baseline_ppm = baseline;
+        }
         match out.freq_ppm {
             Some(word) => {
                 if !was_engaged {
@@ -396,23 +407,18 @@ where
                         );
                     }
                 }
-                // Keep the rate servo's baseline on the learned frequency, so a hand-back (lock
-                // loss) is bumpless.
-                self.drift_baseline_ppm = self.date_sync.core.integrator_ppm();
-                word
             }
             None => {
                 if was_engaged {
-                    self.drift_baseline_ppm = self.date_sync.core.integrator_ppm();
                     info!(
                         "[PHASE-LOCK] disengaged (PTP lock lost) — the rate servo holds the \
                          learned {:+.3}ppm",
-                        self.drift_baseline_ppm
+                        self.rate.drift_baseline_ppm
                     );
                 }
-                total_correction
             }
         }
+        close.word_ppm
     }
 
     /// #88 — inside the backoff after a failed date step.
@@ -504,16 +510,19 @@ where
         self.pending_syncs.clear();
         self.prev_t1_ns = 0;
         self.prev_t2_ns = 0;
-        self.last_offset_us = None;
-        self.last_offset_time = None;
+        self.rate.reset_measurement();
         // dantesync#146: no PTP, no phase lock: [41] clears at once, and the acquisition fit
         // starts again after the outage (its `dt` across it is not the outage's length).
-        self.clear_reported_lock();
-        self.date_sync.core.on_ptp_outage();
-        if self.date_sync.core.engaged() {
-            self.date_sync.core.disengage();
-            let word = self.date_sync.core.integrator_ppm();
-            self.drift_baseline_ppm = word;
+        // dsync#136: the edge's phase-lock part is shared with the in-process follower.
+        let outage = phase_window::on_outage(
+            &mut self.date_sync.core,
+            &mut self.date_sync.lock_gate,
+            &mut self.date_sync.word_deviation,
+        );
+        self.date_sync.unsafe_since = None;
+        log_gate_event(outage.gate_event);
+        if let Some(word) = outage.held_ppm {
+            self.rate.drift_baseline_ppm = word;
             // Hold the LEARNED frequency (not the last word, which carries the last P term), so
             // the free-run through the outage is as small as the oscillator allows.
             self.last_adj_ppm = word;

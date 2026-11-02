@@ -1,0 +1,44 @@
+[package]
+name = "dsync-ptp"
+# Kept equal to the dsync service version (a test in the service pins it).
+version = "1.24.0"
+edition = "2021"
+description = "PTPv1 follower: the PTP code of the dsync service, and an in-process follower on a virtual clock"
+license = "MIT"
+repository = "https://github.com/zbynekdrlik/dsync"
+rust-version = "1.70"
+
+[features]
+# `MockPtpNetwork` (mockall) for the tests of a crate that consumes `PtpNetwork` (the service).
+mock = ["dep:mockall"]
+# `ptp_tx`: a PTPv1 Sync/Follow_Up encoder for simulations and tests (the service's acceptance
+# test). The follower never sends; a consumer leaves this off.
+sim = []
+
+[dependencies]
+anyhow = "1.0"
+log = "0.4"
+byteorder = "1.5"
+socket2 = "0.5"
+if-addrs = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+mockall = { version = "0.12", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", features = ["socket", "net", "uio"] }
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_SystemInformation",
+] }
+pcap = "2.2"
+
+[dev-dependencies]
+mockall = "0.12"

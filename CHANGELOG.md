@@ -5,6 +5,38 @@ All notable changes to DanteSync will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] - 2026-11-02
+
+### Added
+
+- The library form (#136, owner ruling 2026-11-02: "build it"). `crates/dsync-ptp` is a workspace
+  crate that applications link to lock to the grandmaster in their own process.
+  - `dsync_ptp::follower::Follower` runs the service's own pipeline on a virtual clock. That
+    pipeline is the rate servo, the phase lock and the DSYX [41] lock gate. The virtual clock runs
+    over the raw monotonic counter.
+  - It never sends (the one-way model) and never touches the system clock. It shares UDP 319/320
+    with the service on one PC.
+  - `PtpClock::now_ptp_ns()` is a seqlock read.
+  - The state it reports:
+    - locked, with [41]'s definition;
+    - holdover;
+    - the grandmaster UUID;
+    - `D` (wall = PTP + D);
+    - the phase error;
+    - the counters `epoch`, `reanchors`, `holdovers` and `windows`.
+  - A packet received across a wall step on the PC is dropped.
+  - Consumers pin it by this repository's tag.
+
+### Changed
+
+- The PTP code moved into `crates/dsync-ptp`, verbatim. The moved code is the wire format, the
+  receive paths, the phase lock, the lock gate, the spike filter, the grandmaster allowlist and the
+  re-join schedule. The service re-exports every module. The service's rate servo is extracted into
+  `dsync_ptp::rate_servo` with its arithmetic unchanged. The service's behaviour is unchanged: the
+  whole existing test suite, the simulations and the two-clock bench pass with only mechanical
+  field-path edits.
+- CI lints, tests and measures coverage with `--workspace`.
+
 ## [1.23.0] - 2026-11-02
 
 ### Added

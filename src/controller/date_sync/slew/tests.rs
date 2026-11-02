@@ -47,7 +47,7 @@ fn capturing_anchored_controller(
         c.configure_ntp_server_mode(100_000);
     }
     c.current_gm_uuid = Some(PL_GM);
-    c.is_locked = true;
+    c.rate.is_locked = true;
     let d = wall_now_ns() - PL_PTP_NOW_NS;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
@@ -386,7 +386,7 @@ fn failing_clock_controller() -> (
         phase_lock_config(),
     );
     c.current_gm_uuid = Some(PL_GM);
-    c.is_locked = true;
+    c.rate.is_locked = true;
     let d = wall_now_ns() - PL_PTP_NOW_NS;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;

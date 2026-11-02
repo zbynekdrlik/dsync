@@ -1,0 +1,221 @@
+//! The glue around one phase-lock window, shared by the service's controller and the in-process
+//! follower (dsync#136): how a window's `dt` is taken, when the phase lock may engage, the
+//! [41] gate's verdict, the #146 word deviation, the rate servo's hand-back, and the PTP-outage
+//! edge. Each consumer runs its own side effects between these steps (the service: the date
+//! layer's anchor events, the step probe, the logs), but the arithmetic and the order live here
+//! once.
+
+use crate::lock_gate::{GateEvent, PhaseLockGate};
+use crate::ptp_phase_lock::{PhaseLockCore, WindowOutcome};
+use crate::rate_servo::WordDeviation;
+
+/// The window's `dt` in GRANDMASTER time (`t1`), so loop scheduling and the clock's own steps
+/// cannot distort it; `fallback_s` (the rate servo's span) for the first window. A grandmaster
+/// change jumps it; `PhaseLockCore::on_window` clamps that one window.
+pub fn window_dt(last_t1_ns: &mut Option<i64>, t1_ns: i64, fallback_s: f64) -> f64 {
+    let dt = last_t1_ns
+        .map(|prev| t1_ns.wrapping_sub(prev) as f64 / 1e9)
+        .unwrap_or(fallback_s);
+    *last_t1_ns = Some(t1_ns);
+    dt
+}
+
+/// The phase lock engages on the rate servo's lock, never while PTP is stale.
+pub fn engage_on(rate_locked: bool, ptp_offline: bool) -> bool {
+    rate_locked && !ptp_offline
+}
+
+/// One window's [41] verdict: the gate on `e`, engaged = the phase lock owns the word after it.
+pub fn judge(
+    gate: &mut PhaseLockGate,
+    core: &PhaseLockCore,
+    error_ns: Option<i64>,
+) -> Option<GateEvent> {
+    gate.on_window(core.engaged(), error_ns)
+}
+
+/// What the window leaves for the clock and the rate servo.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowClose {
+    /// The [41] gate's change, if any (the consumer logs it).
+    pub gate_event: Option<GateEvent>,
+    /// The frequency word to apply: the phase lock's while engaged, else the rate servo's.
+    pub word_ppm: f64,
+    /// The rate servo's new drift baseline: the learned frequency while engaged and on the
+    /// window that disengaged (a bumpless hand-back); `None` = unchanged.
+    pub baseline_ppm: Option<f64>,
+}
+
+/// Close a window after the consumer handled its anchor event: the gate's verdict on `e`, the
+/// word deviation the rate servo's next measurement is decoupled from (#146), the word and the
+/// hand-back.
+pub fn close_window(
+    core: &PhaseLockCore,
+    gate: &mut PhaseLockGate,
+    deviation: &mut WordDeviation,
+    out: &WindowOutcome,
+    was_engaged: bool,
+    servo_word_ppm: f64,
+) -> WindowClose {
+    let gate_event = judge(gate, core, out.error_ns);
+    deviation.note(out.freq_ppm, core.integrator_ppm());
+    let (word_ppm, baseline_ppm) = match out.freq_ppm {
+        Some(word) => (word, Some(core.integrator_ppm())),
+        None if was_engaged => (servo_word_ppm, Some(core.integrator_ppm())),
+        None => (servo_word_ppm, None),
+    };
+    WindowClose {
+        gate_event,
+        word_ppm,
+        baseline_ppm,
+    }
+}
+
+/// The PTP-offline edge's phase-lock part.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Outage {
+    /// The gate cleared (`Disengaged` when it was locked).
+    pub gate_event: Option<GateEvent>,
+    /// The learned frequency to hold through the outage, when the phase lock was engaged (not the
+    /// last word, which carries its last P term).
+    pub held_ppm: Option<f64>,
+}
+
+/// No PTP: [41] clears at once, the acquisition fit starts again after the outage (its `dt`
+/// across it is not the outage's length), and an engaged phase lock disengages and hands back its
+/// integrator.
+pub fn on_outage(
+    core: &mut PhaseLockCore,
+    gate: &mut PhaseLockGate,
+    deviation: &mut WordDeviation,
+) -> Outage {
+    deviation.clear();
+    let gate_event = gate.reset();
+    core.on_ptp_outage();
+    let held_ppm = core.engaged().then(|| {
+        core.disengage();
+        core.integrator_ppm()
+    });
+    Outage {
+        gate_event,
+        held_ppm,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ptp_phase_lock::AnchorEvent;
+
+    fn outcome(freq_ppm: Option<f64>, error_ns: Option<i64>) -> WindowOutcome {
+        WindowOutcome {
+            freq_ppm,
+            error_ns,
+            event: AnchorEvent::None,
+            freq_step: None,
+        }
+    }
+
+    #[test]
+    fn the_dt_is_grandmaster_time_after_the_first_window() {
+        let mut last = None;
+        assert_eq!(window_dt(&mut last, 5_000_000_000, 0.7), 0.7);
+        assert_eq!(window_dt(&mut last, 5_500_000_000, 0.7), 0.5);
+        assert_eq!(last, Some(5_500_000_000));
+    }
+
+    #[test]
+    fn the_phase_lock_engages_only_on_a_rate_lock_with_ptp_live() {
+        assert!(engage_on(true, false));
+        assert!(!engage_on(true, true));
+        assert!(!engage_on(false, false));
+    }
+
+    /// An engaged core: anchored on a locked window at 0.
+    fn engaged_core(integrator_seed: f64) -> PhaseLockCore {
+        let mut core = PhaseLockCore::new();
+        core.on_window(0, true, integrator_seed, 0.5);
+        assert!(core.engaged());
+        core
+    }
+
+    #[test]
+    fn an_engaged_window_applies_the_phase_lock_word_and_hands_the_learned_frequency_back() {
+        let core = engaged_core(12.0);
+        let (mut gate, mut dev) = (PhaseLockGate::new(), WordDeviation::default());
+        let close = close_window(
+            &core,
+            &mut gate,
+            &mut dev,
+            &outcome(Some(13.0), Some(0)),
+            true,
+            99.0,
+        );
+        assert_eq!(close.word_ppm, 13.0);
+        assert_eq!(close.baseline_ppm, Some(core.integrator_ppm()));
+        assert_eq!(dev.ppm[1], 13.0 - core.integrator_ppm());
+    }
+
+    #[test]
+    fn the_window_that_disengages_hands_back_once_and_then_the_rate_servo_owns_the_word() {
+        let mut core = engaged_core(12.0);
+        core.disengage();
+        let (mut gate, mut dev) = (PhaseLockGate::new(), WordDeviation::default());
+        let close = close_window(
+            &core,
+            &mut gate,
+            &mut dev,
+            &outcome(None, Some(0)),
+            true,
+            99.0,
+        );
+        assert_eq!((close.word_ppm, close.baseline_ppm), (99.0, Some(12.0)));
+        let close = close_window(
+            &core,
+            &mut gate,
+            &mut dev,
+            &outcome(None, Some(0)),
+            false,
+            98.0,
+        );
+        assert_eq!((close.word_ppm, close.baseline_ppm), (98.0, None));
+        assert_eq!(dev.ppm, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn the_gate_locks_on_engaged_windows_within_the_bound() {
+        let core = engaged_core(0.0);
+        let (mut gate, mut dev) = (PhaseLockGate::new(), WordDeviation::default());
+        let mut events = Vec::new();
+        for _ in 0..crate::lock_gate::LOCK_WINDOWS {
+            let c = close_window(
+                &core,
+                &mut gate,
+                &mut dev,
+                &outcome(Some(0.0), Some(10_000)),
+                true,
+                0.0,
+            );
+            events.extend(c.gate_event);
+        }
+        assert_eq!(events, vec![GateEvent::Locked { error_ns: 10_000 }]);
+    }
+
+    #[test]
+    fn an_outage_clears_the_gate_and_holds_the_integrator_of_an_engaged_lock() {
+        let mut core = engaged_core(7.5);
+        let mut gate = PhaseLockGate::new();
+        for _ in 0..crate::lock_gate::LOCK_WINDOWS {
+            judge(&mut gate, &core, Some(0));
+        }
+        assert!(gate.locked());
+        let mut dev = WordDeviation { ppm: [1.0, 2.0] };
+        let out = on_outage(&mut core, &mut gate, &mut dev);
+        assert_eq!(out.gate_event, Some(GateEvent::Disengaged));
+        assert_eq!(out.held_ppm, Some(core.integrator_ppm()));
+        assert!(!core.engaged() && !gate.locked());
+        assert_eq!(dev.span_ppm(), 0.0);
+        // A second edge with nothing engaged holds nothing.
+        assert_eq!(on_outage(&mut core, &mut gate, &mut dev).held_ppm, None);
+    }
+}

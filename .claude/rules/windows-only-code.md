@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/net_pcap.rs"
+  - "crates/dsync-ptp/src/net_pcap.rs"
   - "src/net_winsock.rs"
   - "src/clock/windows.rs"
   - "src/bin/tray.rs"

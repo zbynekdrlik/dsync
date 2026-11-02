@@ -128,8 +128,10 @@ mod tests {
     use super::*;
 
     /// dantesync#129 — real Dante packets (`tests/fixtures/ptpv1/README.md`).
-    const DANTE_SYNC: &[u8] = include_bytes!("../../tests/fixtures/ptpv1/dante-sync.bin");
-    const DANTE_FOLLOW_UP: &[u8] = include_bytes!("../../tests/fixtures/ptpv1/dante-follow-up.bin");
+    const DANTE_SYNC: &[u8] =
+        include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/dante-sync.bin");
+    const DANTE_FOLLOW_UP: &[u8] =
+        include_bytes!("../../crates/dsync-ptp/tests/fixtures/ptpv1/dante-follow-up.bin");
 
     #[test]
     fn a_real_dante_sync_is_logged_129() {

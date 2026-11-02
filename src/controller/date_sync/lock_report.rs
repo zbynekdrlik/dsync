@@ -26,13 +26,13 @@ impl DateSync {
     /// The phase lock wrote `word`: remember its deviation from the learned frequency (0 when the
     /// rate servo's word applies).
     pub(super) fn note_word_deviation(&mut self, engaged_word: Option<f64>) {
-        let deviation = engaged_word.map_or(0.0, |w| w - self.core.integrator_ppm());
-        self.word_deviation_ppm = [self.word_deviation_ppm[1], deviation];
+        let integrator = self.core.integrator_ppm();
+        self.word_deviation.note(engaged_word, integrator);
     }
 
     /// The deviation in force over the last measured span: the average of the last two words'.
     pub(super) fn span_deviation_ppm(&self) -> f64 {
-        (self.word_deviation_ppm[0] + self.word_deviation_ppm[1]) / 2.0
+        self.word_deviation.span_ppm()
     }
 }
 
@@ -70,14 +70,26 @@ where
         if self.date_sync.enabled {
             self.date_sync.lock_gate.locked()
         } else {
-            self.is_locked
+            self.rate.is_locked
         }
     }
 
-    /// One phase-lock window: the gate's verdict on `e`, logged on a change.
+    /// One phase-lock window's verdict on `e`, outside the window path (the tests' helpers; the
+    /// window path is `phase_window::close_window`).
+    #[cfg(test)]
     pub(super) fn judge_reported_lock(&mut self, error_ns: Option<i64>) {
+        let event = crate::phase_window::judge(
+            &mut self.date_sync.lock_gate,
+            &self.date_sync.core,
+            error_ns,
+        );
+        self.after_reported_lock_judged(event);
+    }
+
+    /// The gate judged a window (`crate::phase_window`): log its change, and track since when an
+    /// engaged phase lock has not held [41] (the clock alarm).
+    pub(super) fn after_reported_lock_judged(&mut self, event: Option<GateEvent>) {
         let engaged = self.date_sync.core.engaged();
-        let event = self.date_sync.lock_gate.on_window(engaged, error_ns);
         log_gate_event(event);
         self.date_sync.unsafe_since = match (engaged, self.date_sync.lock_gate.locked()) {
             (true, false) => self.date_sync.unsafe_since.or(Some(Instant::now())),
@@ -89,7 +101,7 @@ where
     /// lock is held while engaged, so it alone would never say a broken reference is lost: an
     /// engaged phase lock that has not held [41] for [`PHASE_UNSAFE_ALARM_AFTER`] is not locked.
     pub(in crate::controller) fn alarm_sees_lock(&self) -> bool {
-        self.is_locked
+        self.rate.is_locked
             && self
                 .date_sync
                 .unsafe_since
@@ -112,23 +124,25 @@ where
         if !self.date_sync.core.engaged() {
             self.date_sync
                 .core
-                .on_window(0, true, self.drift_baseline_ppm, 0.5);
+                .on_window(0, true, self.rate.drift_baseline_ppm, 0.5);
         }
         for _ in 0..crate::lock_gate::LOCK_WINDOWS {
             self.judge_reported_lock(Some(0));
         }
     }
 
-    /// The phase lock disengaged outside a window (the PTP-offline edge): [41] clears at once.
+    /// [41] cleared outside a window (the tests' helper; the PTP-offline edge runs
+    /// `phase_window::on_outage`).
+    #[cfg(test)]
     pub(in crate::controller) fn clear_reported_lock(&mut self) {
-        self.date_sync.word_deviation_ppm = [0.0; 2];
+        self.date_sync.word_deviation.clear();
         self.date_sync.unsafe_since = None;
         let event = self.date_sync.lock_gate.reset();
         log_gate_event(event);
     }
 }
 
-fn log_gate_event(event: Option<GateEvent>) {
+pub(super) fn log_gate_event(event: Option<GateEvent>) {
     match event {
         None => {}
         Some(GateEvent::Locked { error_ns }) => info!(

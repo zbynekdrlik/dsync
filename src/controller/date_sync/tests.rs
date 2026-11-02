@@ -77,7 +77,7 @@ pub(super) fn anchored_controller_with(
         c.configure_ntp_server_mode(100_000);
     }
     c.current_gm_uuid = Some(PL_GM);
-    c.is_locked = true;
+    c.rate.is_locked = true;
     let d = wall_now_ns() - PL_PTP_NOW_NS;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
@@ -208,8 +208,8 @@ fn once_locked_the_phase_lock_owns_the_frequency_word_117() {
         phase_lock_config(),
     );
     c.current_gm_uuid = Some(PL_GM);
-    c.is_locked = true;
-    c.drift_baseline_ppm = 12.0;
+    c.rate.is_locked = true;
+    c.rate.drift_baseline_ppm = 12.0;
     let d = 1_790_000_000_000_000_000_i64;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
@@ -736,7 +736,7 @@ fn the_master_re_aligns_only_on_a_fresh_window_and_removes_the_measured_error_88
     c.service_date_offset(); // back online, but no window since: still nothing
     assert_eq!(c.date_sync.core.anchor_ns(), Some(d - 250_000));
     // A window after PTP returned measures the free-run error: +30 µs.
-    c.is_locked = true;
+    c.rate.is_locked = true;
     c.date_sync.pending_median_ns = Some(d - 250_000 + 30_000);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + 1_000_000_000;
     c.apply_self_tuning_servo(0.0);
@@ -816,7 +816,7 @@ fn samples_from_before_a_ptp_outage_never_mix_into_the_first_window_after_it_117
         phase_lock_config(),
     );
     c.current_gm_uuid = Some(PL_GM);
-    c.is_locked = true;
+    c.rate.is_locked = true;
     let d: i64 = 1_790_000_000 * 1_000_000_000 - 5_000 * 1_000_000_000;
     let mut t1: i64 = 5_000 * 1_000_000_000;
     let feed = |c: &mut PtpController<MockSystemClock, MockPtpNetwork, MockNtpSource>,
@@ -877,8 +877,8 @@ fn a_ptp_outage_holds_the_learned_integrator_not_the_last_word_117() {
         phase_lock_config(),
     );
     c.current_gm_uuid = Some(PL_GM);
-    c.is_locked = true;
-    c.drift_baseline_ppm = 12.0;
+    c.rate.is_locked = true;
+    c.rate.drift_baseline_ppm = 12.0;
     let d = 1_790_000_000_000_000_000_i64;
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
@@ -905,7 +905,7 @@ fn a_ptp_outage_holds_the_learned_integrator_not_the_last_word_117() {
         "the clock holds the learned {learned} ppm through the free-run, got {held}"
     );
     assert!((c.applied_freq_ppm - learned).abs() < 1e-9);
-    assert!((c.drift_baseline_ppm - learned).abs() < 1e-9);
+    assert!((c.rate.drift_baseline_ppm - learned).abs() < 1e-9);
 }
 
 #[test]

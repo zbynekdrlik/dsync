@@ -27,7 +27,7 @@ fn a_grandmaster_frequency_step_is_followed_published_and_never_moves_d_1372() {
     // The NTP master (the date-offset authority), locked, the word handed over at 0 ppm.
     c.configure_ntp_server_mode(100_000);
     c.current_gm_uuid = Some(PL_GM);
-    c.is_locked = true;
+    c.rate.is_locked = true;
     let d = wall_now_ns() - PL_PTP_NOW_NS;
 
     // A box whose oscillator the word already holds (0 ppm); after 30 s the grandmaster speeds up

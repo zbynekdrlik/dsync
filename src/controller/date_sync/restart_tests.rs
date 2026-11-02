@@ -69,7 +69,7 @@ fn started(mut clock: MockSystemClock, ntp: MockNtpSource, path: &Path) -> Ctl {
 /// The first PTP lock: the window's median `t2 − t1` is `anchor`, under grandmaster `gm`.
 fn first_lock(c: &mut Ctl, gm: [u8; 6], anchor: i64) {
     c.current_gm_uuid = Some(gm);
-    c.is_locked = true;
+    c.rate.is_locked = true;
     c.date_sync.pending_median_ns = Some(anchor);
     c.date_sync.pending_t1_ns = wall_now_ns() - anchor;
     c.apply_self_tuning_servo(0.0);

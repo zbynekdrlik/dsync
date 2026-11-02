@@ -86,12 +86,15 @@ fn booted_with(
 fn window(c: &mut Ctl, median: i64, locked: bool) {
     c.current_gm_uuid = Some(PL_GM);
     c.last_ntp_step = None;
-    c.is_locked = locked;
-    c.lock_stable_count = if locked { LOCK_STABLE_COUNT } else { 0 };
+    c.rate.is_locked = locked;
+    c.rate.lock_stable_count = if locked { LOCK_STABLE_COUNT } else { 0 };
     c.date_sync.pending_median_ns = Some(median);
     c.date_sync.pending_t1_ns = wall_now_ns() - median;
     c.apply_self_tuning_servo(0.0);
-    assert_eq!(c.is_locked, locked, "the lock verdict held for this window");
+    assert_eq!(
+        c.rate.is_locked, locked,
+        "the lock verdict held for this window"
+    );
     c.service_boot_ntp();
     c.service_date_offset();
 }
@@ -281,7 +284,10 @@ fn a_boot_step_before_the_first_window_drops_the_samples_taken_before_it_134() {
         "the pre-step samples are dropped"
     );
     assert!(c.last_ntp_step.is_some(), "the post-step grace runs");
-    assert!(c.last_offset_us.is_none(), "no rate kick from the step");
+    assert!(
+        c.rate.last_offset_us.is_none(),
+        "no rate kick from the step"
+    );
     // Past the grace, the post-step samples anchor D on the stepped wall.
     c.last_ntp_step = Some(Instant::now() - Duration::from_secs(3));
     samples(&mut c, d0 + 250 * MS, 4 * ANCHOR_CONFIRM_WINDOWS);
@@ -310,7 +316,7 @@ fn a_legacy_node_resets_its_rate_servo_after_a_late_boot_step_134() {
         "the pre-step samples are dropped"
     );
     assert!(
-        c.last_offset_us.is_none(),
+        c.rate.last_offset_us.is_none(),
         "the rate servo restarts its rate"
     );
     assert!(c.last_ntp_step.is_some(), "the post-step grace runs");

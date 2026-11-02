@@ -4,7 +4,7 @@ paths:
   - "src/ntp.rs"
   - "src/ntp_server.rs"
   - "src/status.rs"
-  - "src/ptp_phase_lock.rs"
+  - "crates/dsync-ptp/src/ptp_phase_lock.rs"
   - "src/date_offset.rs"
   - "src/time_server.rs"
   - "src/sync_loop.rs"
@@ -28,11 +28,11 @@ paths:
   - "src/date_offset/slew.rs"
   - "src/date_offset/slew/tests.rs"
   - "src/controller/date_sync/slew.rs"
-  - "src/lock_gate.rs"
+  - "crates/dsync-ptp/src/lock_gate.rs"
   - "src/controller/date_sync/lock_report.rs"
   - "src/controller/date_sync/lock_sim.rs"
   - "src/controller/date_sync/lock_sim_tests.rs"
-  - "src/ptp_phase_lock/boot_fit.rs"
+  - "crates/dsync-ptp/src/ptp_phase_lock/boot_fit.rs"
   - "src/controller/date_sync/slew/tests.rs"
   - "src/clock/step.rs"
   - "src/clock/mod.rs"
@@ -47,8 +47,8 @@ paths:
   - "src/controller/date_sync/daily_tests.rs"
   - "tests/two_clock_bench/daily.rs"
   - "tests/two_clock_bench/measure.rs"
-  - "src/ptp_phase_lock/freq_step.rs"
-  - "src/ptp_phase_lock/freq_step/tests.rs"
+  - "crates/dsync-ptp/src/ptp_phase_lock/freq_step.rs"
+  - "crates/dsync-ptp/src/ptp_phase_lock/freq_step/tests.rs"
   - "src/controller/date_sync/freq_step.rs"
   - "src/controller/date_sync/freq_step_tests.rs"
   - "tests/two_clock_bench/freq_step.rs"
@@ -180,7 +180,7 @@ date stepping only).
 
 **What replaced it (`system.clock_discipline = "ptp_phase_lock"`, the default):**
 
-- `src/ptp_phase_lock.rs`: ONE PI on `e = (t2 − t1) − D` (the raw offset between the two time
+- `crates/dsync-ptp/src/ptp_phase_lock.rs`: ONE PI on `e = (t2 − t1) − D` (the raw offset between the two time
   bases, not the mod-1 s phase and not calibration-corrected). It gives rate AND phase from the same
   PTP measurement. The rate servo still does acquisition; once PTP-locked the PI takes the
   frequency word bumplessly. Its `dt` is measured in grandmaster time (`t1`), so loop scheduling
@@ -972,7 +972,7 @@ one a reported step size represents.
 
 A Dante leader re-election steps the grandmaster's frequency (~25 ppm on the rig, 29.9.2026) under
 the same identity on the video VLAN, so no re-anchor path sees it, and the ~100 s PI took 8-12
-minutes to follow. `src/ptp_phase_lock/freq_step.rs` detects it and the core re-seeds the integrator.
+minutes to follow. `crates/dsync-ptp/src/ptp_phase_lock/freq_step.rs` detects it and the core re-seeds the integrator.
 What was learned building it:
 
 - **Measure the OPEN-LOOP phase, never the slope of `e`.** `p = e − ∫ word dt` has the oscillator's
@@ -1064,8 +1064,8 @@ What was learned building it:
   fleet run ahead of UTC turns corrections into slews, whose rate term is in the words by design.
   The bench's full `check()` is for its 24 h runs (it expects the grandmaster change and reboot, and a
   UTC drift inside the micro capacity): the flip test asserts the phase / rate envelopes itself.
-- **Replica:** the pure module is a directory now; symlink `src/ptp_phase_lock/` beside
-  `src/ptp_phase_lock.rs` in the scratch crate, or `mod freq_step;` does not resolve.
+- **Replica:** the pure module is a directory now; symlink `crates/dsync-ptp/src/ptp_phase_lock/` beside
+  `crates/dsync-ptp/src/ptp_phase_lock.rs` in the scratch crate, or `mod freq_step;` does not resolve.
 
 ## dantesync#126 (v1.15) — a master restart keeps the fleet date
 
@@ -1321,7 +1321,7 @@ dstack gates its media-clock ready on byte [41] alone; gen3 reported LOCK at e �
 250 µs flow ran late for 3-6 minutes; gate run 41372498483 caught LOCK → PROD → LOCK on a cold
 start. What was learned:
 
-- **[41] is a pure gate on `e` (`src/lock_gate.rs`), not the rate servo's lock.** Set at |e| ≤ 50 µs
+- **[41] is a pure gate on `e` (`crates/dsync-ptp/src/lock_gate.rs`), not the rate servo's lock.** Set at |e| ≤ 50 µs
   for 3 engaged windows, cleared at |e| > 150 µs for 4, at a disengagement, while PTP is stale
   (ROZHODNUTÉ on #146, dstack confirmed; `/status.is_locked`, the tray, the IPC: one definition,
   `PtpController::reported_lock`; legacy keeps the rate lock). The internal `is_locked` (the rate

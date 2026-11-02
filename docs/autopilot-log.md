@@ -908,3 +908,12 @@ canary evidence before continuing.
   dsync's 02:00 UTC date window, and skipped when dev's head already passed; no `--restore` after a
   lease refusal; the `/status` sampler must survive the run.
 - Part 2 (receiver heartbeat records) stays open on #98 and waits on the owner.
+- #136 (v1.24.0, library form): there is now a workspace crate, `crates/dsync-ptp`. The PTP code
+  moved into it verbatim (5e61330). The rate servo was extracted as `RateServo<T>` with its
+  arithmetic unchanged (628168a). The in-process `Follower` was added: a virtual clock over
+  `CLOCK_MONOTONIC_RAW`/QPC, a seqlock read, a wall-step straddle drop, and [41]'s lock gate.
+  - Tests: `follower::core::tests` (closed-loop world), `follower::tests` (2 followers on real
+    sockets) and `tests/library_acceptance.rs` (the service and 2 followers on one PC).
+  - Acceptance on dev1: all locked in 51.9 s. Over 30 s, service vs follower was 27.1 µs worst and
+    14.0 µs mean, and follower vs follower 0.0 µs (the same kernel stamp).
+  - CI runs everything with `--workspace`.

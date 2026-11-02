@@ -873,3 +873,21 @@ fn the_cli_interface_overrides_the_config_131() {
     assert_eq!(cfg.pinned_interface(Some("  ")).as_deref(), Some("enp56s0"));
     assert_eq!(SystemConfig::default().pinned_interface(None), None);
 }
+
+/// dsync#136: the in-process follower (`dsync_ptp::follower`) runs the service's sample
+/// windows, so its constants must be the service's defaults; and the crate is released with the
+/// service, under the same version (consumers pin the crate by the service's tag).
+#[test]
+fn the_follower_library_runs_the_service_window_defaults_and_its_version_136() {
+    let filters = FilterConfig::default();
+    assert_eq!(
+        filters.sample_window_size,
+        dsync_ptp::follower::WINDOW_SAMPLES
+    );
+    #[cfg(not(windows))]
+    assert_eq!(
+        filters.min_delta_ns,
+        dsync_ptp::follower::MIN_SAMPLE_SPACING_NS
+    );
+    assert_eq!(dsync_ptp::VERSION, env!("CARGO_PKG_VERSION"));
+}

@@ -12,7 +12,8 @@ use crate::ptp::{PtpV1Header, LEGACY_MISREAD_GM_UUID};
 use crate::traits::MockNtpSource;
 
 /// A real Dante Sync, captured read-only (`tests/fixtures/ptpv1/README.md`).
-const DANTE_SYNC: &[u8] = include_bytes!("../../../tests/fixtures/ptpv1/dante-sync.bin");
+const DANTE_SYNC: &[u8] =
+    include_bytes!("../../../crates/dsync-ptp/tests/fixtures/ptpv1/dante-sync.bin");
 const DANTE_GM: [u8; 6] = [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14];
 /// Another port of an Audinate clock: another MAC, so another PTPv1 UUID.
 const OTHER_PORT: [u8; 6] = [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x15];

@@ -74,7 +74,7 @@ where
 
     fn seed_frequency(&mut self, record: DriftRecord, now_unix_s: i64) {
         let ppm = record.freq_ppm;
-        self.drift_baseline_ppm = ppm;
+        self.rate.drift_baseline_ppm = ppm;
         self.applied_freq_ppm = ppm;
         self.last_adj_ppm = ppm;
         self.freq_seed.seed_ppm = Some(ppm);
@@ -145,12 +145,12 @@ where
                      off the seed",
                     SEED_JUDGE_WINDOWS, mean_rate_ppm
                 );
-                self.drift_baseline_ppm = 0.0;
-                self.lock_stable_count = 0;
-                self.smoothed_rate_ppm -= word_ppm;
-                self.spike_filter.clear();
+                self.rate.drift_baseline_ppm = 0.0;
+                self.rate.lock_stable_count = 0;
+                self.rate.smoothed_rate_ppm -= word_ppm;
+                self.rate.spike_filter.clear();
                 // Its history mixes rates against the seed with rates against 0: a false jitter.
-                self.jitter_estimator.clear();
+                self.rate.jitter_estimator.clear();
                 word_ppm
             }
         }
@@ -193,7 +193,7 @@ where
             return;
         };
         let record = DriftRecord {
-            freq_ppm: self.drift_baseline_ppm,
+            freq_ppm: self.rate.drift_baseline_ppm,
             written_unix_s: wall_now_ns().div_euclid(1_000_000_000),
         };
         match drift_file::save(&path, &record) {

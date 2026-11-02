@@ -77,6 +77,11 @@ on either platform skips `publish` — no release with a missing asset).
 - Dante stability gate (#98): `gate.yml` on the `companion` runner, the pass rule, and the
   tree-hash release coupling in `auto-release`. The gate must be green on dev's tree BEFORE merging
   to master, or the release is refused → `docs/dante-gate.md`
+- The library form (#136, v1.24): `crates/dsync-ptp` holds the shared PTP code and the in-process
+  follower. It covers the workspace and re-export layout, the extracted `RateServo` steps, the
+  virtual clock over the RAW counter, the stamp conversion that drops a packet straddling a wall
+  step, why followers on one PC read bit-identical times, and the real-socket acceptance test
+  beside the service → `.claude/rules/ptp-library.md` (auto-loads on `crates/dsync-ptp/**`)
 - Windows-only (`#[cfg(windows)]`) code — what CI actually verifies + a free local compile-check
   without the Npcap SDK → `.claude/rules/windows-only-code.md` (auto-loads on its `paths:`)
 - Editing `.github/workflows/*.yml` — local `actionlint` validation, and why a workflow being
@@ -102,12 +107,12 @@ on either platform skips `publish` — no release with a missing asset).
   `POST /date/step`; v1.19: the fleet date placed at the FIRST PTP window with one step, the boot
   NTP reading off the loop, the first engagement holding the early anchor through the pull) →
   `.claude/rules/clock-discipline-and-testing.md` (auto-loads on
-  `src/ptp_phase_lock.rs` / `src/date_offset.rs` / `src/time_server.rs` / their `tests.rs` /
+  `crates/dsync-ptp/src/ptp_phase_lock.rs` / `src/date_offset.rs` / `src/time_server.rs` / their `tests.rs` /
   `tests/two_clock_bench.rs` / `tests/simulation_e2e.rs`)
-- DSYX [41] = the phase lock within the bound (#146, v1.23 — `src/lock_gate.rs` 50 µs in / 150 µs
+- DSYX [41] = the phase lock within the bound (#146, v1.23 — `crates/dsync-ptp/src/lock_gate.rs` 50 µs in / 150 µs
   out, the rate servo decoupled from the phase lock's own deviation, the boot fit and its once-only
   re-seed, the whole-controller closed-loop sim) → `.claude/rules/clock-discipline-and-testing.md`
-  (auto-loads on `src/lock_gate.rs` / `src/ptp_phase_lock/boot_fit.rs` / `controller/date_sync/lock_*`)
+  (auto-loads on `crates/dsync-ptp/src/lock_gate.rs` / `crates/dsync-ptp/src/ptp_phase_lock/boot_fit.rs` / `controller/date_sync/lock_*`)
 - Cold-boot acquisition + the drift file (#142, v1.22 — a window without a previous offset is not a
   measurement; `drift.json` saved only while LOCKED, the seed judged against the SEED itself on the
   first 4 measured windows; ctrlc `termination` so a systemd stop runs the shutdown save) →
@@ -133,7 +138,7 @@ on either platform skips `publish` — no release with a missing asset).
   per-socket-loopback-address test trick) →
   `.claude/rules/ptp-liveness-rejoin.md` (auto-loads on its `paths:`)
 - PTPv1 wire format + the grandmaster identity (#129 — the 40-byte header proven on real Dante
-  bytes in `tests/fixtures/ptpv1/`, the Follow_Up offset that was right only by accident, the
+  bytes in `crates/dsync-ptp/tests/fixtures/ptpv1/`, the Follow_Up offset that was right only by accident, the
   pre-1.17 misread constant `00:00:00:00:01:00` and its three consumers (the restart restore, the
   report-only follower check, the constant kept on the 31900 wire), report-only sender fields,
   a read-only tcpdump capture on dev1) →
@@ -281,6 +286,11 @@ DanteSync is a high-precision PTP (Precision Time Protocol) synchronization tool
 
 ### Core Components
 
+Since v1.24 (#136) the PTP code lives in the workspace crate `crates/dsync-ptp`: the files below
+marked (crate). The service re-exports them, so `crate::ptp::…` paths are unchanged. Applications
+link the same crate's `follower` to lock to the grandmaster in their own process.
+
+
 - **`main.rs`** - Entry point, CLI parsing, Windows service logic, IPC server setup, and main sync loop orchestration
 - **`controller.rs`** - `PtpController<C, N, S>` - Generic controller that coordinates PTP sync. Contains rate-based servo logic, mode transitions (ACQ→PROD→LOCK), and clock adjustments
 - **`ptp.rs`** - PTPv1 packet parsing (headers, Sync bodies, FollowUp bodies)
@@ -305,7 +315,7 @@ DanteSync is a high-precision PTP (Precision Time Protocol) synchronization tool
 
 **The default discipline (`system.clock_discipline = "ptp_phase_lock"`, #117 + #88):**
 
-1. **PTP (Dante)** → `adjust_frequency()`: rate AND phase. Once PTP-locked, `src/ptp_phase_lock.rs`
+1. **PTP (Dante)** → `adjust_frequency()`: rate AND phase. Once PTP-locked, `crates/dsync-ptp/src/ptp_phase_lock.rs`
    holds `wall = PTP time + D` with a PI on `e = (t2 − t1) − D`. Every box ticks with the GM and
    shows the same wall time (µs). A GM change re-anchors `D` with no wall step.
 2. **NTP (UTC)** → the fleet date offset `D` only. The NTP master alone reads UTC and is the

@@ -1,11 +1,12 @@
 ---
 paths:
-  - "src/ptp_rejoin.rs"
+  - "crates/dsync-ptp/src/ptp_rejoin.rs"
   - "src/controller/ptp_liveness.rs"
   - "src/controller/ptp_liveness/tests.rs"
   - "src/controller/date_sync/rejoin_tests.rs"
-  - "src/net_linux.rs"
+  - "crates/dsync-ptp/src/net_linux.rs"
   - "src/net_pcap.rs"
+  - "crates/dsync-ptp/src/net_pcap.rs"
   - "src/net_winsock.rs"
   - "src/traits.rs"
 ---
@@ -48,7 +49,7 @@ offset `D` from its own NTP-stepped wall: 29.9.2026, −19.8 ms, every box stepp
   gradual unlock; the learned frequency is held) is deliberately NOT cleared: when the packets
   return the node publishes that lock again at once, as the decided design says ("LOCK returns
   with the packets"), and the phase lock re-engages on its next window. **Amended by #146 (v1.23)
-  under the phase lock:** the published LOCK is DSYX [41]'s phase gate (`src/lock_gate.rs`), and the
+  under the phase lock:** the published LOCK is DSYX [41]'s phase gate (`crates/dsync-ptp/src/lock_gate.rs`), and the
   offline edge clears it, so after the outage it returns once the re-engaged phase lock has |e| ≤
   50 µs for 3 windows (a Realigned re-engagement starts at e = 0: ~1.5 s). Under `"legacy"` the
   published LOCK is still the servo's lock and returns with the packets.

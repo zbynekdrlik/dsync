@@ -29,6 +29,33 @@ A high-precision PTP (Precision Time Protocol) synchronization tool optimized fo
   `libayatana-appindicator3-1`, `libxdo3`. The NO DANTE CLOCK alarm is notified by the daemon
   itself (`notify-send`), so the Linux tray shows no notifications.
 
+## Library: an in-process PTPv1 follower (`dsync-ptp`)
+
+Applications that must lock to the grandmaster in their own process use the library
+crate `crates/dsync-ptp`. It holds the service's own PTP code: the PTPv1 parser, the receive
+paths, the rate servo, the phase lock and the lock gate. A fix lands once for both.
+
+```toml
+dsync-ptp = { git = "https://github.com/zbynekdrlik/dsync", tag = "v1.24.0" }
+```
+
+```rust
+let follower = dsync_ptp::follower::Follower::start(
+    dsync_ptp::follower::FollowerConfig::on_interface("enp2s0"),
+)?;
+let clock = follower.clock(); // Clone + Send + Sync
+let ptp_ns = clock.now_ptp_ns(); // lock-free; None until anchored
+let state = clock.state(); // locked (DSYX [41]), holdover, gm_uuid, date_offset_ns, epoch, ...
+```
+
+- It never sends and never touches the system clock. It runs a virtual clock over
+  `CLOCK_MONOTONIC_RAW` (Linux) or QPC (Windows).
+- On Linux it shares UDP 319/320 with the service and other followers (`SO_REUSEADDR`). The app
+  needs `CAP_NET_BIND_SERVICE` (or root) to bind 319.
+- On Windows it captures with Npcap, which must be installed.
+- On one PC, the service and the library give the same PTP time within the lock bound
+  (`tests/library_acceptance.rs`).
+
 ## Installation
 
 ### Linux

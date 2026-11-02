@@ -127,26 +127,26 @@ fn run_for(seed: Option<f64>, noise_seed: u64, jitter_us: f64, windows: usize) -
             *sample = true_offset_us + jitter_us * noise.gauss();
         }
         samples.sort_by(|a, b| a.total_cmp(b));
-        if c.last_offset_us.is_some() {
-            c.last_offset_time = Some(Instant::now() - Duration::from_secs_f64(WINDOW_S));
+        if c.rate.last_offset_us.is_some() {
+            c.rate.last_offset_time = Some(Instant::now() - Duration::from_secs_f64(WINDOW_S));
         }
         c.apply_self_tuning_servo(samples[SAMPLES / 2]);
-        if c.in_production_mode && !prod {
+        if c.rate.in_production_mode && !prod {
             out.prod_entries.push(n);
         }
-        if !c.in_production_mode && prod {
+        if !c.rate.in_production_mode && prod {
             out.acq_returns.push(n);
         }
-        prod = c.in_production_mode;
+        prod = c.rate.in_production_mode;
         if n == SEED_JUDGE_WINDOWS + 2 {
-            out.baseline_after_judge = c.drift_baseline_ppm;
+            out.baseline_after_judge = c.rate.drift_baseline_ppm;
         }
-        if c.is_locked && out.lock_window.is_none() {
+        if c.rate.is_locked && out.lock_window.is_none() {
             out.lock_window = Some(n);
         }
     }
     out.source = c.freq_seed.source.clone().into();
-    out.final_baseline = c.drift_baseline_ppm;
+    out.final_baseline = c.rate.drift_baseline_ppm;
     out
 }
 
