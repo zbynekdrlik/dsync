@@ -318,6 +318,9 @@ fn run<N: PtpNetwork>(
 struct Receiver {
     stamps: StampConverter,
     warned_at: Option<Instant>,
+    /// A step was revealed by the closing read of the last pass (after an empty receive or an
+    /// error): a packet stamped before it may be the first of the next pass.
+    step_carried: bool,
 }
 
 impl Receiver {
@@ -327,6 +330,7 @@ impl Receiver {
         Receiver {
             stamps,
             warned_at: None,
+            step_carried: false,
         }
     }
 
@@ -336,14 +340,16 @@ impl Receiver {
     /// pass that follows it. Every packet of that pass may have been received (and stamped)
     /// before the step yet be converted after it, so the WHOLE pass is dropped, not only the
     /// packet that revealed the step: packets queued across a step (a stalled thread) would
-    /// otherwise each be off by the step.
+    /// otherwise each be off by the step. A step revealed by the pass's CLOSING read (after the
+    /// empty receive, or an error) also drops the next pass: a packet that arrived between that
+    /// receive and the step is read there, under readings that look continuous.
     fn pass<N: PtpNetwork>(
         &mut self,
         network: &mut N,
         core: &mut FollowerCore,
         read: &mut impl FnMut() -> TimeBaseReading,
     ) -> bool {
-        let mut stepped = false;
+        let mut stepped = std::mem::take(&mut self.step_carried);
         let mut time_message = false;
         loop {
             let received = network.recv_packet();
@@ -355,6 +361,7 @@ impl Receiver {
                 );
                 core.on_wall_step();
                 stepped = true;
+                self.step_carried = !matches!(received, Ok(Some(_)));
             }
             match received {
                 Ok(Some((data, size, wall_rx, source_ip))) => {

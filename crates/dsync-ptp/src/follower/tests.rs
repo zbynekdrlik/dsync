@@ -220,6 +220,7 @@ fn a_receive_pass_that_sees_a_wall_step_drops_every_packet_queued_across_it() {
     let mut rx = Receiver {
         stamps: StampConverter::new(),
         warned_at: None,
+        step_carried: false,
     };
     rx.stamps.observe(mono::TimeBaseReading {
         mono_ns: 0,
@@ -288,4 +289,46 @@ fn dropping_the_follower_ends_its_thread_and_the_clock_says_so() {
     assert!(c.alive());
     drop(f);
     assert!(!c.alive());
+}
+
+/// The step shows only on the closing read of a pass (after its empty receive): a Sync stamped
+/// before the step is read first thing in the NEXT pass, under readings that look continuous. That
+/// pass is dropped too.
+#[test]
+fn a_step_seen_only_after_the_empty_receive_also_drops_the_next_pass() {
+    use crate::ptp_tx::{self, Sender};
+    let sender = Sender {
+        source_uuid: [0, 0x1d, 0xc1, 8, 8, 8],
+        grandmaster_uuid: [0, 0x1d, 0xc1, 8, 8, 8],
+    };
+    let mut core = core::FollowerCore::new(GmAllowlist::default(), 0);
+    let mut rx = Receiver {
+        stamps: StampConverter::new(),
+        warned_at: None,
+        step_carried: false,
+    };
+    rx.stamps.observe(mono::TimeBaseReading {
+        mono_ns: 0,
+        wall_minus_mono_ns: WALL_MINUS_MONO,
+    });
+    // An empty pass whose closing read sees the step.
+    let mut empty = Script(Default::default());
+    let mut after_step = readings(1_000_000, |_| WALL_MINUS_MONO + 300_000_000);
+    assert!(!rx.pass(&mut empty, &mut core, &mut after_step));
+    // The next pass holds a Sync stamped before the step.
+    let mut late =
+        Script(vec![(ptp_tx::sync(&sender, 1, 1_000), WALL_MINUS_MONO + 900_000)].into());
+    let mut steady = readings(5_000_000, |_| WALL_MINUS_MONO + 300_000_000);
+    assert!(!rx.pass(&mut late, &mut core, &mut steady));
+    assert_eq!(core.straddled(), 1);
+    assert_eq!(core.model().gm_uuid, None);
+    // And the one after is taken.
+    let mut next = Script(
+        vec![(
+            ptp_tx::sync(&sender, 2, 2_000),
+            WALL_MINUS_MONO + 310_000_000,
+        )]
+        .into(),
+    );
+    assert!(rx.pass(&mut next, &mut core, &mut steady));
 }
