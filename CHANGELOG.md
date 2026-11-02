@@ -5,6 +5,24 @@ All notable changes to DanteSync will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] - 2026-11-02
+
+### Added
+
+- A Dante stability gate on real hardware (#98, part 1). `.github/workflows/gate.yml` runs on every
+  push to `dev`, every night, and on demand. It runs on the `companion` runner only. It installs
+  the candidate daemon through `dsync-gate-install`, which refuses while the rig lease is held.
+  Then it runs dstack's `dante-stack-dev clock` (v0.4.33, sha256-pinned) for one hour against the
+  box's own time server, samples `/status` every 10 s, and always puts the previous binary back.
+  A pass is exactly one `Ready`, zero re-anchors and zero holdovers over a complete log. See
+  `docs/dante-gate.md`.
+
+### Changed
+
+- `auto-release` tags a version only after a successful gate run tested the same tree as the
+  master commit (`scripts/dante_gate.py release-check`). A release is never published from code
+  that did not pass the gate.
+
 ## [1.22.0] - 2026-11-02
 
 ### Fixed
