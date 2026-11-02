@@ -1301,3 +1301,8 @@ LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was l
   window 1, back to ACQ at window 4. The model's cold LOCK (~33 s) is
   faster than the rig's (~70 s after Sync established): read the RELATIVE numbers, and the rig's
   own boot log for the absolute one.
+- **Keep closed-loop statistics short.** The first version ran 160 loops of 600 windows per
+  jitter case; under CI's coverage instrumentation that CPU starved the NTP-burst timing test
+  running beside it (`the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136`: a
+  424 ms stall vs its 300 ms bound, PR 143's first run). Each statistical run now stops where its
+  assertion is decided (`run_for`: 60 windows to a lock, 6 to a verdict), ~11x fewer windows.

@@ -31,7 +31,7 @@ const LINUX_JITTER_US: f64 = 1.0;
 /// … and a Windows Npcap box: a moderate and a pessimistic per-sample figure (neither measured on
 /// the rig).
 const WINDOWS_JITTER_US: [f64; 2] = [10.0, 30.0];
-const MAX_WINDOWS: usize = 600;
+const MAX_WINDOWS: usize = 200;
 
 struct Run {
     /// Window (1-based) at which LOCK was reached.
@@ -72,6 +72,13 @@ impl Noise {
 
 /// Run the closed loop from a fresh controller; `seed` = the drift file's frequency (or none).
 fn run(seed: Option<f64>, noise_seed: u64, jitter_us: f64) -> Run {
+    run_for(seed, noise_seed, jitter_us, MAX_WINDOWS)
+}
+
+/// [`run`] for `windows` windows only: the statistics below run 160 closed loops per case, and
+/// under CI's coverage instrumentation a full-length run each starved the timing-sensitive tests
+/// running beside them (the #136 loop-stall bound).
+fn run_for(seed: Option<f64>, noise_seed: u64, jitter_us: f64, windows: usize) -> Run {
     let word = Arc::new(std::sync::Mutex::new(0.0_f64));
     let w = word.clone();
     let mut clock = MockSystemClock::new();
@@ -112,7 +119,7 @@ fn run(seed: Option<f64>, noise_seed: u64, jitter_us: f64) -> Run {
     };
     let mut prod = false;
     let dt_sample = WINDOW_S / SAMPLES as f64;
-    for n in 1..=MAX_WINDOWS {
+    for n in 1..=windows {
         let applied = *word.lock().expect("word");
         let mut samples = [0.0_f64; SAMPLES];
         for sample in samples.iter_mut() {
@@ -198,7 +205,9 @@ fn a_good_seed_is_kept_under_windows_level_jitter_142() {
     // seed. At 10 µs it is always kept. A seed from another oscillator is dropped every time.
     for jitter in WINDOWS_JITTER_US {
         for good in [LEARNED_PPM - 2.0, LEARNED_PPM + 2.0] {
-            let runs: Vec<Run> = many_seeds().map(|s| run(Some(good), s, jitter)).collect();
+            let runs: Vec<Run> = many_seeds()
+                .map(|s| run_for(Some(good), s, jitter, 60))
+                .collect();
             let kept: Vec<&Run> = runs
                 .iter()
                 .filter(|r| r.source.as_deref() == Some("file"))
@@ -220,7 +229,7 @@ fn a_good_seed_is_kept_under_windows_level_jitter_142() {
             }
             let dropped = many_seeds()
                 .filter(|&s| {
-                    run(Some(good + 50.0), s, jitter)
+                    run_for(Some(good + 50.0), s, jitter, SEED_JUDGE_WINDOWS + 2)
                         .source
                         .as_deref()
                         .is_some_and(|src| src.starts_with("rejected: "))
