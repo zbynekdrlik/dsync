@@ -390,8 +390,15 @@ fn a_runner_that_cannot_start_a_burst_counts_as_a_failed_check_136() {
 /// One loop pass as `crate::sync_loop::run` makes it (the iteration, then the poll interval).
 const SLOW_ROUND_TRIP: Duration = Duration::from_millis(200);
 
-/// The loop's longest pause while the ~1 s burst runs (normally ~1 ms; generous on purpose).
-const LOOP_GAP_BOUND: Duration = Duration::from_millis(300);
+/// Loop passes that must complete while the burst is still in flight. A loop that blocked on the
+/// burst would apply its result inside the dispatching pass (1 pass); a free loop makes hundreds.
+///
+/// dantesync#146: this replaced a wall-clock bound (the longest gap between passes < 300 ms). Under
+/// `cargo tarpaulin` (ptrace, every instrumented line a trap, the whole suite in parallel on a
+/// 2-vCPU runner) the test thread itself is descheduled for 323 ms, 473 ms and 1.009 s
+/// (run 41390378678) while the loop was provably not blocked (971 passes). The pass count proves
+/// the property the test names without depending on the scheduler.
+const MIN_PASSES_DURING_BURST: u32 = 10;
 
 #[test]
 fn the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136() {
@@ -423,8 +430,6 @@ fn the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136() {
     c.last_ntp_check = Instant::now() - Duration::from_secs(60);
 
     let started = Instant::now();
-    let mut longest = Duration::ZERO;
-    let mut last = Instant::now();
     let mut iterations = 0u32;
     while status.read().unwrap().ntp_updated_ts == 0 {
         assert!(
@@ -434,18 +439,24 @@ fn the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136() {
         c.process_loop_iteration().expect("an iteration");
         iterations += 1;
         std::thread::sleep(crate::sync_loop::POLL_INTERVAL);
-        let now = Instant::now();
-        longest = longest.max(now - last);
-        last = now;
     }
+    let burst_took = started.elapsed();
     running.store(false, Ordering::SeqCst);
 
+    // The burst really was slow (each query waits SLOW_ROUND_TRIP), so the pass count below is
+    // evidence, not luck.
     assert!(
-        longest < LOOP_GAP_BOUND,
-        "the sync loop stalled {:?} while the NTP burst ran (bound {:?}, {} iterations)",
-        longest,
-        LOOP_GAP_BOUND,
-        iterations
+        burst_took >= SLOW_ROUND_TRIP,
+        "the burst finished in {:?}, faster than one upstream round trip ({:?})",
+        burst_took,
+        SLOW_ROUND_TRIP
+    );
+    assert!(
+        iterations >= MIN_PASSES_DURING_BURST,
+        "the sync loop made only {} passes during a {:?} NTP burst (at least {}): it blocked on it",
+        iterations,
+        burst_took,
+        MIN_PASSES_DURING_BURST
     );
     let s = status.read().unwrap();
     assert!(!s.ntp_failed);
