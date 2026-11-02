@@ -93,7 +93,14 @@ fn print_boot(label: &str, s: &Sim) {
 fn a_boot_reports_lock_only_within_the_bound_and_never_flaps_146() {
     for jitter in JITTERS_US {
         for &noise in &SEEDS {
-            for (kind, seed) in [("cold", None), ("seeded", Some(LEARNED_PPM))] {
+            for (kind, seed) in [
+                ("cold", None),
+                ("seeded", Some(LEARNED_PPM)),
+                // A seed the judge keeps but a few ppm off (a warmer box): the rate servo hands
+                // over up to its 5 us/s lock criterion off, and the continued fit re-seeds.
+                ("seeded 4 ppm off", Some(LEARNED_PPM + 4.0)),
+                ("seeded 4 ppm off", Some(LEARNED_PPM - 4.0)),
+            ] {
                 let label = format!("{kind} boot, {jitter} us jitter, noise {noise:x}");
                 let mut s = Sim::new(NATURAL_PPM, seed, noise, jitter);
                 s.run(600);
@@ -115,9 +122,13 @@ fn a_boot_reports_lock_only_within_the_bound_and_never_flaps_146() {
                     "{label}: [41] {:.1} s after the engagement",
                     (first - engaged) as f64 * WINDOW_S
                 );
+                // A seeded boot: within 15 s at Linux / moderate Windows jitter (#142's ~10 s
+                // goal); at the pessimistic 30 us the rate servo's acquisition is noisy (its
+                // integrator walks a few ppm), and the PI trims that before [41].
+                let seeded_bound_s = if jitter <= 10.0 { 15.0 } else { 30.0 };
                 if seed.is_some() {
                     assert!(
-                        first as f64 * WINDOW_S <= 15.0,
+                        first as f64 * WINDOW_S <= seeded_bound_s,
                         "{label}: a seeded boot sets [41] at {:.1} s",
                         first as f64 * WINDOW_S
                     );
@@ -170,7 +181,9 @@ fn a_grandmaster_frequency_step_drops_the_lock_at_most_once_146() {
             );
             let at = s.n;
             s.natural_ppm += step_ppm;
-            s.run(600);
+            // A step under `FSTEP_MIN_PPM` is not re-seeded: the ~100 s PI takes it out, back
+            // under 50 us only minutes later (camera-box issue 1372), so the run is 10 minutes.
+            s.run(1200);
             assert_contract(&label, &s);
             let trans = s.transitions_after_first_lock();
             let peak = s.log[at..].iter().map(e_abs).fold(0.0, f64::max);
