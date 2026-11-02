@@ -38,7 +38,11 @@ windows = { version = "0.52", features = [
     "Win32_System_Performance",
     "Win32_System_SystemInformation",
 ] }
-pcap = "2.2"
 
 [dev-dependencies]
 mockall = "0.12"
+
+# dsync#136: run a follower beside the service and compare (a release asset on Windows).
+[[example]]
+name = "dsync-ptp-probe"
+test = true
