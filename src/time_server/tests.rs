@@ -225,7 +225,7 @@ fn test_build_response_ntp_offset_negative() {
 
 // ---- dsync#88: the versioned date-offset extension ------------------------------
 
-fn master_status() -> SyncStatus {
+pub(super) fn master_status() -> SyncStatus {
     let mut status = SyncStatus::default();
     status.is_locked = true;
     status.mode = "LOCK".to_string();
@@ -241,9 +241,9 @@ fn master_status() -> SyncStatus {
 
 #[test]
 fn a_dsyx_request_is_padded_to_the_base_reply_size_88() {
-    // The reply is 112 bytes (104 before the #119 slew fields): a request of the base reply's
-    // size keeps the reply-to-request ratio at 1.75 (an 8-byte request would make every spoofed
-    // one a 14x amplifier).
+    // The reply is 120 bytes (dsync#150; 112 before it, 104 before the #119 slew fields): a
+    // request of the base reply's size keeps the reply-to-request ratio at 1.875 (an 8-byte
+    // request would make every spoofed one a 15x amplifier).
     let req = build_ext_request(3);
     assert_eq!(req.len(), EXT_REQUEST_SIZE);
     assert_eq!(EXT_REQUEST_SIZE, RESPONSE_SIZE);
@@ -307,10 +307,7 @@ fn test_ext_request_magic() {
 fn the_extended_reply_is_the_same_base_plus_the_extension_88() {
     let status = master_status();
     let ext_reply = build_response_ext(7, &status);
-    assert_eq!(
-        ext_reply.len(),
-        RESPONSE_SIZE + crate::date_offset::EXT_SIZE_V2
-    );
+    assert_eq!(ext_reply.len(), DSYX_REPLY_SIZE);
     let base = build_response(7, &status);
     // Every base field an old client reads is identical in the extended reply, except the
     // two clock READINGS (system time [8-15], monotonic counter [16-23]) which are sampled
@@ -377,7 +374,7 @@ fn a_slew_is_published_as_the_slew_never_as_a_backward_step_119() {
     // Even a stale pending-step value must not turn it into a step.
     status.date_step_pending_ns = Some(-41_000_000);
     let reply = build_response_ext(11, &status);
-    assert_eq!(reply.len(), RESPONSE_SIZE + crate::date_offset::EXT_SIZE_V2);
+    assert_eq!(reply.len(), DSYX_REPLY_SIZE);
     let ext = parse_reply(&reply, 11, Instant::now(), 0)
         .unwrap()
         .ext
@@ -404,7 +401,7 @@ fn a_micro_correction_is_published_with_its_micro_flag_119() {
     status.date_step_pending_ns = Some(500_000);
     status.date_offset_micro = true;
     let reply = build_response_ext(12, &status);
-    assert_eq!(reply.len(), RESPONSE_SIZE + crate::date_offset::EXT_SIZE_V2);
+    assert_eq!(reply.len(), DSYX_REPLY_SIZE);
     assert_eq!(reply[RESPONSE_SIZE], 3, "extension v3");
     let ext = parse_reply(&reply, 12, Instant::now(), 0)
         .unwrap()
@@ -443,13 +440,15 @@ fn no_extension_is_published_without_the_anchor_grandmaster_88() {
     // published in a time base nobody can identify.
     let mut status = master_status();
     status.date_offset_gm_uuid = None;
-    assert_eq!(build_response_ext(1, &status).len(), RESPONSE_SIZE);
+    let reply = build_response_ext(1, &status);
+    assert_eq!(reply.len(), DSYX_REPLY_SIZE, "fixed size since dsync#150");
+    assert_eq!(parse_reply(&reply, 1, Instant::now(), 0).unwrap().ext, None);
 }
 
 #[test]
-fn a_node_without_date_state_answers_dsyx_with_the_base_only_88() {
+fn a_node_without_date_state_answers_dsyx_with_an_empty_extension_slot_88() {
     let reply = build_response_ext(1, &SyncStatus::default());
-    assert_eq!(reply.len(), RESPONSE_SIZE);
+    assert_eq!(reply.len(), DSYX_REPLY_SIZE, "fixed size since dsync#150");
     let parsed = parse_reply(&reply, 1, Instant::now(), 0).expect("valid base reply");
     assert_eq!(parsed.ext, None);
 }
@@ -563,7 +562,7 @@ fn the_server_answers_dsyn_with_64_bytes_and_dsyx_with_the_extension_over_real_u
 
     client.send_to(&build_ext_request(6), addr).unwrap();
     let n = reply_within_5s(&client, &mut buf);
-    assert_eq!(n, RESPONSE_SIZE + crate::date_offset::EXT_SIZE_V2);
+    assert_eq!(n, DSYX_REPLY_SIZE);
     let parsed = parse_reply(&buf[..n], 6, Instant::now(), 0).unwrap();
     assert_eq!(
         parsed.ext.unwrap().announce.date_offset_ns,
