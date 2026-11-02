@@ -6,7 +6,8 @@
 //! while it writes, even again after, Release) and then makes it the active one (Release). A
 //! reader loads the active index (Acquire), copies that slot's words between two reads of its
 //! sequence, and retries only if that slot was written meanwhile — which needs the writer to have
-//! completed a whole write AND started the next one during the copy. So a reader that preempts
+//! completed a whole write AND started the next one during the copy — or if the active index
+//! changed since the reader loaded it (a slot rewritten but not yet published is never read). So a reader that preempts
 //! the writer mid-write (an RT audio thread at SCHED_FIFO on the writer's core) never spins on
 //! it: it reads the other, complete slot. The words are atomics, so an overlapping copy is never
 //! undefined behaviour — it is only discarded. No allocation, no lock, no OS call.
@@ -79,8 +80,17 @@ impl<const N: usize> SeqLock<N> {
     }
 
     /// One read attempt of slot `i`, the active index this reader loaded (maybe long ago).
+    ///
+    /// The copy counts only if `i` is still the active index after it. Without that check a
+    /// reader that stalled after loading `i` — while the writer published the other slot and
+    /// then completely rewrote slot `i` without publishing it yet — returns that unpublished
+    /// write, and its next read returns the published, older one: time goes back (dsync#150 CI).
+    /// Retrying here never waits for a write in progress: the index only changes when a write has
+    /// completed. Ordering: reading a word the writer stored after its Release fence, then the
+    /// Acquire fence in [`Slot::try_read`], makes every earlier publication of `active` visible.
     fn try_read_at(&self, i: usize) -> Option<[u64; N]> {
-        self.slots[i & 1].try_read()
+        let words = self.slots[i & 1].try_read()?;
+        (self.active.load(Ordering::Acquire) == i).then_some(words)
     }
 
     /// How many writes completed.

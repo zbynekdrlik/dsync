@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sourceUuid`, `/status.ptp_source_uuid`; zeros = no Sync followed yet), `[118-119]` reserved.
   A reader detects the field by a reply length of at least 118. DSYN replies stay 64 bytes.
 
+### Fixed
+
+- `dsync-ptp`'s seqlock (the follower's lock-free model publication, #136): a reader that loaded
+  the active slot index, stalled while the writer published the other slot and then completely
+  rewrote this one, returned that not-yet-published write; its next read returned the published,
+  older one, so a reader's time went back. A read now counts only if the active index is still
+  the one it loaded (found by CI Coverage on PR #151: "a read went back in time"). Applications
+  that link `dsync-ptp` 1.24/1.25 (dstack) should take 1.26.
+
 ## [1.25.0] - 2026-11-02
 
 ### Changed
