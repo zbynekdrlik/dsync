@@ -106,3 +106,15 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
 - Windows: `cargo check --target x86_64-pc-windows-gnu --workspace --tests --lib`. CI's Windows leg
   runs `cargo test --workspace`. The crate's `build.rs` delay-loads `wpcap.dll` for its own test
   binaries. A consumer app needs the Npcap runtime, and should delay-load `wpcap.dll` the same way.
+
+## The seqlock: a read counts only if the active index is unchanged after it (dsync#150, v1.26)
+
+`crates/dsync-ptp/src/seqlock.rs` is double-buffered with one writer. A reader loads `active`,
+then reads that slot. If the reader stalls, the writer can publish the other slot and then
+COMPLETE a newer write into the reader's slot, not yet published. The slot's own sequence is even
+and stable, so a per-slot check passes, and the reader returns a state newer than the published
+one. Its next read returns the older published state: time goes back. `try_read_at` therefore
+re-loads `active` after the slot read and retries when it moved. The regression test
+`a_stale_index_never_returns_a_complete_but_unpublished_write` drives that interleaving
+deterministically. The concurrent stress test only caught it on CI's slower Coverage runner; to
+reproduce locally, pin it to two cores (`taskset -c 0,1`) and loop it.
