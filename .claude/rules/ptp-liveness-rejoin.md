@@ -47,9 +47,11 @@ offset `D` from its own NTP-stepped wall: 29.9.2026, −19.8 ms, every box stepp
   `last_ptp_rx_age_s`. The INTERNAL servo lock (`self.is_locked`, the rate servo's lock with its
   gradual unlock; the learned frequency is held) is deliberately NOT cleared: when the packets
   return the node publishes that lock again at once, as the decided design says ("LOCK returns
-  with the packets"), and the phase lock re-engages on its next window. No post-outage window
-  re-validates it first — the published LOCK is the servo's lock, as always; only staleness gates
-  it.
+  with the packets"), and the phase lock re-engages on its next window. **Amended by #146 (v1.23)
+  under the phase lock:** the published LOCK is DSYX [41]'s phase gate (`src/lock_gate.rs`), and the
+  offline edge clears it, so after the outage it returns once the re-engaged phase lock has |e| ≤
+  50 µs for 3 windows (a Realigned re-engagement starts at e = 0: ~1.5 s). Under `"legacy"` the
+  published LOCK is still the servo's lock and returns with the packets.
 - **The re-join (`PtpNetwork::rejoin`) re-opens ONLY the receive path.** No clock call, no servo or
   measurement reset (`reset_ptp_measurement_after_step` is for clock steps), no date-offset change.
   `controller/date_sync/rejoin_tests.rs` pins it on a master in daily AND micro mode: loss → re-join

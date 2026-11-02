@@ -52,6 +52,19 @@ mod ntp_check;
 #[cfg(test)]
 mod first_window_tests;
 
+/// dantesync#146 (the #142 coverage-timing lesson, round 2): the heavy closed-loop simulations
+/// and the one wall-clock-timing test of this binary take this lock, so they never run beside
+/// each other. Under CI's tarpaulin (one ptrace tracer for every thread) the #142 and #146 sims
+/// together stalled `the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136` to
+/// 473 ms against its 300 ms bound (run 41383299716). The bound is unchanged; only the overlap goes.
+#[cfg(test)]
+pub(crate) fn heavy_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static HEAVY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    HEAVY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// dantesync#142 — the learned frequency across a restart (`crate::drift_file`): the seed at
 /// start, its judge, the save while LOCKED. A child module like `date_sync`; its state is the one
 /// `freq_seed` field.
@@ -2049,15 +2062,18 @@ where
     /// #114: sample the current Dante-clock health for the alarm decision.
     fn sample_clock_health(&self) -> ClockHealth {
         let ptp_stale = self.ptp_stale_at(Instant::now());
-        // mode ∈ {LOCK, NANO} — the genuinely PTP-locked modes.
-        let mode_locked = self.in_nano_mode || self.is_locked;
+        // mode ∈ {LOCK, NANO} — the genuinely PTP-locked modes. dantesync#146: under the phase
+        // lock an engaged phase lock that has not held [41] for 2 min is not locked
+        // (`alarm_sees_lock`; legacy: never set, the rate lock as before).
+        let locked = self.alarm_sees_lock();
+        let mode_locked = self.in_nano_mode || locked;
         // A grandmaster source is present AND permitted by the (resolved) allowlist.
         let gm_allowed = match self.current_sync_source_ip {
             Some(ip) => self.gm_allowlist.allows(ip),
             None => false,
         };
         ClockHealth {
-            is_locked: self.is_locked,
+            is_locked: locked,
             mode_locked,
             gm_allowed,
             ptp_stale,
@@ -2644,6 +2660,17 @@ where
         }
         .clamp(-500.0, 500.0);
 
+        // dantesync#146: once the phase lock owns the word, the rate it measures carries the phase
+        // lock's own deliberate deviation (its P term, the boot pull): removed, so the rate servo
+        // sees only the frequency the phase lock has not learned (`date_sync/lock_report.rs`).
+        // A window without its own rate (no previous offset, a too-short span) is left alone.
+        let raw_rate_ppm = if measured && dt_secs > 0.1 {
+            self.decouple_phase_lock_rate(raw_rate_ppm)
+                .clamp(-500.0, 500.0)
+        } else {
+            raw_rate_ppm
+        };
+
         if !measured {
             debug!(
                 "[Servo] window without a previous offset: offset {:+.1}us recorded, no rate yet",
@@ -2889,6 +2916,8 @@ where
                     self.drift_baseline_ppm
                 );
             }
+        } else if self.phase_lock_holds_rate_lock() {
+            // dantesync#146: the phase lock owns the word; see `phase_lock_holds_rate_lock`.
         } else {
             if self.lock_stable_count > 0 {
                 self.lock_stable_count -= 1; // Gradual unlock
@@ -3076,17 +3105,21 @@ where
                 .as_secs();
 
             // Extended fields for tray app
-            status.is_locked = self.is_locked && !stale;
+            // dantesync#146: DSYX [41], the tray, the IPC — one definition (`reported_lock`).
+            let reported_lock = self.reported_lock();
+            status.is_locked = reported_lock && !stale;
             // dantesync#142: the frequency seed from the drift file.
             self.publish_freq_seed(&mut status);
             status.smoothed_rate_ppm = self.smoothed_rate_ppm;
             status.mode = if stale {
                 ptp_liveness::PTP_STALE_MODE.to_string()
-            } else if self.in_nano_mode {
+            } else if self.in_nano_mode && (reported_lock || !self.date_sync.enabled) {
+                // Legacy: NANO exactly as before 1.23 (it may outlive the rate lock by a window).
                 "NANO".to_string()
-            } else if self.is_locked {
+            } else if reported_lock {
                 "LOCK".to_string()
-            } else if self.in_production_mode {
+            } else if self.in_production_mode || (self.date_sync.enabled && self.is_locked) {
+                // Under the phase lock a rate lock not yet within the phase bound is PROD.
                 "PROD".to_string()
             } else {
                 "ACQ".to_string()

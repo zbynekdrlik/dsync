@@ -1,0 +1,271 @@
+name: Dante Gate
+
+# dsync #98 (part 1): every release passes a Dante stability gate on real hardware first.
+# Full description, pass rule and recovery: docs/dante-gate.md.
+#
+# SECURITY: this repository is public and the gate job runs on a self-hosted runner on the Dante
+# network. It must NEVER run on `pull_request` or `pull_request_target`: a fork PR would run its
+# own code on companion. Only `push` to dev (write access), the nightly schedule and a manual
+# dispatch (write access) start it.
+on:
+  push:
+    branches: [dev]
+  schedule:
+    # Nightly 03:00 UTC (04:00/05:00 Slovak time): outside productions (the rig lease still
+    # decides) and clear of dsync's nightly date window (`daily_step_utc` default 02:00 UTC), so a
+    # night run measures steady state, not the fleet's date correction.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # dstack's measurement tool, pinned (dstack, #98 thread 2026-11-02). Never unpinned.
+  DSTACK_TAG: v0.4.33
+  DSTACK_ASSET: dante-stack-dev-v0.4.33-linux-x86_64
+  DSTACK_SHA256: 1ce9bf89720cf4ef7df6a722e5f7bef1df775771832cd772590addc5d1458a76
+  # One poll a second: 3600 polls = one hour.
+  GATE_SECONDS: '3600'
+  GATE_INSTALL: /usr/local/sbin/dsync-gate-install
+
+jobs:
+  # A scheduled run always checks out the default branch (master). The nightly gate must test the
+  # release candidate on dev, so it dispatches this workflow on dev: that run's head_sha is then the
+  # commit it tested, which is what ci.yml's release check matches on. A schedule run itself is
+  # never release evidence (scripts/dante_gate.py accepts only push / workflow_dispatch runs).
+  # When dev's head already passed the gate it dispatches nothing: every gate run restarts
+  # dantesync on companion and may page camera-box's clock watchdog.
+  nightly:
+    name: Dispatch nightly gate on dev
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch gate.yml on dev unless its head already passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)
+          # Passed, or still queued / running (a late push): either way no second run on the rig.
+          covered=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/gate.yml/runs?head_sha=$head&per_page=100" \
+            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")
+                   | select(.status != "completed" or .conclusion == "success")] | length')
+          if [ "$covered" -gt 0 ]; then
+            echo "dev head $head already passed or is being gated ($covered runs): nothing to do"
+            exit 0
+          fi
+          gh workflow run gate.yml --repo "$GITHUB_REPOSITORY" --ref dev
+          echo "dispatched gate.yml on dev ($head)"
+
+  build:
+    name: Build candidate
+    if: github.event_name != 'schedule'
+    # The same runner image and build command as release.yml, so the candidate matches a release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gate-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-gate-
+
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libgtk-3-dev libpcap-dev
+
+      - name: Build daemon (release)
+        run: cargo build --release --bin dantesync
+
+      - name: Download and verify the measurement tool
+        run: |
+          mkdir -p candidate
+          curl -fsSL --retry 3 -o "candidate/$DSTACK_ASSET" \
+            "https://github.com/zbynekdrlik/dstack/releases/download/$DSTACK_TAG/$DSTACK_ASSET"
+          echo "$DSTACK_SHA256  candidate/$DSTACK_ASSET" | sha256sum -c -
+
+      # The gated binary is built here; release.yml rebuilds the same tree at tag time with the
+      # toolchain of that day. Record what was gated so a release can be compared to it.
+      - name: Stage candidate
+        run: |
+          cp target/release/dantesync candidate/dantesync
+          {
+            echo "### Gate candidate"
+            echo '```'
+            ./candidate/dantesync --version
+            rustc -V
+            echo "commit $GITHUB_SHA, tree $(git rev-parse 'HEAD^{tree}')"
+            echo "sha256 $(sha256sum candidate/dantesync | cut -d' ' -f1)"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gate-candidate
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 7
+
+  gate:
+    name: Gate on companion
+    needs: build
+    runs-on: [dante-gate, companion]
+    timeout-minutes: 90
+    # One run on the rig at a time; a running gate is never cancelled by a newer push.
+    concurrency:
+      group: dante-gate
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: gate-candidate
+          path: candidate
+
+      - name: Verify the candidate and the tool
+        run: |
+          echo "$DSTACK_SHA256  candidate/$DSTACK_ASSET" | sha256sum -c -
+          chmod +x candidate/dantesync "candidate/$DSTACK_ASSET"
+          ./candidate/dantesync --version
+          echo "candidate sha256: $(sha256sum candidate/dantesync | cut -d' ' -f1)"
+
+      # dsync-gate-install (airuleset, 2026-11-02) installs the binary and restarts dantesync. Exit 3
+      # means the rig lease is held (a production), exit 6 that an earlier restore is still queued,
+      # exit 5 a bad file. Every refusal fails the gate; none is retried or overridden.
+      # --cold (dsync #146, ROZHODNUTÉ #98 2026-11-02): every run gates the COLD path. The helper
+      # stops dantesync (which saves its drift.json), moves /etc/dantesync/drift.json aside (or
+      # marks that there was none), installs the candidate and starts it with no frequency seed;
+      # --restore puts the binary AND the seed back. A seeded start alone does not prove the cold
+      # boot (the #146 LOCK flap needed the cold path to show).
+      - name: Install candidate
+        id: install
+        run: |
+          echo "attempted=1" >> "$GITHUB_OUTPUT"
+          set +e
+          sudo -n "$GATE_INSTALL" --cold "$PWD/candidate/dantesync"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 3 ]; then
+            echo "install_refused=1" >> "$GITHUB_OUTPUT"
+            echo "::error title=Rig lease held::dsync-gate-install exit 3: the rig lease is held (a production). The gate refused to install and measured nothing. Not retried; re-run the gate when the lease is free."
+            exit 1
+          fi
+          if [ "$rc" -eq 6 ]; then
+            echo "install_refused=1" >> "$GITHUB_OUTPUT"
+            echo "::error title=Previous restore still queued::dsync-gate-install exit 6: a previous gate's restore is still queued (it runs about a minute after the rig lease ends). Nothing installed, nothing measured. Not retried; re-run the gate later."
+            exit 1
+          fi
+          if [ "$rc" -eq 5 ]; then
+            echo "::error title=Candidate refused::dsync-gate-install exit 5: the helper refused the candidate file (not a valid binary)."
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=Install failed::dsync-gate-install exit $rc"
+            exit 1
+          fi
+          echo "candidate installed cold (no drift.json seed), dantesync restarted"
+
+      - name: Measure (dante-stack-dev clock + /status sampling)
+        run: |
+          mkdir -p gate-logs
+          (
+            set +e
+            next=$(date +%s)
+            while :; do
+              ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+              if body=$(curl -fsS -m 5 http://127.0.0.1:8898/status 2>/dev/null); then
+                printf '{"ts":"%s","status":%s}\n' "$ts" "$body"
+              else
+                printf '{"ts":"%s","status":null}\n' "$ts"
+              fi
+              # A fixed 10 s cadence: a slow curl does not stretch the interval.
+              next=$(( next + 10 ))
+              wait_s=$(( next - $(date +%s) ))
+              [ "$wait_s" -gt 0 ] && sleep "$wait_s"
+            done
+          ) > gate-logs/status.jsonl &
+          sampler=$!
+          stop_sampler() { pkill -P "$sampler" 2>/dev/null; kill "$sampler" 2>/dev/null; true; }
+          trap stop_sampler EXIT
+          set +e
+          "./candidate/$DSTACK_ASSET" clock --seconds "$GATE_SECONDS" \
+            > gate-logs/clock.jsonl 2> gate-logs/clock.stderr
+          rc=$?
+          set -e
+          echo "dante-stack-dev clock exit $rc, $(wc -l < gate-logs/clock.jsonl) polls, $(wc -l < gate-logs/status.jsonl) status samples"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=Measurement failed::dante-stack-dev clock exit $rc"
+            cat gate-logs/clock.stderr
+            exit 1
+          fi
+          # The /status evidence must be complete too: the sampler alive the whole run and about
+          # one sample per 10 s (at least 90 %).
+          if ! kill -0 "$sampler" 2>/dev/null; then
+            echo "::error title=Status sampler died::the /status sampler stopped before the measurement ended"
+            exit 1
+          fi
+          samples=$(grep -vc '"status":null}$' gate-logs/status.jsonl || true)
+          if [ "$samples" -lt $(( GATE_SECONDS * 9 / 100 )) ]; then
+            echo "::error title=Status samples missing::$samples answered /status samples, need at least $(( GATE_SECONDS * 9 / 100 ))"
+            exit 1
+          fi
+
+      - name: Upload gate logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-logs
+          path: gate-logs/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # Always put the previous binary back once an install was attempted: after a pass, a failure
+      # or a cancel. Not after a refusal (exit 3 lease held, exit 6 restore queued): nothing was
+      # installed. Under a held lease `--restore` exits 3 but QUEUES the restore: a root timer
+      # applies it about a minute after the lease ends (airuleset, 2026-11-02).
+      - name: Restore previous dantesync
+        if: always() && steps.install.outputs.attempted == '1' && steps.install.outputs.install_refused != '1'
+        run: |
+          set +e
+          sudo -n "$GATE_INSTALL" --restore
+          rc=$?
+          set -e
+          if [ "$rc" -eq 3 ]; then
+            # The helper GUARANTEES a queued restore (root timer, about a minute after the lease
+            # ends; a new install meanwhile refuses with exit 6), so the measurement stands and the
+            # Verdict still runs. Failing here made every gate red whenever camera-box took the
+            # lease mid-hour (runs 41372498483, 41384428027), with nothing wrong in dsync.
+            echo "::warning title=Restore queued::dsync-gate-install --restore exit 3: the rig lease was taken during the gate. Restore queued, root timer applies it after the lease ends; no human action needed. Until then the gate candidate is the running dantesync on companion."
+            exit 0
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=Restore failed, candidate may still be installed::dsync-gate-install --restore exit $rc"
+            exit 1
+          fi
+          echo "previous dantesync restored"
+
+  verdict:
+    name: Verdict
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gate-logs
+          path: gate-logs
+
+      - name: Apply the pass rule
+        run: python3 scripts/dante_gate.py verdict gate-logs/clock.jsonl --polls "$GATE_SECONDS"

@@ -74,6 +74,9 @@ on either platform skips `publish` — no release with a missing asset).
 
 ## Playbook router
 
+- Dante stability gate (#98): `gate.yml` on the `companion` runner, the pass rule, and the
+  tree-hash release coupling in `auto-release`. The gate must be green on dev's tree BEFORE merging
+  to master, or the release is refused → `docs/dante-gate.md`
 - Windows-only (`#[cfg(windows)]`) code — what CI actually verifies + a free local compile-check
   without the Npcap SDK → `.claude/rules/windows-only-code.md` (auto-loads on its `paths:`)
 - Editing `.github/workflows/*.yml` — local `actionlint` validation, and why a workflow being
@@ -101,6 +104,10 @@ on either platform skips `publish` — no release with a missing asset).
   `.claude/rules/clock-discipline-and-testing.md` (auto-loads on
   `src/ptp_phase_lock.rs` / `src/date_offset.rs` / `src/time_server.rs` / their `tests.rs` /
   `tests/two_clock_bench.rs` / `tests/simulation_e2e.rs`)
+- DSYX [41] = the phase lock within the bound (#146, v1.23 — `src/lock_gate.rs` 50 µs in / 150 µs
+  out, the rate servo decoupled from the phase lock's own deviation, the boot fit and its once-only
+  re-seed, the whole-controller closed-loop sim) → `.claude/rules/clock-discipline-and-testing.md`
+  (auto-loads on `src/lock_gate.rs` / `src/ptp_phase_lock/boot_fit.rs` / `controller/date_sync/lock_*`)
 - Cold-boot acquisition + the drift file (#142, v1.22 — a window without a previous offset is not a
   measurement; `drift.json` saved only while LOCKED, the seed judged against the SEED itself on the
   first 4 measured windows; ctrlc `termination` so a systemd stop runs the shutdown save) →
@@ -146,11 +153,11 @@ doesn't make the silent no-op obvious. The direct REST PATCH sidesteps the broke
 and works every time:
 
 ```bash
-gh api repos/zbynekdrlik/dantesync/pulls/<N> -X PATCH -F body=@/path/to/new-body.md
+gh api repos/zbynekdrlik/dsync/pulls/<N> -X PATCH -F body=@/path/to/new-body.md
 ```
 
 Same for `gh issue view <N>` (also fails the same way — use
-`gh api repos/zbynekdrlik/dantesync/issues/<N> --jq '{title,body,state}'` instead).
+`gh api repos/zbynekdrlik/dsync/issues/<N> --jq '{title,body,state}'` instead).
 
 **`gh issue comment <N> -F <file>` (POSTING a new comment) is unaffected** — confirmed working
 live (#61) with no GraphQL error. Only editing/viewing an existing PR/issue body hits the
@@ -170,18 +177,25 @@ The commit-blocking gate (`hooks/block-commit-without-design.sh`) then fires as 
 comment exists at all, even though one is genuinely posted and readable on the issue.
 
 **This recurred across two separate work cycles** (issue 68's cycle, and issue 71's cycle) before
-being promoted here — it is not a one-off. **Always pass `-R zbynekdrlik/dantesync` explicitly on
+being promoted here — it is not a one-off. **Always pass `-R zbynekdrlik/dsync` explicitly on
 every `gh issue comment` call that posts a design/validated/reviewed marker**, regardless of
 whether the session is already `cd`'d into this repo:
 
 ```bash
-gh issue comment <N> -R zbynekdrlik/dantesync -F body.md
+gh issue comment <N> -R zbynekdrlik/dsync -F body.md
 ```
 
 `-R` makes the hook use the explicit repo directly, bypassing the ambient-cwd resolution entirely.
+**The repo was renamed `zbynekdrlik/dantesync` → `zbynekdrlik/dsync` (#146 cycle): the hook names
+its markers after the `-R` repo's NAME, and the commit gate looks for `dsync` markers, so
+`-R zbynekdrlik/dantesync` (GitHub still redirects it) posts the comment but records the marker
+under the wrong name and the commit stays blocked.** The commit gate also wants, for a
+non-trivial ticket, numbered approaches (`Approach 1 (chosen)` … `Approach 3`) and an
+`Architektúra:` line that names the structure AND the framework (or why none fits); a design
+comment without them is rejected with exactly that message.
 If a commit is blocked despite a comment you're sure is posted, check
 `ls ~/.claude/design-posted/ ~/.claude/validated-posted/ ~/.claude/reviewed-posted/ | grep
-dantesync` for the missing marker, then simply repost the SAME comment with `-R` explicit (a
+dsync` for the missing marker, then simply repost the SAME comment with `-R` explicit (a
 duplicate comment on the issue thread is a harmless cosmetic cost next to a stuck commit gate) —
 each `gh issue comment` call only ever classifies its own invocation's LATEST fresh comment on
 that issue, so post design/validated/reviewed comments as SEPARATE Bash calls too, never batched

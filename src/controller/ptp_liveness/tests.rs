@@ -225,6 +225,10 @@ fn while_ptp_is_stale_status_is_not_locked_and_lock_returns_with_the_packets_112
     c.is_locked = true;
     c.in_nano_mode = true;
     c.clock_settled = true;
+    // dantesync#146: the reported lock is the phase lock's, within the bound (its offline edge
+    // then holds the learned frequency: one clock write).
+    c.lock_reported_for_test();
+    c.clock.expect_adjust_frequency().returning(|_| Ok(()));
     c.last_phase_offset_ns = 168_910_742;
     c.current_sync_source_ip = Some(GM);
     c.note_allowed_ptp_packet(Instant::now());
@@ -256,9 +260,20 @@ fn while_ptp_is_stale_status_is_not_locked_and_lock_returns_with_the_packets_112
         assert!(st.clock_alarm.active, "and the alarm says why");
     }
 
-    // The packets come back: LOCK again, with no service restart.
+    // The packets come back: settled again at once; the reported LOCK (dantesync#146) once the
+    // phase lock has re-engaged and is within the bound again — no service restart.
     c.note_allowed_ptp_packet(Instant::now());
     c.check_ptp_status();
+    c.tick_status();
+    {
+        let st = st.read().expect("status");
+        assert!(
+            !st.is_locked,
+            "the offline edge cleared [41]: re-validated first"
+        );
+        assert!(st.settled);
+    }
+    c.lock_reported_for_test();
     c.tick_status();
     let st = st.read().expect("status");
     assert!(st.is_locked);

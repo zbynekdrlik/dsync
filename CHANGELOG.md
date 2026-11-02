@@ -5,6 +5,50 @@ All notable changes to DanteSync will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] - 2026-11-02
+
+### Added
+
+- A Dante stability gate on real hardware (#98, part 1). `.github/workflows/gate.yml` runs on every
+  push to `dev`, every night, and on demand. It runs on the `companion` runner only. It installs
+  the candidate daemon through `dsync-gate-install`, which refuses while the rig lease is held.
+  Then it runs dstack's `dante-stack-dev clock` (v0.4.33, sha256-pinned) for one hour against the
+  box's own time server, samples `/status` every 10 s, and always puts the previous binary back.
+  A pass is exactly one `Ready`, zero re-anchors and zero holdovers over a complete log. A restore
+  the helper queued under a held lease only warns, and the verdict still runs. See
+  `docs/dante-gate.md`.
+- `/status.ptp_phase_engaged_on_ppm` and `/status.ptp_phase_boot_reseed_ppm` (#146): the frequency
+  the first engagement started on, and its once-only re-seed.
+
+### Fixed
+
+- DSYX byte `[41]` (`/status.is_locked`, the tray, the IPC) is 1 only while the clock is safe for a
+  250 µs Dante flow (#146, dstack: gen3 reported LOCK at a phase error of −700 µs and late packets
+  for 3-6 minutes after each boot). Under the phase lock it is set once the phase lock is engaged
+  and |e| ≤ 50 µs for 3 windows, and cleared at |e| > 150 µs for 4 windows, at a disengagement or
+  when PTP goes stale. `/status.mode` says LOCK/NANO only while it is set. The legacy discipline
+  keeps the rate-based lock.
+- The boot no longer flaps LOCK → UNLOCK → LOCK (#146; gate run 41372498483 on companion). Once
+  the phase lock owns the frequency word, the rate servo's measurement no longer unlocks it (only
+  the PTP-offline edge disengages it), and that measurement is decoupled from the phase lock's own
+  deliberate deviation (its P term, the boot pull). Before, the boot pull read as a lock loss, the
+  phase lock disengaged and the pull was dropped. The first engagement starts on the frequency the
+  acquisition measured (the open-loop phase over up to 20 s), and re-seeds once when that start
+  (the rate servo's word or a shorter fit) was off. In the closed-loop simulation a cold gen3 boot
+  sets `[41]` 31-43 s after the phase lock engaged (it took minutes), a good seed 4-8.5 s after
+  "Sync established" (Linux / moderate Windows jitter); no flap after the first lock in any boot,
+  date step or seed up to 15 ppm off.
+- A phase jump while the phase lock is engaged (another writer set the clock, a sub-second jump of
+  the grandmaster's time) is re-aligned after 3 s instead of slewed for minutes (#146).
+- The drift file is saved, and the clock alarm reads the node as locked, only while `[41]` is set
+  (#146): the alarm fires when an engaged phase lock has not held `[41]` for 2 minutes.
+
+### Changed
+
+- `auto-release` tags a version only after a successful gate run tested the same tree as the
+  master commit (`scripts/dante_gate.py release-check`). A release is never published from code
+  that did not pass the gate.
+
 ## [1.22.0] - 2026-11-02
 
 ### Fixed

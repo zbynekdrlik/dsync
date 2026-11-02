@@ -9,6 +9,7 @@ pub mod drift_file;
 pub mod dscp;
 pub mod gm_filter;
 pub mod http_status;
+pub mod lock_gate;
 pub mod net;
 pub mod ntp;
 pub mod ntp_burst;
