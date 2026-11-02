@@ -1,21 +1,31 @@
-# DanteSync Uninstaller for Windows
+# dsync Uninstaller for Windows
 # Run as Administrator in PowerShell
 
 $ErrorActionPreference = "Stop"
 
-$ServiceName = "dantesync"
-$InstallDir = "C:\Program Files\DanteSync"
-$DataDir = "C:\ProgramData\DanteSync"
+$ServiceName = "dsync"
+$InstallDir = "C:\Program Files\dsync"
+# dsync#147: the daemon uses C:\ProgramData\dsync, else the pre-1.25 dir in place.
+if (Test-Path "C:\ProgramData\dsync") {
+    $DataDir = "C:\ProgramData\dsync"
+} else {
+    $DataDir = "C:\ProgramData\DanteSync"
+}
+# The pre-1.25 installation, removed too.
+$LegacyServiceName = "dantesync"
+$LegacyInstallDir = "C:\Program Files\DanteSync"
 
-Write-Host ">>> DanteSync Windows Uninstaller <<<" -ForegroundColor Cyan
+Write-Host ">>> dsync Windows Uninstaller <<<" -ForegroundColor Cyan
 
 # 1. Stop and remove tray app
 Write-Host "Stopping tray application..."
+Stop-Process -Name "dsync-tray" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name "dantesync-tray" -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 
 # 2. Remove scheduled task
 Write-Host "Removing scheduled task..."
+Unregister-ScheduledTask -TaskName "DsyncTray" -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "DanteSyncTray" -Confirm:$false -ErrorAction SilentlyContinue
 
 # 3. Remove registry startup entries
@@ -24,55 +34,64 @@ $RegPathCU = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $RegPathLM = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 
 try {
+    Remove-ItemProperty -Path $RegPathCU -Name "DsyncTray" -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path $RegPathCU -Name "DanteSyncTray" -ErrorAction SilentlyContinue
     Write-Host "  - Removed current user registry entry." -ForegroundColor Gray
 } catch { }
 
 try {
+    Remove-ItemProperty -Path $RegPathLM -Name "DsyncTray" -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path $RegPathLM -Name "DanteSyncTray" -ErrorAction SilentlyContinue
     Write-Host "  - Removed machine-wide registry entry." -ForegroundColor Gray
 } catch { }
 
 # 3b. Remove Start Menu shortcut
 Write-Host "Removing Start Menu shortcut..."
-$StartMenuShortcut = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\DanteSync.lnk"
-try {
-    if (Test-Path $StartMenuShortcut) {
-        Remove-Item -Path $StartMenuShortcut -Force -ErrorAction SilentlyContinue
-        Write-Host "  - Removed Start Menu shortcut" -ForegroundColor Gray
-    }
-} catch { }
+foreach ($StartMenuShortcut in @("$env:ProgramData\Microsoft\Windows\Start Menu\Programs\dsync.lnk", "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\DanteSync.lnk")) {
+    try {
+        if (Test-Path $StartMenuShortcut) {
+            Remove-Item -Path $StartMenuShortcut -Force -ErrorAction SilentlyContinue
+            Write-Host "  - Removed Start Menu shortcut $StartMenuShortcut" -ForegroundColor Gray
+        }
+    } catch { }
+}
 
 # 3c. Remove Add/Remove Programs registry entry
 Write-Host "Removing from Add/Remove Programs..."
-$UninstallKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DanteSync"
-try {
-    if (Test-Path $UninstallKey) {
-        Remove-Item -Path $UninstallKey -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "  - Removed from Add/Remove Programs" -ForegroundColor Gray
+foreach ($UninstallKey in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\dsync", "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DanteSync")) {
+    try {
+        if (Test-Path $UninstallKey) {
+            Remove-Item -Path $UninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "  - Removed from Add/Remove Programs ($UninstallKey)" -ForegroundColor Gray
+        }
+    } catch { }
+}
+
+# 4. Stop and remove the service (and a pre-1.25 one)
+foreach ($Name in @($ServiceName, $LegacyServiceName)) {
+    $Service = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if ($Service) {
+        Write-Host "Stopping service '$Name'..."
+        Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+
+        Write-Host "Removing service '$Name'..."
+        sc.exe delete $Name | Out-Null
+        Start-Sleep -Seconds 1
     }
-} catch { }
-
-# 4. Stop and remove service
-Write-Host "Stopping service..."
-$Service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($Service) {
-    Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-
-    Write-Host "Removing service..."
-    sc.exe delete $ServiceName | Out-Null
-    Start-Sleep -Seconds 1
 }
 
 # Kill any remaining processes
+Stop-Process -Name "dsync" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name "dantesync" -Force -ErrorAction SilentlyContinue
 
 # 5. Remove program files
 Write-Host "Removing program files..."
-if (Test-Path $InstallDir) {
-    Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "  - Removed $InstallDir" -ForegroundColor Gray
+foreach ($Dir in @($InstallDir, $LegacyInstallDir)) {
+    if (Test-Path $Dir) {
+        Remove-Item -Path $Dir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  - Removed $Dir" -ForegroundColor Gray
+    }
 }
 
 # 6. Ask about data directory (contains config and logs)

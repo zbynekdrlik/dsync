@@ -71,12 +71,12 @@ use windows_service::{
 
 // Use library crate modules
 #[cfg(unix)]
-use dantesync::net_linux;
+use dsync::net_linux;
 #[cfg(windows)]
-use dantesync::net_pcap;
-use dantesync::{
-    clock, config, controller, date_step_trigger, http_status, net, ntp, ntp_server, status,
-    sync_loop, time_server,
+use dsync::net_pcap;
+use dsync::{
+    clock, config, controller, date_step_trigger, http_status, net, ntp, ntp_server, state_dir,
+    status, sync_loop, time_server,
 };
 
 use config::file::{Config, ConfigState, Loaded};
@@ -84,31 +84,31 @@ use config::{HttpStatusConfig, NtpServerConfig, SystemConfig};
 use controller::PtpController;
 use status::SyncStatus;
 
-/// dantesync#126 — where the NTP master keeps its fleet date offset across a restart: beside
-/// `config.json`, in a file of its own (never inside the config). Only the master writes it.
-#[cfg(windows)]
-const DATE_STATE_PATH: &str = r"C:\ProgramData\DanteSync\date-offset.json";
-#[cfg(not(windows))]
-const DATE_STATE_PATH: &str = "/etc/dantesync/date-offset.json";
+/// dsync#147: the state directory, resolved ONCE per process (`dsync::state_dir`): the new
+/// directory, else the legacy one in place, else a created new one. Every state file derives
+/// from it — `config.json` (dsync#116: a file that does not parse is never overwritten; the
+/// loader keeps `config.json.last-good` beside it), `date-offset.json` (dsync#126: the NTP
+/// master's fleet date offset across a restart, only the master writes it), `drift.json`
+/// (dsync#142: the learned frequency, written only while LOCKED) and the Windows service log.
+/// A `OnceLock`, so the Windows service entry reuses the resolution `main` made.
+static STATE_DIR: std::sync::OnceLock<state_dir::StateDir> = std::sync::OnceLock::new();
 
-/// dantesync#142 — the learned frequency across a restart (a drift file, as chrony's and ntpd's
-/// `driftfile`): beside `date-offset.json`, written only while LOCKED (every 10 min and at
-/// shutdown), read at start to seed the servo before the warmup (`dantesync::drift_file`).
-#[cfg(windows)]
-const DRIFT_FILE_PATH: &str = r"C:\ProgramData\DanteSync\drift.json";
-#[cfg(not(windows))]
-const DRIFT_FILE_PATH: &str = "/etc/dantesync/drift.json";
+fn state_dir() -> &'static state_dir::StateDir {
+    STATE_DIR.get_or_init(state_dir::resolve_platform)
+}
 
-/// dantesync#116: the config file. A file that does not parse is never overwritten; the loader
-/// keeps `config.json.last-good` beside it (`config::file::load`).
-#[cfg(windows)]
-const CONFIG_PATH: &str = r"C:\ProgramData\DanteSync\config.json";
-#[cfg(not(windows))]
-const CONFIG_PATH: &str = "/etc/dantesync/config.json";
+/// Log which state directory is used and why (once the logger runs).
+fn log_state_dir() {
+    let dir = state_dir();
+    match dir.choice {
+        state_dir::Choice::CreateFailed => error!("{}", dir.describe()),
+        _ => info!("{}", dir.describe()),
+    }
+}
 
 fn load_config() -> Loaded {
-    let path = std::path::Path::new(CONFIG_PATH);
-    config::file::load(path, &config::file::last_good_path(path))
+    let path = state_dir().config_path();
+    config::file::load(&path, &config::file::last_good_path(&path))
 }
 
 /// The PTP receive path of this platform: kernel-timestamped sockets on Linux, Npcap on Windows.
@@ -126,7 +126,7 @@ struct StartupJoin {
 }
 
 /// Open the PTP receive path for `iface_name` / `iface_ip` (the startup choice). `pinned`
-/// (dantesync#131) is the only interface the backend may use from now on, re-joins included.
+/// (dsync#131) is the only interface the backend may use from now on, re-joins included.
 fn open_ptp_network(
     iface_name: &str,
     iface_ip: std::net::Ipv4Addr,
@@ -162,13 +162,13 @@ fn open_ptp_network(
         // it picks the capture/IGMP-join interface on the grandmaster's subnet
         // when the allowlist can disambiguate, and otherwise falls back to the
         // default interface (single-homed / no-allowlist boxes are unchanged).
-        // dantesync#131: a PINNED interface alone selects the device (no subnet rule, so no
+        // dsync#131: a PINNED interface alone selects the device (no subnet rule, so no
         // allowlist resolution), and a failed open is the pinned wait's to report and retry
         // (once per change, never an ERROR per second).
         if let Some(name) = pinned {
             let npcap_net = net_pcap::NpcapPtpNetwork::new(
                 iface_name,
-                &dantesync::gm_filter::GmAllowlist::default(),
+                &dsync::gm_filter::GmAllowlist::default(),
                 Some((name, iface_ip)),
             )?;
             info!(
@@ -179,14 +179,13 @@ fn open_ptp_network(
             let (iface, ip) = (iface.to_string(), ip);
             return Ok((npcap_net, iface, ip));
         }
-        let mut gm_allowlist =
-            dantesync::gm_filter::GmAllowlist::parse(&system_config.gm_allowlist);
-        // dantesync#113: resolve hostname entries BEFORE interface selection so a
+        let mut gm_allowlist = dsync::gm_filter::GmAllowlist::parse(&system_config.gm_allowlist);
+        // dsync#113: resolve hostname entries BEFORE interface selection so a
         // hostname-addressed grandmaster (e.g. video-clock.lan) can pick the
         // capture NIC on the GM's subnet on a multi-homed box, exactly like a
         // literal entry. The controller re-resolves periodically after this.
         if gm_allowlist.has_hostnames() {
-            let outcome = gm_allowlist.resolve(&dantesync::gm_filter::StdResolver);
+            let outcome = gm_allowlist.resolve(&dsync::gm_filter::StdResolver);
             info!(
                 "gm_allowlist: startup hostname resolution {:?} (unresolved: {:?})",
                 outcome.new_resolved,
@@ -214,7 +213,7 @@ fn open_ptp_network(
     }
 }
 
-/// dantesync#131 (owner ruling 1.11.2026): the PTP interface is an explicit setting.
+/// dsync#131 (owner ruling 1.11.2026): the PTP interface is an explicit setting.
 ///
 /// Pinned (`system.interface` / `--interface`): wait for exactly that NIC and open on it —
 /// never another NIC — with the clock alarm naming it meanwhile (`pinned_wait`). Unpinned: the
@@ -236,7 +235,7 @@ fn join_ptp_network(
         warn!(
             "[NET] the PTP interface is NOT pinned (system.interface / --interface unset): \
              joining the first IPv4 interface in listing order — set system.interface to the \
-             PTP NIC (dantesync#131)"
+             PTP NIC (dsync#131)"
         );
         let (iface_name, iface_ip) = loop {
             match net::get_default_interface() {
@@ -267,18 +266,18 @@ fn join_ptp_network(
             "system.interface"
         }
     );
-    let wait = dantesync::pinned_wait::PinnedWait {
+    let wait = dsync::pinned_wait::PinnedWait {
         name: &name,
         status: status_shared,
         alarm_interval_s: system_config.clock_alarm_interval_s,
         config_problem: config_state.alarm_reason(),
-        notifier: dantesync::clock_alarm::DesktopNotifier,
+        notifier: dsync::clock_alarm::DesktopNotifier,
         running,
     };
     let opened = wait.run(
         || net::pinned_interface(&name),
         |ip| open_ptp_network(&name, ip, Some(name.clone()), system_config),
-        || thread::sleep(dantesync::pinned_wait::LOOK_EVERY),
+        || thread::sleep(dsync::pinned_wait::LOOK_EVERY),
         Instant::now,
     );
     Ok(opened.map(|((network, iface, ip), _)| StartupJoin {
@@ -311,12 +310,12 @@ struct Args {
 }
 
 // Concrete Implementations for Traits
-/// dantesync#134 — one boot NTP reading on its own `boot-ntp` thread (its own client: name
+/// dsync#134 — one boot NTP reading on its own `boot-ntp` thread (its own client: name
 /// resolution, the Windows Npcap transport and the burst all happen there), delivered on the
 /// returned channel. A thread that cannot be started reads as a failed reading.
 fn spawn_boot_ntp(
     server: &str,
-    dscp: &dantesync::dscp::DscpConfig,
+    dscp: &dsync::dscp::DscpConfig,
 ) -> std::sync::mpsc::Receiver<controller::BootNtpResult> {
     let (tx, rx) = std::sync::mpsc::channel::<controller::BootNtpResult>();
     let server = server.to_string();
@@ -450,14 +449,14 @@ impl Drop for SingleInstanceGuard {
 fn acquire_singleton_lock() -> Result<SingleInstanceGuard> {
     #[cfg(unix)]
     {
-        let lock_path = "/var/run/dantesync.lock";
+        let lock_path = "/var/run/dsync.lock";
         let file = File::create(lock_path)
             .map_err(|e| anyhow!("Failed to create lock file {}: {}", lock_path, e))?;
 
         match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
             Ok(_) => Ok(SingleInstanceGuard { _file: file }),
             Err(nix::errno::Errno::EAGAIN) => Err(anyhow!(
-                "Another instance of dantesync is already running! (Lockfile: {})",
+                "Another instance of dsync is already running! (Lockfile: {})",
                 lock_path
             )),
             Err(e) => Err(e.into()),
@@ -467,7 +466,7 @@ fn acquire_singleton_lock() -> Result<SingleInstanceGuard> {
     {
         use anyhow::anyhow;
 
-        let mutex_name: Vec<u16> = "Global\\DanteSyncDaemonMutex\0".encode_utf16().collect();
+        let mutex_name: Vec<u16> = "Global\\DsyncDaemonMutex\0".encode_utf16().collect();
 
         unsafe {
             match CreateMutexW(None, false, PCWSTR(mutex_name.as_ptr())) {
@@ -476,9 +475,7 @@ fn acquire_singleton_lock() -> Result<SingleInstanceGuard> {
                     if let Err(e) = GetLastError() {
                         if e.code() == ERROR_ALREADY_EXISTS.to_hresult() {
                             let _ = CloseHandle(handle);
-                            return Err(anyhow!(
-                                "Another instance of dantesync is already running!"
-                            ));
+                            return Err(anyhow!("Another instance of dsync is already running!"));
                         }
                     }
                     Ok(SingleInstanceGuard { _handle: handle })
@@ -502,7 +499,7 @@ fn start_ipc_server(status: Arc<RwLock<SyncStatus>>) {
             use tokio::io::AsyncWriteExt;
 
             // Pre-allocate UTF-16 strings outside loop for performance
-            let pipe_name_wide: Vec<u16> = r"\\.\pipe\dantesync"
+            let pipe_name_wide: Vec<u16> = r"\\.\pipe\dsync"
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect();
@@ -624,9 +621,10 @@ fn run_sync_loop(
 
     // Initialize Shared Status
     let status_shared = Arc::new(RwLock::new(SyncStatus::default()));
-    // dantesync#116: the config source is visible at once, also while startup waits below.
+    // dsync#116: the config source is visible at once, also while startup waits below.
     if let Ok(mut s) = status_shared.write() {
         s.config_state = Some(config_state.clone());
+        s.state_dir = Some(state_dir().path.display().to_string());
     }
 
     // Start IPC Server immediately (so Tray App can connect even if network is down)
@@ -634,7 +632,7 @@ fn run_sync_loop(
 
     // Start HTTP status endpoint (#47) — LAN automation reads the same status JSON
     // the named pipe serves, without a human or an SMB/pipe bridge in the loop.
-    // dantesync#126: its `POST /date/step` route (loopback only) reaches the sync loop over this
+    // dsync#126: its `POST /date/step` route (loopback only) reaches the sync loop over this
     // channel; the controller answers it below.
     let (date_step_tx, date_step_rx) = date_step_trigger::channel();
     if http_status_config.enabled {
@@ -652,7 +650,7 @@ fn run_sync_loop(
     }
 
     // UDP Time Query Server for network time verification: bound here, it answers on a thread of
-    // its own once the sync loop starts (dantesync#136, `sync_loop::run`).
+    // its own once the sync loop starts (dsync#136, `sync_loop::run`).
     let time_server = match time_server::TimeServer::new() {
         Ok(ts) => Some(ts),
         Err(e) => {
@@ -677,7 +675,7 @@ fn run_sync_loop(
     };
     info!("System clock control initialized.");
 
-    // dantesync#131: the PTP interface — pinned (wait for it, never another NIC) or not.
+    // dsync#131: the PTP interface — pinned (wait for it, never another NIC) or not.
     let Some(StartupJoin {
         network,
         pinned,
@@ -698,10 +696,10 @@ fn run_sync_loop(
         .ntp_server
         .as_deref()
         .expect("ntp_server must be resolved before run_sync_loop");
-    // dantesync#52: capture the DSCP config before `system_config` is moved into
+    // dsync#52: capture the DSCP config before `system_config` is moved into
     // the controller below, so both the client and the server socket can be marked.
     let dscp_config = system_config.dscp.clone();
-    // dantesync#136: ONE client (on Windows one Npcap transport) for the controller and its
+    // dsync#136: ONE client (on Windows one Npcap transport) for the controller and its
     // `ntp-burst` thread, which measures the periodic burst off the loop.
     let ntp_client = Arc::new(ntp::NtpClient::new(ntp_server, &dscp_config));
 
@@ -713,13 +711,13 @@ fn run_sync_loop(
         system_config,
     );
     controller.set_date_step_requests(date_step_rx);
-    // dantesync#142: seed the servo with the learned frequency before the warmup (or log why not).
-    controller.open_drift_file(std::path::Path::new(DRIFT_FILE_PATH));
-    // dantesync#131 / #116: /status names the pin, the joined interface and the config source.
+    // dsync#142: seed the servo with the learned frequency before the warmup (or log why not).
+    controller.open_drift_file(&state_dir().drift_path());
+    // dsync#131 / #116: /status names the pin, the joined interface and the config source.
     controller.set_ptp_interface(pinned, &joined_iface, joined_ip);
     controller.set_config_state(config_state);
     let burst_client = ntp_client.clone();
-    match dantesync::ntp_burst::NtpBurstThread::spawn(
+    match dsync::ntp_burst::NtpBurstThread::spawn(
         move || burst_client.get_offset(),
         running.clone(),
     ) {
@@ -731,14 +729,11 @@ fn run_sync_loop(
         ),
     }
 
-    // dantesync#126: the NTP master's saved fleet date offset skips the boot step below (restored
+    // dsync#126: the NTP master's saved fleet date offset skips the boot step below (restored
     // at the first PTP window); any other node removes a leftover one.
-    controller.open_date_state(
-        std::path::Path::new(DATE_STATE_PATH),
-        ntp_server_config.enabled,
-    );
+    controller.open_date_state(&state_dir().date_state_path(), ntp_server_config.enabled);
 
-    // dantesync#134: the boot NTP reading is measured on its own thread (its own client: name
+    // dsync#134: the boot NTP reading is measured on its own thread (its own client: name
     // resolution, the Windows Npcap transport and the burst all happen there) and handed to the
     // loop, which starts at once — the PTP windows and the fleet date no longer wait for an
     // upstream that answers slowly at boot (12 s on strih-pp, 25.10.2026).
@@ -791,14 +786,14 @@ fn run_sync_loop(
                     "[NTP-Server] Failed to start: {} (continuing with PTP-only mode)",
                     e
                 );
-                // Continue without NTP server - PTP sync still works. dantesync#126: not the
+                // Continue without NTP server - PTP sync still works. dsync#126: not the
                 // master, so a saved date offset is not restored and the skipped boot step runs.
                 controller.abandon_date_state();
             }
         }
     }
 
-    // dantesync#88: every node that is NOT the NTP master follows the master's fleet date offset,
+    // dsync#88: every node that is NOT the NTP master follows the master's fleet date offset,
     // polled once per second from the master's 31900 time server on a background thread (DNS and
     // socket waits never touch this loop). An older master simply answers without the extension,
     // and the node keeps its local NTP date path.
@@ -828,7 +823,7 @@ fn run_sync_loop(
     let mut last_log = Instant::now();
     let loop_status = controller.get_status_shared();
 
-    // dantesync#136: the loop itself lives in the library (`sync_loop::run`), where it is tested.
+    // dsync#136: the loop itself lives in the library (`sync_loop::run`), where it is tested.
     sync_loop::run(time_server, loop_status, running.clone(), || {
         if last_log.elapsed() >= Duration::from_secs(10) {
             controller.tick_status();
@@ -845,7 +840,7 @@ fn run_sync_loop(
                             status.offset_ns as f64 / 1000.0
                         )
                     } else if status.mode == "NTP-only" {
-                        // dantesync#112: no allowed PTP packet for 10 s; the loop re-joins.
+                        // dsync#112: no allowed PTP packet for 10 s; the loop re-joins.
                         let last = match status.last_ptp_rx_age_s {
                             Some(age) => format!("last {}s ago", age),
                             None => "none since start".to_string(),
@@ -872,7 +867,7 @@ fn run_sync_loop(
     });
 
     info!("Sync Loop Exiting.");
-    // dantesync#142: keep the learned frequency for the next start (only when LOCKED).
+    // dsync#142: keep the learned frequency for the next start (only when LOCKED).
     controller.save_drift_file_at_shutdown();
     #[cfg(unix)]
     {
@@ -883,7 +878,7 @@ fn run_sync_loop(
 
 // --- Windows Service Entry ---
 #[cfg(windows)]
-const SERVICE_NAME: &str = "dantesync";
+const SERVICE_NAME: &str = "dsync";
 
 #[cfg(windows)]
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
@@ -902,7 +897,7 @@ fn my_service_main(_arguments: Vec<OsString>) {
 
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
-            // dantesync#142: a host shutdown/reboot ends the loop like a stop, so the learned
+            // dsync#142: a host shutdown/reboot ends the loop like a stop, so the learned
             // frequency is saved (Windows sends SHUTDOWN, not STOP, to a service at shutdown).
             ServiceControl::Stop | ServiceControl::Shutdown => {
                 let _ = shutdown_tx.send(());
@@ -953,7 +948,7 @@ fn my_service_main(_arguments: Vec<OsString>) {
     // Wait for stop signal
     let _ = shutdown_rx.recv();
 
-    // Stop. dantesync#142: say StopPending with a wait hint first, so the SCM (also at a host
+    // Stop. dsync#142: say StopPending with a wait hint first, so the SCM (also at a host
     // shutdown) waits for the loop to end and the learned frequency to be saved.
     let _ = status_handle.set_service_status(ServiceStatus {
         service_type: SERVICE_TYPE,
@@ -995,13 +990,15 @@ fn main() -> Result<()> {
     #[cfg(windows)]
     if args.service {
         // Initialize File Logging for Service
-        let log_path = r"C:\ProgramData\DanteSync\dantesync.log";
+        // dsync#147: in the resolved state directory (the legacy one in place on an old install).
+        let log_path = state_dir().log_path();
 
         // Log Rotation (Simple: 1MB limit check on startup)
-        if let Ok(metadata) = std::fs::metadata(log_path) {
+        if let Ok(metadata) = std::fs::metadata(&log_path) {
             if metadata.len() > 1_000_000 {
-                let old_path = format!("{}.old", log_path);
-                let _ = std::fs::rename(log_path, old_path);
+                let mut old_path = log_path.clone().into_os_string();
+                old_path.push(".old");
+                let _ = std::fs::rename(&log_path, old_path);
             }
         }
 
@@ -1009,7 +1006,7 @@ fn main() -> Result<()> {
             .create(true)
             .append(true)
             .write(true)
-            .open(log_path)
+            .open(&log_path)
         {
             let target = env_logger::Target::Pipe(Box::new(file));
             env_logger::builder()
@@ -1027,6 +1024,7 @@ fn main() -> Result<()> {
         }
 
         info!("Service Started: v{}", env!("CARGO_PKG_VERSION"));
+        log_state_dir();
         // The service entry (`my_service_main`) loads the config itself, after this logger.
         return run_service_logic(args);
     }
@@ -1040,9 +1038,10 @@ fn main() -> Result<()> {
         .init();
 
     // Log Version immediately
-    info!("DanteSync v{}", env!("CARGO_PKG_VERSION"));
+    info!("dsync v{}", env!("CARGO_PKG_VERSION"));
+    log_state_dir();
 
-    // dantesync#116: loaded after the logger, so every load / fallback decision is logged.
+    // dsync#116: loaded after the logger, so every load / fallback decision is logged.
     let Loaded {
         config,
         state: config_state,
@@ -1063,7 +1062,7 @@ fn main() -> Result<()> {
     let r = running.clone();
 
     ctrlc::set_handler(move || {
-        // dantesync#142: SIGTERM (systemd stop) and SIGHUP too (ctrlc's `termination`), so a
+        // dsync#142: SIGTERM (systemd stop) and SIGHUP too (ctrlc's `termination`), so a
         // stopped service ends the loop and saves the learned frequency.
         info!("Stop signal received (Ctrl+C / SIGTERM / SIGHUP). Shutting down...");
         r.store(false, Ordering::SeqCst);
@@ -1082,7 +1081,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dantesync::config::file::migrate_config_json;
+    use dsync::config::file::migrate_config_json;
 
     fn config_with_ntp(server: &str) -> Config {
         Config {

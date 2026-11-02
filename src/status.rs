@@ -22,7 +22,7 @@ pub struct SyncStatus {
     /// Current frequency adjustment being applied (PPM)
     pub drift_ppm: f64,
 
-    /// Grandmaster clock UUID (from PTP Sync messages). dantesync#129: the real
+    /// Grandmaster clock UUID (from PTP Sync messages). dsync#129: the real
     /// `grandmasterClockUuid` since 1.17; earlier versions report `[0,0,0,0,1,0]` on every node
     /// (a misread of the Sync body).
     pub gm_uuid: Option<[u8; 6]>,
@@ -53,13 +53,13 @@ pub struct SyncStatus {
     pub ntp_offset_us: i64,
 
     /// Current operating mode: "ACQ" (acquiring), "PROD" (production), "LOCK" (locked), "NANO",
-    /// "NTP-only" (dantesync#112: no allowed PTP packet for 10 s, whatever the servo last reached;
+    /// "NTP-only" (dsync#112: no allowed PTP packet for 10 s, whatever the servo last reached;
     /// `is_locked` is then false). Used for status display and icon state
     pub mode: String,
 
     /// True when this node's UTC alignment is NOT being maintained.
     ///
-    /// dantesync#68 widened this: it used to mean only "a query returned an
+    /// dsync#68 widened this: it used to mean only "a query returned an
     /// error", which meant a node that had simply STOPPED querying (the NTP
     /// master, by design) reported `false` for 18 hours while drifting a second
     /// off UTC. It now covers BOTH causes:
@@ -77,7 +77,7 @@ pub struct SyncStatus {
     /// Reset to 0 after each NTP step
     pub accumulated_phase_us: f64,
 
-    /// dantesync#53: spread (max - min, microseconds) across the accepted
+    /// dsync#53: spread (max - min, microseconds) across the accepted
     /// (lowest-RTT) burst samples that produced `ntp_offset_us`. Large even
     /// when `ntp_offset_us` looks reasonable ⇒ this node's NTP measurement is
     /// NOT trustworthy despite the filtered value — never read `ntp_offset_us`
@@ -85,13 +85,13 @@ pub struct SyncStatus {
     #[serde(default)]
     pub ntp_spread_us: u64,
 
-    /// dantesync#53: how many burst samples fed the published `ntp_offset_us`
+    /// dsync#53: how many burst samples fed the published `ntp_offset_us`
     /// (<= the configured accept count; lower after a partial burst failure —
     /// also a reason to trust the value less).
     #[serde(default)]
     pub ntp_sample_count: usize,
 
-    /// dantesync#53 continuation: whether the kernel-timestamped Npcap NTP
+    /// dsync#53 continuation: whether the kernel-timestamped Npcap NTP
     /// transport was used for EVERY sample of the last burst (Windows only —
     /// always `false` on platforms with no such transport). `false` here
     /// means every sample fell back to userspace `rsntp`, which is exactly
@@ -103,7 +103,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub pcap_ntp_active: bool,
 
-    /// dantesync#68: unix epoch second of the last SUCCESSFUL NTP measurement
+    /// dsync#68: unix epoch second of the last SUCCESSFUL NTP measurement
     /// (`0` = never measured). This is the field `updated_ts` is NOT: that one
     /// is written by the PTP loop on every status refresh, so it kept advancing
     /// beside an `ntp_offset_us` frozen 18 hours earlier, and a consumer had no
@@ -111,7 +111,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub ntp_updated_ts: u64,
 
-    /// dantesync#68: seconds since that measurement, computed at status-write
+    /// dsync#68: seconds since that measurement, computed at status-write
     /// time; `null` when nothing has EVER been measured — deliberately not `0`,
     /// which would read as "measured just now". This is the number a monitoring
     /// gate should grade before grading `ntp_offset_us` at all: live on strih
@@ -120,7 +120,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub ntp_age_s: Option<u64>,
 
-    /// dantesync#83: the threshold (microseconds) this node would CURRENTLY apply to a step
+    /// dsync#83: the threshold (microseconds) this node would CURRENTLY apply to a step
     /// decision if server mode is configured -- `None` on a client node (server mode only).
     /// `Some(..)` as soon as `configure_ntp_server_mode()` has run, reflecting whichever
     /// threshold applies given the node's CURRENT `is_locked`/`ptp_offline` state -- it does
@@ -139,7 +139,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub ntp_deadband_us: Option<i64>,
 
-    /// dantesync#91: how many NTP clock STEPS this node applied in the trailing
+    /// dsync#91: how many NTP clock STEPS this node applied in the trailing
     /// hour — the honest "steps/h" health metric #67 asked for. `None` on a
     /// client node (or a node that has never served in server mode). A healthy,
     /// genuinely-PTP-locked master tops out near ~84/h (the 2500us deadband at
@@ -151,7 +151,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub ntp_steps_last_hour: Option<u32>,
 
-    /// dantesync#91: true while this server-mode node's `ntp_steps_last_hour`
+    /// dsync#91: true while this server-mode node's `ntp_steps_last_hour`
     /// exceeds `NTP_STEP_STORM_THRESHOLD_PER_HOUR` — the step-storm alarm surface
     /// (the loud, grep-able `[NTP][STEP-STORM]` log line is the log-side
     /// equivalent). Always false on a client node. The storm itself can only be
@@ -160,7 +160,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub ntp_step_storm: bool,
 
-    /// dantesync#101: this node's OWN currently-active NTP step threshold (microseconds) — the
+    /// dsync#101: this node's OWN currently-active NTP step threshold (microseconds) — the
     /// size of UTC offset it tolerates before it steps its own clock. On a SERVER-mode node this
     /// equals `server_step_threshold_us(is_locked, ptp_offline)` (the same value `ntp_deadband_us`
     /// already reports); on a CLIENT node it is `calculate_ntp_adaptive_threshold()` — the MAD-based
@@ -176,40 +176,40 @@ pub struct SyncStatus {
     pub ntp_step_threshold_us: Option<i64>,
 
     // ========================================================================
-    // Phase-slew telemetry (dantesync#97) — all additive, all default to the
+    // Phase-slew telemetry (dsync#97) — all additive, all default to the
     // pre-#97 "feature off" reading so an old JSON blob still deserializes and
     // camera-box's DanteSync gate is unaffected until a box opts in.
     // ========================================================================
-    /// dantesync#97: true when the bounded PI phase-slew servo is enabled on this node (the
+    /// dsync#97: true when the bounded PI phase-slew servo is enabled on this node (the
     /// `system.phase_slew.enabled` flag). `false` (default) = the classic step-only UTC path.
     #[serde(default)]
     pub phase_slew_enabled: bool,
 
-    /// dantesync#97: the total commanded phase slew currently composed into the frequency word
+    /// dsync#97: the total commanded phase slew currently composed into the frequency word
     /// (ppm), `P + I` capped to ±200. `0.0` when the servo is disabled or idle.
     #[serde(default)]
     pub f_phase_ppm: f64,
 
-    /// dantesync#97: the proportional part of `f_phase` (ppm) — the fast responder to the current
+    /// dsync#97: the proportional part of `f_phase` (ppm) — the fast responder to the current
     /// phase error `e` (which is published as `ntp_offset_us`).
     #[serde(default)]
     pub f_phase_p_ppm: f64,
 
-    /// dantesync#97: the integral part of `f_phase` (ppm) — on a master it converges toward the
+    /// dsync#97: the integral part of `f_phase` (ppm) — on a master it converges toward the
     /// node's constant Dante-vs-UTC rate error (≈23 ppm), so the phase error trims to ~0.
     #[serde(default)]
     pub f_phase_i_ppm: f64,
 
-    /// dantesync#97: the PTP frequency-servo correction (ppm) AFTER feed-forward decoupling — the
+    /// dsync#97: the PTP frequency-servo correction (ppm) AFTER feed-forward decoupling — the
     /// same value as `drift_ppm`, surfaced explicitly beside `f_phase_*` so the two composed
     /// frequency terms (`f_total = f_ptp + f_phase`) are both readable. `0.0` on a fresh node.
     #[serde(default)]
     pub f_ptp_ppm: f64,
 
-    /// dantesync#97: true while the phase slew is capped at ±200 ppm — a sustained `true` with a
+    /// dsync#97: true while the phase slew is capped at ±200 ppm — a sustained `true` with a
     /// large `ntp_offset_us` is the "slew saturated" condition the `[PHASE-SLEW][SATURATED]` alarm
     /// keys on (the servo cannot keep up; the step path should probably have taken the correction).
-    /// dantesync#103: this reflects the servo DEMAND (`P + I` at the cap), NOT the rate-limited slew
+    /// dsync#103: this reflects the servo DEMAND (`P + I` at the cap), NOT the rate-limited slew
     /// actually applied — during the output ramp `f_phase_ppm` can still be small while this is
     /// `true`. That is deliberate (the alarm must arm on the demand, not wait out the ramp); read it
     /// as "the servo is asking for max slew", not "±200 ppm is on the clock right now".
@@ -217,11 +217,11 @@ pub struct SyncStatus {
     pub phase_slew_saturated: bool,
 
     // ========================================================================
-    // Clock alarm (dantesync#114) — all additive, all default to the pre-#114
+    // Clock alarm (dsync#114) — all additive, all default to the pre-#114
     // "no alarm / 60 s cadence" reading so an old JSON blob still deserializes
     // and camera-box's DanteSync gate is unaffected.
     // ========================================================================
-    /// dantesync#114: the loud "NO DANTE CLOCK" alarm snapshot — `{active, since,
+    /// dsync#114: the loud "NO DANTE CLOCK" alarm snapshot — `{active, since,
     /// reason}`. `active` is true while this node is NOT PTP-locked to an allowed
     /// grandmaster; `since` is the unix epoch second the current episode began
     /// (`null` when inactive); `reason` is a human string (empty when inactive).
@@ -229,7 +229,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub clock_alarm: ClockAlarmStatus,
 
-    /// dantesync#114: the EFFECTIVE (floored) cadence in seconds at which the
+    /// dsync#114: the EFFECTIVE (floored) cadence in seconds at which the
     /// alarm re-notifies while active — so every surface (the daemon WARN log,
     /// the Linux notify-send, the Windows tray balloon) shares one configured
     /// cadence. Default 60.
@@ -237,46 +237,46 @@ pub struct SyncStatus {
     pub clock_alarm_interval_s: u64,
 
     // ========================================================================
-    // Hostname allowlist (dantesync#113) — additive; both default to empty so an
+    // Hostname allowlist (dsync#113) — additive; both default to empty so an
     // old JSON blob still deserializes.
     // ========================================================================
-    /// dantesync#113: the CURRENTLY-resolved IPv4 set of every `gm_allowlist`
+    /// dsync#113: the CURRENTLY-resolved IPv4 set of every `gm_allowlist`
     /// hostname entry, so an external gate can compare `gm_source_ip` against the
     /// live resolution (empty on a literal-only or not-yet-resolved allowlist).
     #[serde(default)]
     pub gm_allowlist_resolved: Vec<Ipv4Addr>,
 
-    /// dantesync#113: `gm_allowlist` hostname entries that currently FAIL to
+    /// dsync#113: `gm_allowlist` hostname entries that currently FAIL to
     /// resolve (empty when all resolve or there are no hostnames). A non-empty
     /// list is the loud, machine-readable "grandmaster name unresolvable" signal.
     #[serde(default)]
     pub gm_allowlist_unresolved: Vec<String>,
 
     // ========================================================================
-    // Fleet date offset (dantesync#88) — additive; all default to the "no date
+    // Fleet date offset (dsync#88) — additive; all default to the "no date
     // authority known" reading so an old JSON blob still deserializes.
     // ========================================================================
-    /// dantesync#88: this node's role for the fleet date offset `D` (wall = PTP time + D):
+    /// dsync#88: this node's role for the fleet date offset `D` (wall = PTP time + D):
     /// `"master"` = the NTP master, the single authority that announces `D`; `"follower"` =
     /// aligned with the master's announced `D` (steps only at the announced instants);
     /// `"local"` = PTP phase-locked but no authority heard yet (an older master, a grandmaster
     /// mismatch, the master unreachable) — the date then follows this node's own NTP step path;
-    /// `"holding"` (dantesync#126) = a follower whose master went silent: it keeps the adopted `D`
+    /// `"holding"` (dsync#126) = a follower whose master went silent: it keeps the adopted `D`
     /// and seq, takes no NTP step, and re-joins the master with no step when it is heard again —
     /// for up to `system.date_offset.authority_hold_s` (900 s), then `"local"`;
     /// `""` = the legacy discipline, or not PTP-phase-locked yet.
     #[serde(default)]
     pub date_authority: String,
 
-    /// dantesync#88: `D` in effect on this node (ns), `null` until anchored.
+    /// dsync#88: `D` in effect on this node (ns), `null` until anchored.
     #[serde(default)]
     pub date_offset_ns: Option<i64>,
 
-    /// dantesync#88: the announce this node publishes (the master) or last aligned with (a
+    /// dsync#88: the announce this node publishes (the master) or last aligned with (a
     /// follower): its `seq` and its effective PTP instant. `null` until known.
     #[serde(default)]
     pub date_offset_seq: Option<u32>,
-    /// dantesync#88: the grandmaster whose PTP time base `date_offset_ns` belongs to (the anchor's
+    /// dsync#88: the grandmaster whose PTP time base `date_offset_ns` belongs to (the anchor's
     /// grandmaster — during a grandmaster change it can differ from `gm_uuid` for one window, and
     /// is `null` then). `null` until anchored.
     #[serde(default)]
@@ -284,7 +284,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub date_offset_effective_ptp_ns: Option<i64>,
 
-    /// dantesync#88: a coordinated date step scheduled on this node: its size (ns) and the time
+    /// dsync#88: a coordinated date step scheduled on this node: its size (ns) and the time
     /// left until it applies (ms, negative = overdue). `null` when none is scheduled. On the
     /// MASTER this is "the announced fleet D minus my own D": the pending step, or — while the
     /// master's own wall is off the fleet line (its own PTP outage, a failed step) — the way back
@@ -295,7 +295,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub date_step_due_in_ms: Option<i64>,
 
-    /// dantesync#88: the FLEET line's UTC error (ms) as the master feeds its authority — its own
+    /// dsync#88: the FLEET line's UTC error (ms) as the master feeds its authority — its own
     /// reading plus how far its own wall is off the fleet line (equal to its reading while on the
     /// line) — and the bound (ms) past which it announces a step. `null` on a non-master.
     #[serde(default)]
@@ -303,7 +303,7 @@ pub struct SyncStatus {
     #[serde(default)]
     pub date_step_bound_ms: Option<f64>,
 
-    /// dantesync#88: the last date step this node applied — size (ns), wall epoch second, and
+    /// dsync#88: the last date step this node applied — size (ns), wall epoch second, and
     /// kind (`"coordinated"`, `"join"`, `"late"`, `"local"`). `null`/empty until one happened.
     #[serde(default)]
     pub last_date_step_ns: Option<i64>,
@@ -312,57 +312,57 @@ pub struct SyncStatus {
     #[serde(default)]
     pub last_date_step_kind: String,
 
-    /// dantesync#88: announces this node heard only after their instant and applied late. In a
+    /// dsync#88: announces this node heard only after their instant and applied late. In a
     /// healthy fleet this stays 0 — every step lands at the announced instant on every box.
     #[serde(default)]
     pub date_steps_late: u32,
-    /// dantesync#119: this node is SLEWING the fleet date now (a backward correction: `D` moves at
+    /// dsync#119: this node is SLEWING the fleet date now (a backward correction: `D` moves at
     /// `date_slew_ppm`, the wall never steps back).
     #[serde(default)]
     pub date_slew_active: bool,
-    /// dantesync#119: what this node's slew still has to move `D` (ms); `null` without a slew
+    /// dsync#119: what this node's slew still has to move `D` (ms); `null` without a slew
     /// scheduled or running.
     #[serde(default)]
     pub date_slew_remaining_ms: Option<f64>,
-    /// dantesync#119: the rate (ppm) of the fleet's current slew announce; `null` when the
+    /// dsync#119: the rate (ppm) of the fleet's current slew announce; `null` when the
     /// published date change is not a slew.
     #[serde(default)]
     pub date_slew_ppm: Option<u32>,
-    /// dantesync#119: the published slew's start and end `D` (its start instant is
+    /// dsync#119: the published slew's start and end `D` (its start instant is
     /// `date_offset_effective_ptp_ns`) — what the 31900 extension carries.
     #[serde(default)]
     pub date_slew_from_ns: Option<i64>,
     #[serde(default)]
     pub date_slew_to_ns: Option<i64>,
-    /// dantesync#119 follow-up: the published date change (`date_offset_seq`) is a
+    /// dsync#119 follow-up: the published date change (`date_offset_seq`) is a
     /// MICRO-correction — what the 31900 extension's MICRO flag carries.
     #[serde(default)]
     pub date_offset_micro: bool,
-    /// dantesync#119 follow-up: a date micro-correction is in flight on this node now (its step is
+    /// dsync#119 follow-up: a date micro-correction is in flight on this node now (its step is
     /// scheduled, or its slew scheduled or running).
     #[serde(default)]
     pub date_micro_active: bool,
-    /// dantesync#119 follow-up: the last micro-correction this node APPLIED (µs, signed: a forward
+    /// dsync#119 follow-up: the last micro-correction this node APPLIED (µs, signed: a forward
     /// step or a backward slew); `null` before the first.
     #[serde(default)]
     pub date_micro_last_us: Option<i64>,
-    /// dantesync#119 follow-up (the NTP master only): the fleet date correction actually made per
+    /// dsync#119 follow-up (the NTP master only): the fleet date correction actually made per
     /// minute over the last 10 minutes (ms/min, signed) — in steady state the grandmaster-vs-UTC
     /// drift. The capacity is `micro_step_us / micro_interval_s` (1.5 ms/min by default).
     #[serde(default)]
     pub date_correction_rate_ms_per_min: Option<f64>,
-    /// dantesync#119 follow-up (the NTP master only): the micro-corrections cannot hold the fleet
+    /// dsync#119 follow-up (the NTP master only): the micro-corrections cannot hold the fleet
     /// date (the drift outruns their capacity, or the error is beyond 10 ms) — journal line
     /// `date correction falling behind`. Never a large step: that exists only beyond 2 × the step
     /// bound.
     #[serde(default)]
     pub date_correction_falling_behind: bool,
-    /// dantesync#119 follow-up (the NTP master only): the micro-corrections are paused — no UTC
+    /// dsync#119 follow-up (the NTP master only): the micro-corrections are paused — no UTC
     /// reading for over a minute (journal line `micro-corrections paused`); the fleet date runs
     /// free at the grandmaster's rate until UTC is back.
     #[serde(default)]
     pub date_micro_paused: bool,
-    /// dantesync#119 (1.11.1): how far the PTP phase-lock error moved across the last clock step
+    /// dsync#119 (1.11.1): how far the PTP phase-lock error moved across the last clock step
     /// this node could MEASURE (µs: the first phase-lock window after the step minus the last one
     /// before it; not measured when `D` moved again in between or across a PTP outage, so it may
     /// belong to an earlier step than `last_date_step_ts`). An exact step reads a few µs (the
@@ -370,17 +370,17 @@ pub struct SyncStatus {
     /// would have paid back through the rate. `null` before the first step measured.
     #[serde(default)]
     pub date_step_phase_jump_us: Option<f64>,
-    /// dantesync#119 (1.12, the NTP master only): how it corrects the fleet date — `"daily"` (one
+    /// dsync#119 (1.12, the NTP master only): how it corrects the fleet date — `"daily"` (one
     /// coordinated step per night, the default) or `"micro"` (the 1.11 micro-corrections). Empty
     /// on a follower (it applies whatever the master announces) and in a pre-1.12 blob.
     #[serde(default)]
     pub date_correction_mode: String,
-    /// dantesync#119 (1.12, daily mode on the master only): where the next nightly window opens,
+    /// dsync#119 (1.12, daily mode on the master only): where the next nightly window opens,
     /// as an RFC 3339 UTC second on the fleet wall (`"2026-09-27T02:00:00Z"`) — the window open
     /// NOW while it has not stepped yet. `null` otherwise.
     #[serde(default)]
     pub date_daily_next_utc: Option<String>,
-    /// dantesync#119 (1.12, daily mode on the master only): the last nightly step announced — the
+    /// dsync#119 (1.12, daily mode on the master only): the last nightly step announced — the
     /// fleet-wall epoch second it lands on, and its size (ms, signed: + = the fleet stepped
     /// forward). `null` before the first nightly step since the master started. An emergency step
     /// is not a nightly step: see `last_date_step_*`.
@@ -388,58 +388,58 @@ pub struct SyncStatus {
     pub date_daily_last_step_ts: Option<u64>,
     #[serde(default)]
     pub date_daily_last_step_ms: Option<f64>,
-    /// dantesync#126 (the NTP master): true when its authority was RESTORED from the state it
+    /// dsync#126 (the NTP master): true when its authority was RESTORED from the state it
     /// saved before a restart (the same `D`, seq and change in flight) — the fleet date did not
     /// change with the restart. `false` on a follower, on a master that started a new session
     /// (no valid saved state: the boot step ran), and in a pre-1.15 blob.
     #[serde(default)]
     pub date_offset_restored: bool,
-    /// dantesync#134 (the NTP master): its wall is not placed yet — the boot reading is pending, a
+    /// dsync#134 (the NTP master): its wall is not placed yet — the boot reading is pending, a
     /// saved fleet date offset waits for the first PTP windows, or a boot step is due. Its NTP
     /// server then answers with LI = 3 (unsynchronized), so no client steps to the raw wall it
     /// will leave in seconds. `false` on every other node and in a pre-1.19 blob.
     #[serde(default)]
     pub ntp_server_unsynchronized: bool,
-    /// dantesync#126 (a follower): whole seconds this node has HELD the fleet date offset since
+    /// dsync#126 (a follower): whole seconds this node has HELD the fleet date offset since
     /// its master went silent (`date_authority` = `"holding"`); `null` otherwise.
     #[serde(default)]
     pub date_authority_hold_age_s: Option<u64>,
-    /// dantesync#126 (the NTP master): the last coordinated step on request (`POST /date/step`
+    /// dsync#126 (the NTP master): the last coordinated step on request (`POST /date/step`
     /// on this server, loopback only) — when (UTC, fleet wall), and the step it announced or why
     /// it was refused. Empty when none since the process started.
     #[serde(default)]
     pub date_step_trigger_last: String,
 
     // ========================================================================
-    // PTP phase lock (dantesync#117) — additive.
+    // PTP phase lock (dsync#117) — additive.
     // ========================================================================
-    /// dantesync#117: `"ptp_phase_lock"` (rate AND phase from the Dante grandmaster, NTP only
+    /// dsync#117: `"ptp_phase_lock"` (rate AND phase from the Dante grandmaster, NTP only
     /// moves the date) or `"legacy"` (the pre-#117 rate-only servo + NTP steps / phase_slew).
     /// Empty in a pre-#117 blob.
     #[serde(default)]
     pub clock_discipline: String,
 
-    /// dantesync#117: what steers the frequency word. `"ptp"` whenever NTP has no term in it (the
+    /// dsync#117: what steers the frequency word. `"ptp"` whenever NTP has no term in it (the
     /// phase lock, or legacy with phase_slew off); `"ptp+ntp"` for legacy with phase_slew on (the
     /// contract violation #117 removes). Empty in a pre-#117 blob.
     #[serde(default)]
     pub rate_source: String,
 
-    /// dantesync#117: true while the PTP phase lock owns the frequency word (engaged after PTP
+    /// dsync#117: true while the PTP phase lock owns the frequency word (engaged after PTP
     /// lock; the rate servo holds it during acquisition).
     #[serde(default)]
     pub ptp_phase_locked: bool,
 
-    /// dantesync#117: the phase-lock error `e = (t2 − t1) − D` (µs) of the last PTP window;
+    /// dsync#117: the phase-lock error `e = (t2 − t1) − D` (µs) of the last PTP window;
     /// `null` until anchored. This — not `ntp_offset_us` — is the node's lock quality against the
     /// fleet time line.
     #[serde(default)]
     pub ptp_phase_error_us: Option<f64>,
 
     // ========================================================================
-    // PTP liveness (dantesync#112) — additive.
+    // PTP liveness (dsync#112) — additive.
     // ========================================================================
-    /// dantesync#112: whole seconds since the last ALLOWED PTP packet (a Sync or a Follow_Up from
+    /// dsync#112: whole seconds since the last ALLOWED PTP packet (a Sync or a Follow_Up from
     /// a source the `gm_allowlist` allows); `null` when none has come since the process started.
     /// Above 10 the node is PTP-stale: `is_locked` is false and `mode` is `"NTP-only"`, while
     /// `offset_ns` still holds the last measured value. Read this before trusting any PTP-derived
@@ -447,12 +447,12 @@ pub struct SyncStatus {
     #[serde(default)]
     pub last_ptp_rx_age_s: Option<u64>,
 
-    /// dantesync#112: allowed PTP packets per second over the last 10 s (a Dante grandmaster sends
+    /// dsync#112: allowed PTP packets per second over the last 10 s (a Dante grandmaster sends
     /// about 16: 8 Sync + 8 Follow_Up). 0 while stale.
     #[serde(default)]
     pub ptp_rx_pps: f64,
 
-    /// dantesync#112: the PTP multicast re-joins this process made (attempts, the last one's
+    /// dsync#112: the PTP multicast re-joins this process made (attempts, the last one's
     /// time, the interface/IP it joined on, its error).
     #[serde(default)]
     pub rejoin: RejoinStatus,
@@ -477,7 +477,7 @@ pub struct SyncStatus {
     pub last_freq_step_ts: Option<u64>,
 
     // ========================================================================
-    // Nightly date-step quantum (dantesync#119, 1.16) — additive.
+    // Nightly date-step quantum (dsync#119, 1.16) — additive.
     // ========================================================================
     /// Daily mode on the NTP master only: the nightly date step is the UTC error rounded to a
     /// whole multiple of this (ms, ties away from zero; `system.date_offset.daily_step_quantum_ms`,
@@ -489,7 +489,7 @@ pub struct SyncStatus {
     pub date_daily_step_quantum_ms: Option<u64>,
 
     // ========================================================================
-    // The PTP sender's identity (dantesync#129, 1.17) — additive, report-only.
+    // The PTP sender's identity (dsync#129, 1.17) — additive, report-only.
     // ========================================================================
     /// From the header of the last Sync this node followed: `versionPTP` (Dante: 1), the subdomain
     /// (Dante: `"_DFLT"`, up to the first NUL) and the sender's `sourceUuid` (a grandmaster's own
@@ -503,56 +503,62 @@ pub struct SyncStatus {
     pub ptp_source_uuid: Option<[u8; 6]>,
 
     // ========================================================================
-    // The PTP interface (dantesync#131) and the config source (#116) — additive.
+    // The PTP interface (dsync#131) and the config source (#116) — additive.
     // ========================================================================
-    /// dantesync#131: the pinned PTP interface (`system.interface` / `--interface`); `null` when
+    /// dsync#131: the pinned PTP interface (`system.interface` / `--interface`); `null` when
     /// the node is not pinned (it then joins the first IPv4 NIC, as before 1.21) and in a
     /// pre-1.21 blob.
     #[serde(default)]
     pub ptp_interface_configured: Option<String>,
 
-    /// dantesync#131: the interface of the last successful PTP join (the startup join, then each
+    /// dsync#131: the interface of the last successful PTP join (the startup join, then each
     /// re-join): the interface name on Linux, the Npcap device on Windows. `null` until joined,
     /// and in a pre-1.21 blob. With a pin it can only be the pinned NIC.
     #[serde(default)]
     pub ptp_interface: Option<String>,
 
-    /// dantesync#131: the IPv4 of that join (dotted quad); `null` like `ptp_interface`.
+    /// dsync#131: the IPv4 of that join (dotted quad); `null` like `ptp_interface`.
     #[serde(default)]
     pub ptp_interface_ip: Option<String>,
 
-    /// dantesync#116: where the running configuration came from — `loaded_from` = `"file"`
+    /// dsync#116: where the running configuration came from — `loaded_from` = `"file"`
     /// (`config.json`), `"last-good"` (it did not load; the copy of the last good load runs) or
     /// `"defaults"` (neither loaded) — and why `config.json` was not used. Anything but `"file"`
     /// also raises the clock alarm. `null` in a pre-1.21 blob.
     #[serde(default)]
     pub config_state: Option<ConfigState>,
 
+    /// dsync#147: the state directory the daemon resolved at start (`config.json`,
+    /// `date-offset.json`, `drift.json`): `/etc/dsync` / `C:\ProgramData\dsync`, or the legacy
+    /// pre-1.25 directory used in place when only it exists. `null` in a pre-1.25 blob.
+    #[serde(default)]
+    pub state_dir: Option<String>,
+
     // ========================================================================
-    // The learned-frequency seed (dantesync#142) — additive.
+    // The learned-frequency seed (dsync#142) — additive.
     // ========================================================================
-    /// dantesync#142: the learned frequency (ppm) read from the drift file at start; kept after
+    /// dsync#142: the learned frequency (ppm) read from the drift file at start; kept after
     /// the seed was rejected (`freq_seed_source` says so). `null` when no usable file was read,
     /// and in a pre-1.22 blob.
     #[serde(default)]
     pub freq_seed_ppm: Option<f64>,
 
-    /// dantesync#142: `"file"` (seeded from the drift file), `"none: <why>"` (the servo learned
+    /// dsync#142: `"file"` (seeded from the drift file), `"none: <why>"` (the servo learned
     /// from 0: no file, unreadable, malformed, too old, out of range) or `"rejected: <why>"` (the
     /// first measured windows disagreed with the seed; learned from 0). `null` in a pre-1.22 blob.
     #[serde(default)]
     pub freq_seed_source: Option<String>,
 
     // ========================================================================
-    // The first engagement's frequency (dantesync#146) — additive.
+    // The first engagement's frequency (dsync#146) — additive.
     // ========================================================================
-    /// dantesync#146: the frequency (ppm) the phase lock's FIRST engagement started on when the
+    /// dsync#146: the frequency (ppm) the phase lock's FIRST engagement started on when the
     /// acquisition measured it (the open-loop phase over up to 20 s, standard error ≤ 1 ppm);
     /// `null` when it started on the rate servo's word, and in a pre-1.23 blob.
     #[serde(default)]
     pub ptp_phase_engaged_on_ppm: Option<f64>,
 
-    /// dantesync#146: the frequency (ppm) the first engagement was re-seeded on once its fit had
+    /// dsync#146: the frequency (ppm) the first engagement was re-seeded on once its fit had
     /// 20 s (it started on a shorter ring and was off by ≥ 0.5 ppm and 3 σ); `null` when not
     /// needed, and in a pre-1.23 blob.
     #[serde(default)]
@@ -566,7 +572,7 @@ fn default_clock_alarm_interval_s() -> u64 {
 impl SyncStatus {
     /// Serialize this status to the SAME JSON bytes used by every consumer of the
     /// status — the named pipe (Windows tray IPC, length-prefixed) and the HTTP
-    /// status endpoint (dantesync#47, plain body). One implementation, shared by
+    /// status endpoint (dsync#47, plain body). One implementation, shared by
     /// both transports, so they can never silently drift apart.
     pub fn to_json_bytes(&self) -> serde_json::Result<Vec<u8>> {
         serde_json::to_vec(self)
@@ -676,6 +682,8 @@ impl Default for SyncStatus {
             ptp_interface: None,
             ptp_interface_ip: None,
             config_state: None,
+            // #147: set by main at start
+            state_dir: None,
             // #142: no drift file read yet
             freq_seed_ppm: None,
             freq_seed_source: None,
