@@ -901,6 +901,7 @@ canary evidence before continuing.
 - Decision: the release coupling matches TREE hashes. A `--no-ff` merge commit's tree equals dev's
   gated head. A schedule run dispatches the gate on dev, so `head_sha` is always the tested commit.
 - Build and verdict run on ubuntu-latest; companion only installs, measures and restores.
+- airuleset helper facts (2.11.): exit 6 = queued restore pending, `--restore` under a lease exits 3 and is queued for a root timer; no env-var check (sudo strips it).
 - Review fixes: StepNear polls carry `holdover` 1 in dstack's tracker (clock.rs), so they pass; a
   schedule run never counts as release evidence (it ends `success` having measured nothing); the
   check looks up the local commits with the release tree by `head_sha`; nightly at 03:00 UTC, after

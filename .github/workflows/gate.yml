@@ -141,8 +141,8 @@ jobs:
           echo "candidate sha256: $(sha256sum candidate/dantesync | cut -d' ' -f1)"
 
       # dsync-gate-install (airuleset, 2026-11-02) installs the binary and restarts dantesync. Exit 3
-      # means the rig lease is held (a production): the gate refuses. It is never retried and never
-      # overridden.
+      # means the rig lease is held (a production), exit 6 that an earlier restore is still queued,
+      # exit 5 a bad file. Every refusal fails the gate; none is retried or overridden.
       - name: Install candidate
         id: install
         run: |
@@ -152,8 +152,17 @@ jobs:
           rc=$?
           set -e
           if [ "$rc" -eq 3 ]; then
-            echo "lease_refused=1" >> "$GITHUB_OUTPUT"
+            echo "install_refused=1" >> "$GITHUB_OUTPUT"
             echo "::error title=Rig lease held::dsync-gate-install exit 3: the rig lease is held (a production). The gate refused to install and measured nothing. Not retried; re-run the gate when the lease is free."
+            exit 1
+          fi
+          if [ "$rc" -eq 6 ]; then
+            echo "install_refused=1" >> "$GITHUB_OUTPUT"
+            echo "::error title=Previous restore still queued::dsync-gate-install exit 6: a previous gate's restore is still queued (it runs about a minute after the rig lease ends). Nothing installed, nothing measured. Not retried; re-run the gate later."
+            exit 1
+          fi
+          if [ "$rc" -eq 5 ]; then
+            echo "::error title=Candidate refused::dsync-gate-install exit 5: the helper refused the candidate file (not a valid binary)."
             exit 1
           fi
           if [ "$rc" -ne 0 ]; then
@@ -217,17 +226,18 @@ jobs:
           retention-days: 30
 
       # Always put the previous binary back once an install was attempted: after a pass, a failure
-      # or a cancel. Not after a lease refusal (exit 3): nothing was installed, and the rig is in a
-      # production.
+      # or a cancel. Not after a refusal (exit 3 lease held, exit 6 restore queued): nothing was
+      # installed. Under a held lease `--restore` exits 3 but QUEUES the restore: a root timer
+      # applies it about a minute after the lease ends (airuleset, 2026-11-02).
       - name: Restore previous dantesync
-        if: always() && steps.install.outputs.attempted == '1' && steps.install.outputs.lease_refused != '1'
+        if: always() && steps.install.outputs.attempted == '1' && steps.install.outputs.install_refused != '1'
         run: |
           set +e
           sudo -n "$GATE_INSTALL" --restore
           rc=$?
           set -e
           if [ "$rc" -eq 3 ]; then
-            echo "::error title=Restore refused, candidate still installed::dsync-gate-install --restore exit 3: a production took the rig lease during the gate. The gate candidate is STILL the running dantesync on companion. Do NOT re-run this job (it would install again). When the lease is free, ask airuleset (the runner's owner) to run dsync-gate-install --restore on companion."
+            echo "::error title=Restore queued::dsync-gate-install --restore exit 3: a production took the rig lease during the gate. Restore queued, root timer applies it after the lease ends; no human action needed. Until then the gate candidate is the running dantesync on companion."
             exit 1
           fi
           if [ "$rc" -ne 0 ]; then

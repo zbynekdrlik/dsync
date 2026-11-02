@@ -13,6 +13,14 @@ Part 1 (this file) is live. Part 2 waits on the owner (see below).
   - `<binary>` installs the candidate and restarts `dantesync`.
   - `--restore` puts the previous binary back.
   - Exit 3 means the rig lease is held (a production). The helper refuses, and so does the gate.
+    `--restore` under a held lease also exits 3, but it QUEUES the restore. A root timer applies it
+    about a minute after the lease ends.
+  - Exit 6: a queued restore is pending, so the helper refuses a new install. The gate fails with
+    "previous restore still queued".
+  - Exit 5: a bad file. Exit 0: done (`--restore` on a free lease included).
+  - After a restore, `.gate-prev` is removed, so the next install saves the binary that is current
+    then.
+  - The held-lease paths have not been exercised live yet (airuleset, 2026-11-02).
 - dsync never deploys to nodes. This job and its helper are dsync's only touch of companion. No
   ssh.
 
@@ -39,7 +47,9 @@ Triggers:
 - What stops it: fork PR workflows need a maintainer's approval on `zbynekdrlik/dsync`. airuleset
   set this when it provisioned the runner (airuleset#1280, 2026-11-02).
 - Never approve a fork PR's workflow run that touches `.github/`.
-- Possible hardening, for airuleset to decide: the helper could check `GITHUB_WORKFLOW_REF`.
+- The security controls are exactly these two: the triggers and the fork approval.
+- airuleset rejected an environment-variable check in the helper: sudo strips the variable, so the
+  check adds no boundary.
 
 Jobs:
 
@@ -55,8 +65,7 @@ Jobs:
    - samples `http://127.0.0.1:8898/status` every 10 s;
    - uploads `clock.jsonl`, `clock.stderr` and `status.jsonl` as the `gate-logs` artifact;
    - runs `--restore` last whenever an install was attempted, also after a failure or a cancel.
-     It does not run after a lease refusal (exit 3), because nothing was installed and the rig is in
-     a production.
+     It does not run after an install refusal (exit 3 or 6), because nothing was installed.
 3. **verdict** (`ubuntu-latest`): `scripts/dante_gate.py verdict gate-logs/clock.jsonl --polls
    3600`.
 
@@ -116,10 +125,12 @@ to be free. Then gate the tree again:
 `stable` toolchain of that day. The gate run's step summary records the candidate's version,
 `rustc -V`, commit, tree and sha256, so a release can be compared with what was gated.
 
-**Restore refused (exit 3 on `--restore`).** A production took the lease during the hour, so the
-candidate is still the running `dantesync` on companion. The job fails with an error that says so.
-Do not re-run the job, because that installs again. Ask airuleset (the runner's owner) to run
-`dsync-gate-install --restore` once the lease is free.
+**Restore queued (exit 3 on `--restore`).** A production took the lease during the hour.
+
+- The helper queued the restore. A root timer applies it about a minute after the lease ends, so
+  no human action is needed.
+- The job fails with "restore queued".
+- Until the restore runs, a new gate run gets exit 6 ("previous restore still queued").
 
 ## Known side effects (camera-box conditions)
 
