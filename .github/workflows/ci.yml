@@ -386,8 +386,9 @@ jobs:
 
       # dantesync#98: a release is tagged only after a successful gate.yml run (the Dante stability
       # gate on companion) tested this exact tree. The merge commit has a new SHA but, with master an
-      # ancestor of dev, the same tree as dev's gated head. No match = no tag; gate the tree on dev
-      # (`gh workflow run gate.yml --ref dev`) and re-run this job. See docs/dante-gate.md.
+      # ancestor of dev, the same tree as dev's gated head. Only push / workflow_dispatch gate runs
+      # count (a schedule run measures nothing). No match = no tag; gate the tree (after the merge:
+      # `gh workflow run gate.yml --ref master`) and re-run this job. See docs/dante-gate.md.
       - name: Require a green Dante gate on this tree
         env:
           GH_TOKEN: ${{ github.token }}

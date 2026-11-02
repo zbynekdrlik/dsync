@@ -11,8 +11,10 @@ on:
   push:
     branches: [dev]
   schedule:
-    # Nightly, 01:00 UTC (02:00/03:00 Slovak time), outside productions. The rig lease still decides.
-    - cron: '0 1 * * *'
+    # Nightly 03:00 UTC (04:00/05:00 Slovak time): outside productions (the rig lease still
+    # decides) and clear of dsync's nightly date window (`daily_step_utc` default 02:00 UTC), so a
+    # night run measures steady state, not the fleet's date correction.
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -31,7 +33,10 @@ env:
 jobs:
   # A scheduled run always checks out the default branch (master). The nightly gate must test the
   # release candidate on dev, so it dispatches this workflow on dev: that run's head_sha is then the
-  # commit it tested, which is what ci.yml's release check matches on.
+  # commit it tested, which is what ci.yml's release check matches on. A schedule run itself is
+  # never release evidence (scripts/dante_gate.py accepts only push / workflow_dispatch runs).
+  # When dev's head already passed the gate it dispatches nothing: every gate run restarts
+  # dantesync on companion and may page camera-box's clock watchdog.
   nightly:
     name: Dispatch nightly gate on dev
     if: github.event_name == 'schedule'
@@ -39,10 +44,19 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Dispatch gate.yml on dev
+      - name: Dispatch gate.yml on dev unless its head already passed
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run gate.yml --repo "$GITHUB_REPOSITORY" --ref dev
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/gate.yml/runs?head_sha=$head&status=success&per_page=100" \
+            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")] | length')
+          if [ "$passed" -gt 0 ]; then
+            echo "dev head $head already passed the gate ($passed runs): nothing to do"
+            exit 0
+          fi
+          gh workflow run gate.yml --repo "$GITHUB_REPOSITORY" --ref dev
+          echo "dispatched gate.yml on dev ($head)"
 
   build:
     name: Build candidate
@@ -79,10 +93,20 @@ jobs:
             "https://github.com/zbynekdrlik/dstack/releases/download/$DSTACK_TAG/$DSTACK_ASSET"
           echo "$DSTACK_SHA256  candidate/$DSTACK_ASSET" | sha256sum -c -
 
+      # The gated binary is built here; release.yml rebuilds the same tree at tag time with the
+      # toolchain of that day. Record what was gated so a release can be compared to it.
       - name: Stage candidate
         run: |
           cp target/release/dantesync candidate/dantesync
-          ./candidate/dantesync --version
+          {
+            echo "### Gate candidate"
+            echo '```'
+            ./candidate/dantesync --version
+            rustc -V
+            echo "commit $GITHUB_SHA, tree $(git rev-parse 'HEAD^{tree}')"
+            echo "sha256 $(sha256sum candidate/dantesync | cut -d' ' -f1)"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -117,12 +141,15 @@ jobs:
       # means the rig lease is held (a production): the gate refuses. It is never retried and never
       # overridden.
       - name: Install candidate
+        id: install
         run: |
+          echo "attempted=1" >> "$GITHUB_OUTPUT"
           set +e
           sudo -n "$GATE_INSTALL" "$PWD/candidate/dantesync"
           rc=$?
           set -e
           if [ "$rc" -eq 3 ]; then
+            echo "lease_refused=1" >> "$GITHUB_OUTPUT"
             echo "::error title=Rig lease held::dsync-gate-install exit 3: the rig lease is held (a production). The gate refused to install and measured nothing. Not retried; re-run the gate when the lease is free."
             exit 1
           fi
@@ -136,6 +163,7 @@ jobs:
         run: |
           mkdir -p gate-logs
           (
+            set +e
             while :; do
               ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
               if body=$(curl -fsS -m 5 http://127.0.0.1:8898/status 2>/dev/null); then
@@ -147,7 +175,8 @@ jobs:
             done
           ) > gate-logs/status.jsonl &
           sampler=$!
-          trap 'kill "$sampler" 2>/dev/null || true' EXIT
+          stop_sampler() { pkill -P "$sampler" 2>/dev/null; kill "$sampler" 2>/dev/null; true; }
+          trap stop_sampler EXIT
           set +e
           "./candidate/$DSTACK_ASSET" clock --seconds "$GATE_SECONDS" \
             > gate-logs/clock.jsonl 2> gate-logs/clock.stderr
@@ -157,6 +186,17 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             echo "::error title=Measurement failed::dante-stack-dev clock exit $rc"
             cat gate-logs/clock.stderr
+            exit 1
+          fi
+          # The /status evidence must be complete too: the sampler alive the whole run and about
+          # one sample per 10 s (at least 90 %).
+          if ! kill -0 "$sampler" 2>/dev/null; then
+            echo "::error title=Status sampler died::the /status sampler stopped before the measurement ended"
+            exit 1
+          fi
+          samples=$(wc -l < gate-logs/status.jsonl)
+          if [ "$samples" -lt $(( GATE_SECONDS * 9 / 100 )) ]; then
+            echo "::error title=Status samples missing::$samples /status samples, need at least $(( GATE_SECONDS * 9 / 100 ))"
             exit 1
           fi
 
@@ -169,9 +209,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # Always put the previous binary back: after a pass, a failure, a lease refusal or a cancel.
+      # Always put the previous binary back once an install was attempted: after a pass, a failure
+      # or a cancel. Not after a lease refusal (exit 3): nothing was installed, and the rig is in a
+      # production.
       - name: Restore previous dantesync
-        if: always()
+        if: always() && steps.install.outputs.attempted == '1' && steps.install.outputs.lease_refused != '1'
         run: sudo -n "$GATE_INSTALL" --restore
 
   verdict:

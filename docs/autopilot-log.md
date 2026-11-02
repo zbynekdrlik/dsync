@@ -901,4 +901,9 @@ canary evidence before continuing.
 - Decision: the release coupling matches TREE hashes. A `--no-ff` merge commit's tree equals dev's
   gated head. A schedule run dispatches the gate on dev, so `head_sha` is always the tested commit.
 - Build and verdict run on ubuntu-latest; companion only installs, measures and restores.
+- Review fixes: StepNear polls carry `holdover` 1 in dstack's tracker (clock.rs), so they pass; a
+  schedule run never counts as release evidence (it ends `success` having measured nothing); the
+  check looks up the local commits with the release tree by `head_sha`; nightly at 03:00 UTC, after
+  dsync's 02:00 UTC date window, and skipped when dev's head already passed; no `--restore` after a
+  lease refusal; the `/status` sampler must survive the run.
 - Part 2 (receiver heartbeat records) stays open on #98 and waits on the owner.

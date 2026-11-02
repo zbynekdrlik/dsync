@@ -21,11 +21,25 @@ Part 1 (this file) is live. Part 2 waits on the owner (see below).
 Triggers:
 
 - `push` to `dev`. This is how a release candidate gets gated.
-- A nightly `schedule` at 01:00 UTC. A scheduled run always checks out the default branch, so the
-  cron job only dispatches `gate.yml` on `dev`.
+- A nightly `schedule` at 03:00 UTC. That is after dsync's nightly date window (`daily_step_utc`,
+  default 02:00 UTC), so the hour measures steady state.
+  - A scheduled run always checks out the default branch, so the cron job only dispatches
+    `gate.yml` on `dev`.
+  - It dispatches nothing when dev's head already passed. Every gate run restarts `dantesync` on
+    companion.
+  - A `schedule` run is never release evidence.
 - `workflow_dispatch`, for example `gh workflow run gate.yml --ref dev`.
 - **Never `pull_request` or `pull_request_target`.** The repo is public, so a fork PR must never run
   code on the self-hosted runner.
+
+**The real control against fork PRs is the repo setting, not this file.**
+
+- A fork PR runs its own copy of the workflows. `ci.yml` runs on `pull_request`, so a fork could
+  write `runs-on: [dante-gate, companion]` into it.
+- What stops it: fork PR workflows need a maintainer's approval on `zbynekdrlik/dsync`. airuleset
+  set this when it provisioned the runner (airuleset#1280, 2026-11-02).
+- Never approve a fork PR's workflow run that touches `.github/`.
+- Possible hardening, for airuleset to decide: the helper could check `GITHUB_WORKFLOW_REF`.
 
 Jobs:
 
@@ -40,7 +54,9 @@ Jobs:
      (127.0.0.1:31900). It only reads, and never opens UDP 319 or 320;
    - samples `http://127.0.0.1:8898/status` every 10 s;
    - uploads `clock.jsonl`, `clock.stderr` and `status.jsonl` as the `gate-logs` artifact;
-   - always runs `--restore` last, also after a failure, a lease refusal or a cancel.
+   - runs `--restore` last whenever an install was attempted, also after a failure or a cancel.
+     It does not run after a lease refusal (exit 3), because nothing was installed and the rig is in
+     a production.
 3. **verdict** (`ubuntu-latest`): `scripts/dante_gate.py verdict gate-logs/clock.jsonl --polls
    3600`.
 
@@ -56,9 +72,12 @@ the whole run:
 - **exactly one `Ready`**: a poll whose `ready` turns 1. The first poll counts when it is already 1.
   Never ready fails, and ready lost and regained fails;
 - **zero `ReAnchored`**: no poll with a non-null `re_anchor_ns` or a non-zero `re_anchors`;
-- **zero `Holdover`**: no poll with `holdover` = 1;
-- `StepNear` (`sample` 3, a date step within 2 s) is fine. The other sample codes are only counted
-  in the report;
+- **zero `Holdover`**: no poll with `holdover` = 1, except a StepNear poll;
+- `StepNear` (`sample` 3, a date step within 2 s) is fine. dstack's tracker turns every unusable
+  poll after the anchor into Holdover, StepNear included (`Tracker::feed` in
+  `crates/dante-stack/src/clock.rs`, v0.4.33). So a holdover on a StepNear poll is counted apart and
+  passes. A slew (`sample` 4) holdover fails. The other sample codes are only counted in the
+  report;
 - **a complete log**: exactly 3600 parseable poll records, and the tool exits 0.
 
 Tests: `scripts/test_dante_gate.py`, run in CI's Test job (`python3 -m unittest discover -s scripts
@@ -66,9 +85,10 @@ Tests: `scripts/test_dante_gate.py`, run in CI's Test job (`python3 -m unittest 
 
 ## Release coupling
 
-`auto-release` in `ci.yml` runs `scripts/dante_gate.py release-check` before it creates a tag. The
-check passes only when a successful `gate.yml` run tested a commit whose git tree equals the master
-commit's tree (`git rev-parse HEAD^{tree}`).
+`auto-release` in `ci.yml` runs `scripts/dante_gate.py release-check` before it creates a tag. It
+takes every local commit whose tree equals the master commit's tree (`git log --all --format='%H
+%T'`) and looks each one up (`gate.yml` runs with `head_sha=<sha>`). It passes only on a
+successful run started by `push` or `workflow_dispatch`.
 
 The PR's merge commit has a new SHA. When master is an ancestor of dev (the normal flow), its tree
 is identical to dev's gated head, and equal trees are identical files. If master ever diverges, the
@@ -84,9 +104,17 @@ So the order is:
 A commit on `dev` after the gate changes the tree, so the gate must run again before the merge.
 
 **Gate refused or failed** (the lease, the rig, a real regression): fix it, or wait for the lease
-to be free. Then run `gh workflow run gate.yml --ref dev`. If master already merged, re-run master
-CI's `auto-release` job afterwards. The check comes before the tag step, so a rerun always checks
-again.
+to be free. Then gate the tree again:
+
+- Before the merge: `gh workflow run gate.yml --ref dev`.
+- After the merge: `gh workflow run gate.yml --ref master`. That run's `head_sha` is the merge
+  commit itself. Dev may have moved on already, so a dev run might test a different tree.
+- Then re-run master CI's `auto-release` job. The check comes before the tag step, so a rerun always
+  checks again.
+
+**Gated binary and released binary.** `release.yml` rebuilds the same tree at tag time, with the
+`stable` toolchain of that day. The gate run's step summary records the candidate's version,
+`rustc -V`, commit, tree and sha256, so a release can be compared with what was gated.
 
 ## Known side effects (camera-box conditions)
 
