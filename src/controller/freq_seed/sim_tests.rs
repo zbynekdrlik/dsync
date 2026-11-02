@@ -28,8 +28,9 @@ const WINDOW_S: f64 = 0.5;
 const SAMPLES: usize = 4;
 /// Per-sample timestamp jitter (µs, 1 σ): a Linux kernel-timestamped box.
 const LINUX_JITTER_US: f64 = 1.0;
-/// … and a Windows Npcap box (a pessimistic per-sample figure; never measured on the rig).
-const WINDOWS_JITTER_US: f64 = 30.0;
+/// … and a Windows Npcap box: a moderate and a pessimistic per-sample figure (neither measured on
+/// the rig).
+const WINDOWS_JITTER_US: [f64; 2] = [10.0, 30.0];
 const MAX_WINDOWS: usize = 600;
 
 struct Run {
@@ -194,42 +195,39 @@ fn many_seeds() -> impl Iterator<Item = u64> {
 fn a_good_seed_is_kept_under_windows_level_jitter_142() {
     // At 30 µs per sample the judge's 2 s slope has ~13 µs/s of noise, so a seed 2 ppm off is
     // occasionally dropped: the cost is the cold learn (the behaviour before 1.22), never a wrong
-    // seed. A seed from another oscillator is still dropped every time.
-    for good in [LEARNED_PPM - 2.0, LEARNED_PPM + 2.0] {
-        let runs: Vec<Run> = many_seeds()
-            .map(|s| run(Some(good), s, WINDOWS_JITTER_US))
-            .collect();
-        let kept = runs
-            .iter()
-            .filter(|r| r.source.as_deref() == Some("file"))
-            .count();
-        let mut lock_s: Vec<f64> = runs
-            .iter()
-            .filter(|r| r.source.as_deref() == Some("file"))
-            .map(Run::lock_s)
-            .collect();
-        lock_s.sort_by(|a, b| a.total_cmp(b));
-        println!(
-            "[#142 sim] seed {good:+.1}ppm, {WINDOWS_JITTER_US} us sample jitter: kept in {kept} of \
-             {} runs; LOCK (kept) median {:.1} s, max {:.1} s",
-            runs.len(),
-            lock_s[lock_s.len() / 2],
-            lock_s[lock_s.len() - 1]
-        );
-        assert!(
-            kept * 10 >= runs.len() * 8,
-            "kept in {kept} of {}",
-            runs.len()
-        );
-        let wrong = many_seeds()
-            .filter(|&s| {
-                run(Some(good + 50.0), s, WINDOWS_JITTER_US)
-                    .source
-                    .as_deref()
-                    .is_some_and(|src| src.starts_with("rejected: "))
-            })
-            .count();
-        assert_eq!(wrong, 40, "a seed 50 ppm off is dropped in every run");
+    // seed. At 10 µs it is always kept. A seed from another oscillator is dropped every time.
+    for jitter in WINDOWS_JITTER_US {
+        for good in [LEARNED_PPM - 2.0, LEARNED_PPM + 2.0] {
+            let runs: Vec<Run> = many_seeds().map(|s| run(Some(good), s, jitter)).collect();
+            let kept: Vec<&Run> = runs
+                .iter()
+                .filter(|r| r.source.as_deref() == Some("file"))
+                .collect();
+            let mut lock_s: Vec<f64> = kept.iter().map(|r| r.lock_s()).collect();
+            lock_s.sort_by(|a, b| a.total_cmp(b));
+            println!(
+                "[#142 sim] seed {good:+.1}ppm, {jitter} us sample jitter: kept in {} of {} \
+                 runs; LOCK (kept) median {:.1} s, max {:.1} s",
+                kept.len(),
+                runs.len(),
+                lock_s[lock_s.len() / 2],
+                lock_s[lock_s.len() - 1]
+            );
+            if jitter <= 10.0 {
+                assert_eq!(kept.len(), runs.len(), "always kept at {jitter} us");
+            } else {
+                assert!(kept.len() * 10 >= runs.len() * 8, "kept in {}", kept.len());
+            }
+            let dropped = many_seeds()
+                .filter(|&s| {
+                    run(Some(good + 50.0), s, jitter)
+                        .source
+                        .as_deref()
+                        .is_some_and(|src| src.starts_with("rejected: "))
+                })
+                .count();
+            assert_eq!(dropped, 40, "a seed 50 ppm off is dropped in every run");
+        }
     }
 }
 
@@ -237,8 +235,9 @@ fn a_good_seed_is_kept_under_windows_level_jitter_142() {
 fn the_judge_reads_the_error_against_the_seed_not_against_the_p_term_142() {
     // The ACQ P term (0.8) pulls the word toward the oscillator after the first measured window,
     // so the raw rate understates a wrong seed: 25 ppm off reads ~25, ~15, ~11, ... A judge on the
-    // raw rate accepts it; on the rate against the seed it does not. And a 15 ppm error (a seed
-    // closer than the cold start's 0) is kept: the window-average word does not inflate it.
+    // raw rate accepts it; on the rate against the seed it does not. A 15 ppm error (a seed closer
+    // than the cold start's 0) is kept. (The window-average word itself is pinned by
+    // `freq_seed::tests::the_judge_charges_each_window_half_to_the_previous_word_and_half_to_the_last_142`.)
     for &s in &SEEDS {
         for off in [25.0, -25.0] {
             let r = run(Some(LEARNED_PPM + off), s, LINUX_JITTER_US);

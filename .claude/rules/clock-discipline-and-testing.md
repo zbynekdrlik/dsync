@@ -1279,6 +1279,9 @@ LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was l
   to 0, AND this window's rate, the smoothed rate and the spike filter rebased to a word of 0.
   Without the rebase the smoothed rate still read the oscillator against the seeded word and
   the integrator's first steps went the seed's way (review round 1: −1.2 ppm for a +35 target).
+  The jitter estimate is cleared too (its history would mix both). Every one of these is pinned:
+  review round 2 mutated each away (and the window-average word into either single word) and
+  each mutation fails a test.
 - **A systemd stop is SIGTERM**, which ctrlc handles only with its `termination` feature. Without
   it `run_sync_loop` never returned on Linux and no shutdown code ran (since forever); 1.22 enables
   it so the shutdown save runs. A Windows host shutdown sends the service SHUTDOWN, not STOP:
@@ -1292,7 +1295,9 @@ LOCK ~86 s after boot; dstack waits for `is_locked` (DSYX byte [41]). What was l
   and locks at 33.0-34.5 s, like the cold start (32.5-33.5 s); 15 ppm off is kept and locks at
   15-20 s. Under 10 µs per-sample jitter a 2 ppm-off seed is kept in 40 of 40 runs (LOCK median
   4-5 s); under a pessimistic 30 µs in 33-34 of 40 (a dropped one costs the cold learn, never a
-  wrong seed) and a 50 ppm-off seed is dropped in 40 of 40. The same model with fix 1 reverted
-  shows the gen3 signature (PROD at window 1, back to ACQ at 4). The model's cold LOCK (~33 s) is
+  wrong seed) and a 50 ppm-off seed is dropped in 40 of 40
+  (`a_good_seed_is_kept_under_windows_level_jitter_142`). A one-off measurement during the work
+  (the 1-value-per-window model, fix 1 reverted by hand, not a test): the gen3 signature, PROD at
+  window 1, back to ACQ at window 4. The model's cold LOCK (~33 s) is
   faster than the rig's (~70 s after Sync established): read the RELATIVE numbers, and the rig's
   own boot log for the absolute one.

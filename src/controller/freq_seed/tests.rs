@@ -215,15 +215,30 @@ fn a_seed_the_first_measured_windows_disagree_with_is_dropped_before_any_lock_14
     // The oscillator is 50 ppm away from the seed: the offset runs at +50 µs/s against it.
     let mut offset = 0.0;
     window(&mut c, offset); // no rate yet
-    for _ in 0..drift_file::SEED_JUDGE_WINDOWS {
+    for n in 0..drift_file::SEED_JUDGE_WINDOWS {
         assert!(c.freq_seed.judge.is_some());
         let word = c.applied_freq_ppm;
         offset += (50.0 + (word - 85.0)) * 0.5;
+        if n + 1 == drift_file::SEED_JUDGE_WINDOWS {
+            // Whatever the lock count reached against the seed, a rejection starts it over.
+            c.lock_stable_count = 3;
+        }
         window(&mut c, offset);
     }
     assert!(c.freq_seed.judge.is_none(), "judged");
     let source = status(&c).freq_seed_source.expect("source");
     assert!(source.starts_with("rejected: "), "{source}");
+    assert_eq!(c.lock_stable_count, 0, "the lock count starts over");
+    assert_eq!(
+        c.spike_filter.window_len(),
+        1,
+        "the spike filter starts over (only the rebased window in it)"
+    );
+    assert_eq!(
+        c.jitter_estimator.sample_count(),
+        1,
+        "and the jitter estimate (only the rebased window)"
+    );
     assert!(source.contains("us/s off the seed"), "{source}");
     assert_eq!(
         status(&c).freq_seed_ppm,
@@ -258,4 +273,59 @@ fn a_seed_the_first_measured_windows_agree_with_is_kept_142() {
     assert!(c.freq_seed.judge.is_none(), "judged");
     assert_eq!(status(&c).freq_seed_source.as_deref(), Some("file"));
     assert!((c.drift_baseline_ppm - 35.0).abs() < 1.0);
+}
+
+#[test]
+fn the_judge_charges_each_window_half_to_the_previous_word_and_half_to_the_last_142() {
+    // A window's median sits mid-window: its rate spans half the previous window (under
+    // `word_before`) and half this one (under `word_last`). With the seed 35 between a word of 5
+    // and one of 65, a raw rate of 0 is the oscillator exactly at the seed. Charged to the last
+    // word alone it would read −30 µs/s off the seed, to the previous word alone +30: both a
+    // rejection.
+    fn verdict(raw_rate_ppm: f64) -> String {
+        let (mut c, _) = controller();
+        c.freq_seed.seed_ppm = Some(35.0);
+        c.freq_seed.source = "file".to_string();
+        c.freq_seed.judge = Some(crate::drift_file::SeedJudge::default());
+        for _ in 0..drift_file::SEED_JUDGE_WINDOWS {
+            c.freq_seed.word_before = 5.0;
+            c.freq_seed.word_last = 65.0;
+            c.judge_freq_seed(raw_rate_ppm, 0.5);
+        }
+        assert!(c.freq_seed.judge.is_none(), "judged");
+        c.freq_seed.source.clone()
+    }
+    assert_eq!(verdict(0.0), "file");
+    assert_eq!(verdict(19.0), "file");
+    assert!(verdict(21.0).contains("+21.0 us/s"), "{}", verdict(21.0));
+    assert!(verdict(-21.0).contains("-21.0 us/s"), "{}", verdict(-21.0));
+}
+
+#[test]
+fn a_failing_save_warns_once_and_recovers_142() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (mut c, _) = controller();
+    c.is_locked = true;
+    c.drift_baseline_ppm = 20.0;
+    // A directory that does not exist (a read-only root answers EROFS the same way: no file).
+    let missing = dir.path().join("no-such-dir").join("drift.json");
+    c.open_drift_file(&missing);
+    c.save_drift_file_at_shutdown();
+    assert!(
+        c.freq_seed.save_failing,
+        "the failure is remembered (warned once)"
+    );
+    c.save_drift_file_at_shutdown();
+    assert!(c.freq_seed.save_failing, "still failing (logged at debug)");
+
+    let path = dir.path().join("drift.json");
+    c.freq_seed.path = Some(path.clone());
+    c.save_drift_file_at_shutdown();
+    assert!(!c.freq_seed.save_failing, "saving works again");
+    assert_eq!(
+        drift_file::load_seed(&path, now_s(), 500.0)
+            .expect("saved")
+            .freq_ppm,
+        20.0
+    );
 }

@@ -953,7 +953,17 @@ fn my_service_main(_arguments: Vec<OsString>) {
     // Wait for stop signal
     let _ = shutdown_rx.recv();
 
-    // Stop
+    // Stop. dantesync#142: say StopPending with a wait hint first, so the SCM (also at a host
+    // shutdown) waits for the loop to end and the learned frequency to be saved.
+    let _ = status_handle.set_service_status(ServiceStatus {
+        service_type: SERVICE_TYPE,
+        current_state: ServiceState::StopPending,
+        controls_accepted: ServiceControlAccept::empty(),
+        exit_code: ServiceExitCode::Win32(0),
+        checkpoint: 1,
+        wait_hint: Duration::from_secs(10),
+        process_id: None,
+    });
     running.store(false, Ordering::SeqCst);
     let _ = handle.join();
 

@@ -155,7 +155,8 @@ pub enum SeedVerdict {
 /// Judges a seed on the first measured windows' rates against the seed (µs/s = ppm: what the
 /// oscillator shows with the seed alone as its word), weighted by each window's length. Each
 /// window's rate is (its offset − the previous window's) / dt, so the weighted mean telescopes to
-/// the offset's slope over the whole span: only the first and the last window's jitter remain,
+/// the offset's slope over the whole span (the controller judges only windows with a measured
+/// rate, never one shorter than 0.1 s, which carries the smoothed rate instead): only the first and the last window's jitter remain,
 /// divided by the span (2 s), and a spike inside the span cancels out. A per-window median of
 /// three would keep each window's own jitter (on a Windows box tens of µs/s per window).
 #[derive(Clone, Debug, Default)]

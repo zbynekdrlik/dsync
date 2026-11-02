@@ -2654,7 +2654,8 @@ where
         // dantesync#142: a seeded start is judged on its first measured windows (before the
         // integrator step below, so a dropped seed learns from 0 already in this window; its rate
         // is then rebased to a word of 0).
-        let raw_rate_ppm = if measured {
+        // A window shorter than 0.1 s carries the smoothed rate, not its own: not judged.
+        let raw_rate_ppm = if measured && dt_secs > 0.1 {
             raw_rate_ppm - self.judge_freq_seed(raw_rate_ppm, dt_secs)
         } else {
             raw_rate_ppm

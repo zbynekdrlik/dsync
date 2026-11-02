@@ -26,7 +26,7 @@ const _: () = assert!(SEED_JUDGE_WINDOWS < LOCK_STABLE_COUNT);
 #[derive(Debug, Default)]
 pub(super) struct FreqSeed {
     /// `drift.json`; `None` until `main` opens it (unit tests, a node without the file).
-    path: Option<PathBuf>,
+    pub(super) path: Option<PathBuf>,
     /// The seed read at start (also after it was dropped); `None` = no usable file.
     pub(super) seed_ppm: Option<f64>,
     /// `/status.freq_seed_source`: `"file"`, `"none: <why>"` or `"rejected: <why>"`; empty until
@@ -39,11 +39,11 @@ pub(super) struct FreqSeed {
     /// The servo's word (`applied_freq_ppm`) written at the end of the last window, and the one
     /// before it. A window's median sits mid-window, so a window's rate spans half of the
     /// previous window (under `word_before`) and half of this one (under `word_last`).
-    word_last: f64,
-    word_before: f64,
+    pub(super) word_last: f64,
+    pub(super) word_before: f64,
     /// A failed save is warned about once per process (a read-only root answers EROFS every 10
     /// minutes); later failures are logged at debug, a recovery at info.
-    save_failing: bool,
+    pub(super) save_failing: bool,
 }
 
 impl<C, N, S> PtpController<C, N, S>
@@ -149,6 +149,8 @@ where
                 self.lock_stable_count = 0;
                 self.smoothed_rate_ppm -= word_ppm;
                 self.spike_filter.clear();
+                // Its history mixes rates against the seed with rates against 0: a false jitter.
+                self.jitter_estimator.clear();
                 word_ppm
             }
         }
