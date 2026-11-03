@@ -93,6 +93,13 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
   `freq_step` does. A simulation on exact 0.5 s / 1 s windows cannot see it: give a window test a
   non-dividing spacing (254 ms Syncs) and the real oscillator offset (mbc: 5.4 ppm, so the rate
   servo hands over early, on a short ring).
+- **A lone late window is held, not learned (#136, v1.27.2).** A USB Dante NIC (mbc-snv's ASIX)
+  delivers 3 of a window's 4 Syncs ~0.5 ms late now and then; the median can't reject that, and
+  the P term moved the line ~10 µs per window. `PhaseLockCore` keeps the word for a window whose
+  `e` jumps > `LATE_WINDOW_JUMP_US` (150) from the last taken one, at most `LATE_WINDOW_MAX_HOLD`
+  (3) in a row (the escape valve: a jump that persists is the clock). A test that wants to see
+  the PI arithmetic must use a one-window jump under 150 µs; the bench's plain-PI mirror carries
+  the hold.
 - **On-rig diagnosis:** the probe prints `e_us` / `freq_ppm` per second, and
   `RUST_LOG=dsync_ptp::follower=debug` logs every window with the boot fit's slope and σ
   (stderr). Read those before theorising about jitter: the fit was right, it just never fired.

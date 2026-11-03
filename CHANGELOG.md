@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rate servo's 2–5 ppm hand-over error to e ≈ +190 µs: dstack's Windows follower probe on
   mbc-snv never locked, or locked and walked away. The service shares the code (a cold boot
   without `drift.json`).
+- The phase lock holds a lone LATE window instead of learning from it (#136). mbc-snv's Dante
+  NIC is a USB adapter: now and then 3 of a window's 4 Syncs arrive ~0.5 ms late, the window's
+  `e` reads +455…+504 µs, and the P term moved the line 8-10 µs each. A window whose `e` jumps
+  more than 150 µs (`LATE_WINDOW_JUMP_US`, the [41] unlock bound) from the last one the PI took
+  keeps the word; a jump that persists 3 windows (`LATE_WINDOW_MAX_HOLD`) is taken. Shared by
+  the follower and the service; the gate, the frequency-step detector and the re-align still
+  see every window.
 
 - `install.ps1` removes every older name of dsync's that the fleet still had, not only the
   DanteSync ones (#153, owner: no PC keeps a mix of the old and the new): the `dantetimesync`
