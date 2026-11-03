@@ -6,6 +6,28 @@ Entries before 1.25.0 keep the names of their time (the project was renamed in 1
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.3] - 2026-11-03
+
+### Added
+
+- The follower takes a frequency seed: `FollowerConfig::with_frequency_seed(ppb)` (#136,
+  dstack: the boot must not be worse than the service's, which starts from `drift.json`). The
+  virtual clock and the rate servo start on it; the first 4 measured windows judge it as the
+  service judges `drift.json`, and a seed of another oscillator is dropped. The dsync service's
+  word is DSYX `[36-39]` (ppm × 1000 = ppb), the same quantity on the same PC. The seed judge
+  and the dropped-seed reset are shared (`dsync_ptp::freq_seed`, `RateServo::drop_seed`).
+- `FollowerState::settled` and `recent_abs_e_ns`: locked, the |e| p90 over the last 30 engaged
+  windows (late windows out) within 30 µs, and a boot pull's rest within it too (#136).
+- `dsync-ptp-probe --seed-ppb N | --seed-from-service`, and `settled` / `recent_e_us` columns.
+
+### Changed
+
+- Without a seed, the first engagement's 20 s fit is followed by a 60 s refinement that
+  re-seeds the integrator once when off by ≥ 0.2 ppm and 3 σ (#136). A 20 s fit under Windows
+  noise is good to ~0.5 ppm, and the ~100 s PI took minutes over the rest (+20…40 µs on mbc-snv
+  for ~5 min). In the model the learned frequency is within 0.2 ppm from ~90 s (0.71 ppm without
+  it). Shared with the service's cold start.
+
 ## [1.27.2] - 2026-11-03
 
 ### Fixed

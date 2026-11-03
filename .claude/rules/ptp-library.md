@@ -100,6 +100,15 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
   (3) in a row (the escape valve: a jump that persists is the clock). A test that wants to see
   the PI arithmetic must use a one-window jump under 150 µs; the bench's plain-PI mirror carries
   the hold.
+- **The boot, not worse than the service (#136, v1.27.3).** The service starts from
+  `drift.json`; the follower takes `with_frequency_seed(ppb)` (the service's word = DSYX
+  `[36-39]` ppb, same quantity) judged by the shared `freq_seed::SeedJudge`. Without a seed a
+  60 s refinement follows the 20 s fit (`BOOT_REFINE_*`). `settled` = locked + |e| p90 ≤ 30 µs
+  over 30 windows + a pull's rest ≤ 30 µs (requiring NO pull blocked it ~60 s after every small
+  re-seed). Model noise: `mbc_world` (25 µs per sample) matches mbc's window `e` sd (~11-14 µs);
+  35 µs reads p90 ~40 µs, noisier than the rig. A boot test needs a mechanism check (the learned
+  frequency vs the truth): the model's own 20 s fit is often accurate enough to hide the rig's
+  0.5 ppm hand-over.
 - **On-rig diagnosis:** the probe prints `e_us` / `freq_ppm` per second, and
   `RUST_LOG=dsync_ptp::follower=debug` logs every window with the boot fit's slope and σ
   (stderr). Read those before theorising about jitter: the fit was right, it just never fired.
