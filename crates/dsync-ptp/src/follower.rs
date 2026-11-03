@@ -320,7 +320,7 @@ fn run<N: PtpNetwork>(
 }
 
 /// The receive side of the thread: every receive followed by a reading of both clocks, and the
-/// stamp converted with it.
+/// stamp converted with `wall − raw` interpolated between the previous reading and this one.
 struct Receiver {
     stamps: StampConverter,
     warned_at: Option<Instant>,
@@ -359,6 +359,7 @@ impl Receiver {
         let mut time_message = false;
         loop {
             let received = network.recv_packet();
+            let prev = self.stamps.last();
             let reading = read();
             if let Continuity::Stepped { by_ns } = self.stamps.observe(reading) {
                 debug!(
@@ -381,7 +382,7 @@ impl Receiver {
                     let wall_rx_ns = since_epoch.as_nanos() as i64;
                     let verdict = core.on_packet(RxPacket {
                         data: &data[..size.min(data.len())],
-                        mono_rx_ns: reading.to_mono(wall_rx_ns),
+                        mono_rx_ns: reading.to_mono_between(prev, wall_rx_ns),
                         wall_rx_ns,
                         source_ip,
                     });

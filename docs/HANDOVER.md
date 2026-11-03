@@ -14,8 +14,13 @@ Owner rules from 2026-11-01:
 ## Machines
 
 - dev1: this project's account, with no sudo and no local audio network access assumed.
-- Rig nodes belong to camera-box. Do not deploy to them.
-- Non-rig nodes mbc, fohabl, iem-snv, companion-snv and alex-nb come to you when camera-box hands over the node list. Until that handover you have no fleet access.
+- One writer per box (camera-box's rule with the owner's warning, relayed by dstack 2026-11-03):
+  - Rig boxes are camera-box's ONLY: cam1-cam7, strih-snv, strih-pp, stream-snv, stream-pp, the resolume boxes (resolume-snv included) and dev1. No dsync session or script upgrades, restarts or writes config there; camera-box does them one at a time after its E2E.
+  - Non-rig boxes are dsync's only: companion-snv, mbc, fohabl (Ableton-FOH), iem-snv, alex-nb. The owner granted MCP access (`linux-presenter`, `win-mbc-snv`, `win-ableton-foh`, `win-iem-snv`, `win-alex-nb`), 2026-11-03.
+  - mbc is shared with dstack and iem-snv with dasio: touch only dsync's program there.
+- Upgrading a non-rig box (#153): the owner allows NO mix of old and new names, and NTP must point at the strih PC (`strih.lan`).
+  - Windows: `install.ps1` (1.27.1+ moves `C:\ProgramData\DanteSync` and removes the older names).
+  - Verify `/status` `state_dir`, `is_locked`, the version, `ntp_server` and that no dante* name of dsync's is left. Audinate's and dante-asio's names are not dsync's.
 
 ## What else acts on the machines
 

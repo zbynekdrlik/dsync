@@ -14,11 +14,11 @@ nix = { version = "0.27", features = ["socket", "net", "uio", "fs", "ioctl"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # dsync#136: the PTP code shared with the in-process follower library.
-dsync-ptp = { path = "crates/dsync-ptp", version = "1.27.0" }
+dsync-ptp = { path = "crates/dsync-ptp", version = "1.27.1" }
 
 [package]
 name = "dsync"
-version = "1.27.0"
+version = "1.27.1"
 edition = "2021"
 description = "High-precision PTPv1 synchronization for audio networks"
 license = "MIT"
@@ -82,7 +82,7 @@ sd-notify = "0.4"
 
 [dev-dependencies]
 mockall = "0.12"
-dsync-ptp = { path = "crates/dsync-ptp", version = "1.27.0", features = ["mock", "sim"] }
+dsync-ptp = { path = "crates/dsync-ptp", version = "1.27.1", features = ["mock", "sim"] }
 tempfile = "3.10"
 
 [[bin]]

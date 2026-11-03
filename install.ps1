@@ -21,7 +21,8 @@ if (Test-Path $NewDataDir) {
     $DataDir = $NewDataDir
 }
 
-# The pre-1.25 installation, removed below (one daemon per box). Its data dir stays.
+# The pre-1.25 installation, removed below (one daemon per box). Its data dir is MOVED to the new
+# one once both daemons are stopped (dsync#153, owner 2026-11-03: no mix of old and new names).
 $LegacyServiceName = "dantesync"
 $LegacyInstallDir = "C:\Program Files\DanteSync"
 
@@ -595,6 +596,14 @@ Stop-Process -Name "dantesync" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name "dantesync-tray" -Force -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "DanteSyncTray" -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "DanteSyncTrayStart" -Confirm:$false -ErrorAction SilentlyContinue
+# Older names still found on the fleet (dsync#153): the DanteTimeSync tray and the self-update task
+# that re-ran the old dantesync installer.
+Unregister-ScheduledTask -TaskName "DanteTray" -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "DanteSyncUpdate" -Confirm:$false -ErrorAction SilentlyContinue
+Stop-Process -Name "dantetray" -Force -ErrorAction SilentlyContinue
+if (Test-Path "C:\Program Files\DanteTimeSync") {
+    Remove-Item -Path "C:\Program Files\DanteTimeSync" -Recurse -Force -ErrorAction SilentlyContinue
+}
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "DanteSyncTray" -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "DanteSyncTray" -ErrorAction SilentlyContinue
 Remove-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\DanteSync.lnk" -Force -ErrorAction SilentlyContinue
@@ -602,6 +611,19 @@ Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Dan
 if (Test-Path $LegacyInstallDir) {
     Remove-Item -Path $LegacyInstallDir -Recurse -Force -ErrorAction SilentlyContinue
 }
+# dsync#153: the legacy data dir becomes the new one (config, last-good, drift, date offset, log).
+# Moved, never copied: one drift.json per box (ROZHODNUTÉ #147). Every daemon is stopped above.
+Stop-Process -Name "dsync" -Force -ErrorAction SilentlyContinue
+if ((Test-Path $LegacyDataDir) -and !(Test-Path $NewDataDir)) {
+    Write-Host "Moving $LegacyDataDir to $NewDataDir..."
+    Move-Item -Path $LegacyDataDir -Destination $NewDataDir
+} elseif ((Test-Path $LegacyDataDir) -and (Test-Path "$NewDataDir\config.json")) {
+    Write-Host "Removing the stale pre-1.25 data dir $LegacyDataDir (the new one has the config)..."
+    Remove-Item -Path $LegacyDataDir -Recurse -Force
+} elseif (Test-Path $LegacyDataDir) {
+    throw "Both $LegacyDataDir and $NewDataDir exist and the new one has no config.json: merge them by hand"
+}
+$DataDir = $NewDataDir
 
 # Kill processes - try graceful close for tray first to avoid ghost icons
 Write-Host "Checking for running processes..."
@@ -647,7 +669,7 @@ Write-Host "Installing Service..."
 $BinPath = "`"$ExePath`" --service"
 
 try {
-    New-Service -Name $ServiceName -BinaryPathName $BinPath -DisplayName "dsync" -StartupType Automatic -Description "Synchronizes system time with the PTPv1 grandmaster"
+    New-Service -Name $ServiceName -BinaryPathName $BinPath -DisplayName "dsync" -StartupType Automatic -Description "Synchronizes system time with the PTPv1 grandmaster" | Out-Null
 } catch {
     Write-Error "Failed to create service. Ensure you are running as Administrator. Error: $_"
 }
@@ -782,6 +804,17 @@ if ($ScriptPath) {
 }
 
 Write-Host "Installation Complete!" -ForegroundColor Green
-Write-Host "Service '$ServiceName' is running."
+Write-Host "Service '$ServiceName': $((Get-Service -Name $ServiceName).Status)"
+# dsync#153: every node takes its NTP from the strih PC.
+try {
+    $Ntp = (Get-Content "$DataDir\config.json" -Raw | ConvertFrom-Json).ntp_server
+    if ($Ntp -ne "strih.lan") {
+        Write-Warning "config.json ntp_server is '$Ntp', not strih.lan (the NTP master)"
+    } else {
+        Write-Host "NTP server: $Ntp" -ForegroundColor Gray
+    }
+} catch {
+    Write-Warning "Could not read ntp_server from $DataDir\config.json: $_"
+}
 Write-Host "Logs available at: $DataDir\dsync.log" -ForegroundColor Gray
 Write-Host "Config available at: $DataDir\config.json" -ForegroundColor Gray

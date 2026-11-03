@@ -1149,7 +1149,7 @@ mod tests {
     fn resolve_ntp_server_falls_back_to_default_config_when_both_use_default() {
         let cli = None;
         let config = Config::default();
-        assert_eq!(resolve_ntp_server(&cli, &config), "10.77.8.2");
+        assert_eq!(resolve_ntp_server(&cli, &config), "strih.lan");
     }
 
     #[test]
@@ -1162,8 +1162,10 @@ mod tests {
 
     #[test]
     fn config_default_has_expected_ntp_server() {
+        // dsync#153 (owner 2026-11-03): every node takes its NTP from the strih PC, the fleet's
+        // NTP master. The old default 10.77.8.2 does not answer NTP on the audio network.
         let config = Config::default();
-        assert_eq!(config.ntp_server, "10.77.8.2");
+        assert_eq!(config.ntp_server, "strih.lan");
     }
 
     /// #68 review finding: the `max_step_us` migration indexed
@@ -1237,7 +1239,7 @@ mod tests {
         let config: Config =
             serde_json::from_str(json).expect("a minimal gm_allowlist-only config must parse");
         assert_eq!(
-            config.ntp_server, "10.77.8.2",
+            config.ntp_server, "strih.lan",
             "missing ntp_server must fall back to the fleet default, not fail the parse"
         );
         assert_eq!(config.system.gm_allowlist, vec!["10.77.9.0/24".to_string()]);

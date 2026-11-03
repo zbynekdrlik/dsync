@@ -63,6 +63,37 @@ impl TimeBaseReading {
     pub fn to_mono(&self, wall_ns: i64) -> i64 {
         wall_ns.wrapping_sub(self.wall_minus_mono_ns)
     }
+
+    /// A wall stamp received between `prev` and this reading, converted with `wall − raw` at the
+    /// stamp itself (dsync#136).
+    ///
+    /// A reading taken AFTER the receive is off by the host's slew × the read delay: two
+    /// followers on one PC read at different delays, so they converted the same kernel stamp to
+    /// different raw instants (CI run 41558600507: 4.5 µs). A slew is linear between two readings
+    /// a poll apart, so `wall − raw` is interpolated at the stamp. A stamp outside the bracket
+    /// (queued before `prev`) takes the nearest reading. A step between the two readings is not
+    /// interpolated: [`StampConverter`] reports it and the caller drops the pass.
+    pub fn to_mono_between(&self, prev: Option<TimeBaseReading>, wall_ns: i64) -> i64 {
+        let Some(prev) = prev else {
+            return self.to_mono(wall_ns);
+        };
+        let span = self.mono_ns.saturating_sub(prev.mono_ns);
+        if span <= 0 {
+            return self.to_mono(wall_ns);
+        }
+        let moved = self
+            .wall_minus_mono_ns
+            .wrapping_sub(prev.wall_minus_mono_ns) as i128;
+        let wall_minus_mono_at = |at: i64| {
+            let at = at.clamp(prev.mono_ns, self.mono_ns);
+            let offset = moved * (at - prev.mono_ns) as i128 / span as i128;
+            prev.wall_minus_mono_ns.wrapping_add(offset as i64)
+        };
+        // Where the stamp falls on the raw axis: first with this reading (off by slew × delay),
+        // then once more with the interpolated offset, which leaves slew² × delay (sub-ns).
+        let first = wall_ns.wrapping_sub(wall_minus_mono_at(self.to_mono(wall_ns)));
+        wall_ns.wrapping_sub(wall_minus_mono_at(first))
+    }
 }
 
 /// Read both clocks: raw, wall, raw; re-read (up to 3 times) when the two raw reads are more than
@@ -113,6 +144,11 @@ impl StampConverter {
     /// Steps seen so far.
     pub fn steps(&self) -> u64 {
         self.steps
+    }
+
+    /// The last reading taken, if any.
+    pub fn last(&self) -> Option<TimeBaseReading> {
+        self.last
     }
 
     /// Take a new reading: [`Continuity::Stepped`] when `wall − raw` moved by more than

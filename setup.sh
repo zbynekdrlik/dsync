@@ -9,8 +9,8 @@ INSTALL_DIR="/usr/local/bin"
 SERVICE_FILE="/etc/systemd/system/dsync.service"
 TEMP_BIN="/tmp/$BIN_NAME"
 
-# Allow overriding NTP server via env var, default to 10.77.8.2
-NTP_SERVER="${NTP_SERVER:-10.77.8.2}"
+# Allow overriding NTP server via env var, default to the strih PC (the NTP master, #153)
+NTP_SERVER="${NTP_SERVER:-strih.lan}"
 
 echo ">>> dsync Web Installer (SOTA) <<<"
 echo ">>> Using NTP Server: $NTP_SERVER"
