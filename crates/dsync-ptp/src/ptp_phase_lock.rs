@@ -274,6 +274,9 @@ pub struct PhaseLockCore {
     /// closes), and the re-seed it made.
     refine: Option<BootFreqFit>,
     boot_refine: Option<BootFit>,
+    /// dsync#136: the acquisition's last `e` taken into the boot fit, and its late windows in a row.
+    boot_last_e_us: Option<f64>,
+    boot_late_held: usize,
 }
 
 impl PhaseLockCore {
@@ -544,9 +547,27 @@ impl PhaseLockCore {
         if !self.engaged_once && !ptp_locked {
             if event != AnchorEvent::None {
                 self.boot_fit.reset();
+                self.boot_last_e_us = None;
+                self.boot_late_held = 0;
             }
-            self.boot_fit
-                .observe(e_ns as f64 / 1_000.0, dt_s, rate_servo_freq_ppm);
+            // dsync#136: a late window enters the open-loop phase at the previous window's `e`
+            // (it says nothing about the clock); the ∫ word dt stays exact.
+            let e_us = e_ns as f64 / 1_000.0;
+            let e_fit = match self.boot_last_e_us {
+                Some(prev)
+                    if (e_us - prev).abs() > LATE_WINDOW_JUMP_US
+                        && self.boot_late_held < LATE_WINDOW_MAX_HOLD =>
+                {
+                    self.boot_late_held += 1;
+                    prev
+                }
+                _ => {
+                    self.boot_late_held = 0;
+                    self.boot_last_e_us = Some(e_us);
+                    e_us
+                }
+            };
+            self.boot_fit.observe(e_fit, dt_s, rate_servo_freq_ppm);
         }
 
         if !ptp_locked {
@@ -641,18 +662,18 @@ impl PhaseLockCore {
         self.fstep.note_word(f);
         self.last_freq_ppm = f;
         let disturbed = event != AnchorEvent::None || freq_step.is_some();
+        // A late window enters the boot fits' open-loop phase at the last taken `e` (it says
+        // nothing about the clock); the ∫ word dt stays exact.
+        let e_fit = if late {
+            self.last_taken_e_us.unwrap_or(e_raw_us)
+        } else {
+            e_raw_us
+        };
         if self.refine.is_some() {
-            // A late window enters the open-loop phase at the last taken `e` (it says nothing
-            // about the clock); the ∫ word dt stays exact.
-            let e_fit = if late {
-                self.last_taken_e_us.unwrap_or(e_raw_us)
-            } else {
-                e_raw_us
-            };
             self.continue_refine(e_fit, dt_s, f, disturbed);
         }
         if self.boot_fit_open {
-            self.continue_boot_fit(e_raw_us, dt_s, f, disturbed);
+            self.continue_boot_fit(e_fit, dt_s, f, disturbed);
             if !self.boot_fit_open && !disturbed {
                 // dsync#136: the 20 s fit closed: the longer refinement takes over.
                 self.refine = Some(BootFreqFit::with_window(BOOT_REFINE_WINDOW_S));
