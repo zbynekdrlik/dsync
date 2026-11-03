@@ -119,9 +119,14 @@ impl BootFreqFit {
         }
     }
 
+    /// The line through the ring, whether or not it is good enough (for diagnostics).
+    pub fn line(&self) -> Option<LineFit> {
+        fit_line(self.ring.iter())
+    }
+
     /// The frequency to start the integrator on, when the fit is good enough.
     pub fn estimate(&self) -> Option<BootFit> {
-        let line: LineFit = fit_line(self.ring.iter())?;
+        let line: LineFit = self.line()?;
         (line.sigma_ppm <= BOOT_FIT_MAX_SIGMA_PPM && line.slope_ppm.is_finite()).then_some(
             BootFit {
                 freq_ppm: -line.slope_ppm,
