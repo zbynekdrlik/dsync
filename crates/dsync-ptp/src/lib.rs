@@ -18,6 +18,7 @@
 
 pub mod follower;
 pub mod frame;
+pub mod freq_seed;
 pub mod gm_filter;
 pub mod lock_gate;
 pub mod mono;
