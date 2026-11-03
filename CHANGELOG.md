@@ -6,6 +6,16 @@ Entries before 1.25.0 keep the names of their time (the project was renamed in 1
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.2] - 2026-11-03
+
+### Fixed
+
+- `install.ps1` removes every older name of dsync's that the fleet still had, not only the
+  DanteSync ones (#153, owner: no PC keeps a mix of the old and the new): the `dantetimesync`
+  service and process, `C:\ProgramData\DanteTimeSync` (found on mbc-snv with a
+  December 2025 `dantetimesync.exe`), the `DanteTimeSync` uninstall entry, the `DanteTray` /
+  `DanteTimeSyncTray` run keys and task, and the `DanteTimeSync.lnk` Start-menu shortcut.
+
 ## [1.27.1] - 2026-11-03
 
 ### Fixed
