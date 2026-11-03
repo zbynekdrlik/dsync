@@ -596,6 +596,14 @@ Stop-Process -Name "dantesync" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name "dantesync-tray" -Force -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "DanteSyncTray" -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "DanteSyncTrayStart" -Confirm:$false -ErrorAction SilentlyContinue
+# Older names still found on the fleet (dsync#153): the DanteTimeSync tray and the self-update task
+# that re-ran the old dantesync installer.
+Unregister-ScheduledTask -TaskName "DanteTray" -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "DanteSyncUpdate" -Confirm:$false -ErrorAction SilentlyContinue
+Stop-Process -Name "dantetray" -Force -ErrorAction SilentlyContinue
+if (Test-Path "C:\Program Files\DanteTimeSync") {
+    Remove-Item -Path "C:\Program Files\DanteTimeSync" -Recurse -Force -ErrorAction SilentlyContinue
+}
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "DanteSyncTray" -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "DanteSyncTray" -ErrorAction SilentlyContinue
 Remove-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\DanteSync.lnk" -Force -ErrorAction SilentlyContinue
@@ -661,7 +669,7 @@ Write-Host "Installing Service..."
 $BinPath = "`"$ExePath`" --service"
 
 try {
-    New-Service -Name $ServiceName -BinaryPathName $BinPath -DisplayName "dsync" -StartupType Automatic -Description "Synchronizes system time with the PTPv1 grandmaster"
+    New-Service -Name $ServiceName -BinaryPathName $BinPath -DisplayName "dsync" -StartupType Automatic -Description "Synchronizes system time with the PTPv1 grandmaster" | Out-Null
 } catch {
     Write-Error "Failed to create service. Ensure you are running as Administrator. Error: $_"
 }
@@ -796,6 +804,17 @@ if ($ScriptPath) {
 }
 
 Write-Host "Installation Complete!" -ForegroundColor Green
-Write-Host "Service '$ServiceName' is running."
+Write-Host "Service '$ServiceName': $((Get-Service -Name $ServiceName).Status)"
+# dsync#153: every node takes its NTP from the strih PC.
+try {
+    $Ntp = (Get-Content "$DataDir\config.json" -Raw | ConvertFrom-Json).ntp_server
+    if ($Ntp -ne "strih.lan") {
+        Write-Warning "config.json ntp_server is '$Ntp', not strih.lan (the NTP master)"
+    } else {
+        Write-Host "NTP server: $Ntp" -ForegroundColor Gray
+    }
+} catch {
+    Write-Warning "Could not read ntp_server from $DataDir\config.json: $_"
+}
 Write-Host "Logs available at: $DataDir\dsync.log" -ForegroundColor Gray
 Write-Host "Config available at: $DataDir\config.json" -ForegroundColor Gray

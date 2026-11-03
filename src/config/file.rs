@@ -48,8 +48,10 @@ pub struct Config {
     pub system: SystemConfig,
 }
 
+/// The strih PC, the fleet's NTP master (dsync#153, owner 2026-11-03: every node takes its NTP
+/// from strih; the old default 10.77.8.2 does not answer NTP on the audio network).
 pub fn default_ntp_server() -> String {
-    "10.77.8.2".to_string()
+    "strih.lan".to_string()
 }
 
 impl Default for Config {
@@ -125,7 +127,7 @@ pub fn migrate_config_json(json: &mut serde_json::Value) -> bool {
 /// section visible, so the operator sees what can be set.
 pub const TEMPLATE: &str = r#"{
   "_ntp_server_examples": "sk.pool.ntp.org, europe.pool.ntp.org, time.google.com, time.cloudflare.com",
-  "ntp_server": "10.77.8.2",
+  "ntp_server": "strih.lan",
   "ntp_server_mode": {
     "enabled": false,
     "port": 123,

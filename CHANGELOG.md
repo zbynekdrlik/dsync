@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The default NTP server (a fresh install's `config.json` template, `Config::default()` and
+  `setup.sh`) is `strih.lan`, the fleet's NTP master (#153, owner). The old default `10.77.8.2`
+  does not answer NTP on the audio network. `install.ps1` warns when `ntp_server` is not
+  `strih.lan`.
+- `install.ps1` also removes the older `DanteTray` (`C:\Program Files\DanteTimeSync`) and the
+  `DanteSyncUpdate` self-update task, and prints the service's real state at the end (it said
+  "running" while a stale `New-Service` table showed "Stopped").
 - `install.ps1` moves the pre-1.25 `C:\ProgramData\DanteSync` to `C:\ProgramData\dsync` once
   both daemons are stopped (#153, owner: no mix of old and new names on a PC). A stale legacy
   dir beside a new one that holds `config.json` is removed; both without a new config stops the
