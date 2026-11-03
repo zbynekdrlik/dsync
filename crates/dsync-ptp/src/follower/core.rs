@@ -496,8 +496,15 @@ impl FollowerCore {
         let reseed_before = self.core.boot_reseed();
         let fit_before = self.core.boot_fit_line();
         let late_before = self.core.late_windows();
+        let refine_before = self.core.boot_refine();
         let locked = phase_window::engage_on(self.rate.is_locked, self.stale);
         let out = self.core.on_window(median, locked, word_ppm, dt);
+        if let (Some(f), None) = (self.core.boot_refine(), refine_before) {
+            info!(
+                "[FOLLOWER] boot refinement re-seeded the integrator to {:+.3}ppm (σ {:.2}ppm, {} windows over {:.1}s)",
+                f.freq_ppm, f.sigma_ppm, f.points, f.span_s
+            );
+        }
         let late = self.core.late_windows() > late_before;
         match (self.core.engaged(), out.event, out.error_ns) {
             (true, AnchorEvent::None, Some(e)) if !late => {

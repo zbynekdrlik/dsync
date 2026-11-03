@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for ~5 min). In the model the learned frequency is within 0.2 ppm from ~90 s (0.71 ppm without
   it). Shared with the service's cold start.
 
+### Fixed
+
+- A late window enters the boot fits at the previous window's `e` (#136). On mbc-snv two late
+  windows inside the first engagement's 20 s fit (σ 5.1 ppm) made it refuse; the hand-over
+  stayed ~3 ppm off and an unseeded follower walked to +113 µs off the service until the
+  refinement re-seeded at ~87 s.
+
 ## [1.27.2] - 2026-11-03
 
 ### Fixed
