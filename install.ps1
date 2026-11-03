@@ -601,8 +601,27 @@ Unregister-ScheduledTask -TaskName "DanteSyncTrayStart" -Confirm:$false -ErrorAc
 Unregister-ScheduledTask -TaskName "DanteTray" -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "DanteSyncUpdate" -Confirm:$false -ErrorAction SilentlyContinue
 Stop-Process -Name "dantetray" -Force -ErrorAction SilentlyContinue
+# The first name, DanteTimeSync (before 1.8.0): mbc-snv still held its data dir with a Dec 2025
+# dantetimesync.exe after a 1.27.1 install (#153).
+if (Get-Service -Name "dantetimesync" -ErrorAction SilentlyContinue) {
+    Write-Host "Removing the old 'dantetimesync' service..."
+    Stop-Service -Name "dantetimesync" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    sc.exe delete dantetimesync | Out-Null
+}
+Stop-Process -Name "dantetimesync" -Force -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "DanteTimeSyncTray" -Confirm:$false -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "DanteTray" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "DanteTimeSyncTray" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "DanteTray" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "DanteTimeSyncTray" -ErrorAction SilentlyContinue
+Remove-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\DanteTimeSync.lnk" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DanteTimeSync" -Recurse -Force -ErrorAction SilentlyContinue
 if (Test-Path "C:\Program Files\DanteTimeSync") {
     Remove-Item -Path "C:\Program Files\DanteTimeSync" -Recurse -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path "C:\ProgramData\DanteTimeSync") {
+    Remove-Item -Path "C:\ProgramData\DanteTimeSync" -Recurse -Force -ErrorAction SilentlyContinue
 }
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "DanteSyncTray" -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "DanteSyncTray" -ErrorAction SilentlyContinue

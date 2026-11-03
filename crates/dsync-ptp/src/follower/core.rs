@@ -384,8 +384,50 @@ impl FollowerCore {
         // The shared phase lock and its window glue (`crate::phase_window`, as the service).
         let dt = phase_window::window_dt(&mut self.last_window_t1_ns, t1_ns, dt_secs);
         let was_engaged = self.core.engaged();
+        let reseed_before = self.core.boot_reseed();
+        let fit_before = self.core.boot_fit_line();
+        let late_before = self.core.late_windows();
         let locked = phase_window::engage_on(self.rate.is_locked, self.stale);
         let out = self.core.on_window(median, locked, word_ppm, dt);
+        if self.core.late_windows() > late_before {
+            info!(
+                "[FOLLOWER] late window held: e={:?}ns, the PI keeps {:+.3}ppm ({} held since start)",
+                out.error_ns,
+                self.core.last_freq_ppm(),
+                self.core.late_windows()
+            );
+        }
+        if !was_engaged && self.core.engaged() {
+            match self.core.engaged_on_fit() {
+                Some(f) => info!(
+                    "[FOLLOWER] phase lock engaged on the acquisition fit {:+.3}ppm (σ {:.2}ppm, {} windows over {:.1}s; rate servo word {:+.3}ppm)",
+                    f.freq_ppm, f.sigma_ppm, f.points, f.span_s, word_ppm
+                ),
+                None => info!(
+                    "[FOLLOWER] phase lock engaged on the rate servo's word {:+.3}ppm (acquisition fit {})",
+                    word_ppm,
+                    fit_before.map_or("none".to_string(), |l| format!(
+                        "{:+.3}ppm σ {:.2}ppm over {} windows / {:.1}s, refused or too short",
+                        -l.slope_ppm, l.sigma_ppm, l.points, l.span_s
+                    ))
+                ),
+            }
+        }
+        if was_engaged && fit_before.is_some() && self.core.boot_fit_line().is_none() {
+            match (self.core.boot_reseed(), reseed_before) {
+                (Some(f), None) => info!(
+                    "[FOLLOWER] boot fit re-seeded the integrator to {:+.3}ppm (σ {:.2}ppm, {} windows over {:.1}s)",
+                    f.freq_ppm, f.sigma_ppm, f.points, f.span_s
+                ),
+                _ => info!(
+                    "[FOLLOWER] boot fit closed without a re-seed (last fit {})",
+                    fit_before.map_or("none".to_string(), |l| format!(
+                        "{:+.3}ppm σ {:.2}ppm over {} windows / {:.1}s",
+                        -l.slope_ppm, l.sigma_ppm, l.points, l.span_s
+                    ))
+                ),
+            }
+        }
         match out.event {
             AnchorEvent::None => {}
             AnchorEvent::Anchored { anchor_ns } => {
@@ -427,12 +469,17 @@ impl FollowerCore {
         self.clock.set_rate(mono_ns, applied);
         self.date_offset_ns = self.core.anchor_ns().map(|d| wall_minus_v.wrapping_add(d));
         debug!(
-            "[FOLLOWER] window: e={:?}ns word {:+.3}ppm rate-lock {} engaged {} locked {}",
+            "[FOLLOWER] window: e={:?}ns word {:+.3}ppm rate {:+.2}us/s rate-lock {} engaged {} locked {} boot-fit {}",
             out.error_ns,
             applied,
+            rate_ppm,
             self.rate.is_locked,
             self.core.engaged(),
-            self.gate.locked()
+            self.gate.locked(),
+            self.core.boot_fit_line().map_or("-".to_string(), |l| format!(
+                "{:+.3}ppm σ {:.2} n {} {:.1}s",
+                -l.slope_ppm, l.sigma_ppm, l.points, l.span_s
+            ))
         );
     }
 }

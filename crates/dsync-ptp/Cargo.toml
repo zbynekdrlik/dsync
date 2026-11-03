@@ -1,7 +1,7 @@
 [package]
 name = "dsync-ptp"
 # Kept equal to the dsync service version (a test in the service pins it).
-version = "1.27.1"
+version = "1.27.2"
 edition = "2021"
 description = "PTPv1 follower: the PTP code of the dsync service, and an in-process follower on a virtual clock"
 license = "MIT"
@@ -41,6 +41,8 @@ windows = { version = "0.52", features = [
 
 [dev-dependencies]
 mockall = "0.12"
+# The probe example logs the follower (stderr; RUST_LOG=debug for every window).
+env_logger = "0.10"
 
 # dsync#136: run a follower beside the service and compare (a release asset on Windows).
 [[example]]

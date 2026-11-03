@@ -78,9 +78,12 @@ impl BootFreqFit {
         }
     }
 
-    /// The ring spans the whole fit window.
+    /// The fit has run for the whole fit window. Judged on the time since the ring started, not
+    /// on the ring's span: trimmed to the window, the ring spans it exactly only when the window
+    /// spacing divides it — the Dante grandmaster's ~1.016 s windows left 20 windows over 19.3 s
+    /// for ever, and the continued fit never re-seeded (dsync#136, mbc-snv).
     pub fn full(&self) -> bool {
-        self.span_s() >= BOOT_FIT_WINDOW_S - 1e-6
+        !self.ring.is_empty() && self.clock_s >= BOOT_FIT_WINDOW_S - 1e-6
     }
 
     /// One anchored acquisition window: its phase error, the seconds since the previous window
@@ -119,9 +122,14 @@ impl BootFreqFit {
         }
     }
 
+    /// The line through the ring, whether or not it is good enough (for diagnostics).
+    pub fn line(&self) -> Option<LineFit> {
+        fit_line(self.ring.iter())
+    }
+
     /// The frequency to start the integrator on, when the fit is good enough.
     pub fn estimate(&self) -> Option<BootFit> {
-        let line: LineFit = fit_line(self.ring.iter())?;
+        let line: LineFit = self.line()?;
         (line.sigma_ppm <= BOOT_FIT_MAX_SIGMA_PPM && line.slope_ppm.is_finite()).then_some(
             BootFit {
                 freq_ppm: -line.slope_ppm,
@@ -174,6 +182,29 @@ mod tests {
         // ±300 µs alternating noise: the slope's error is beyond the bound.
         let f = acquisition(-35.0, 120, |n| if n % 2 == 0 { 300.0 } else { -300.0 });
         assert_eq!(f.estimate(), None);
+    }
+
+    /// dsync#136, the mbc-snv probe: the Dante grandmaster's windows came every ~1.016 s of
+    /// grandmaster time, so a ring trimmed to 20 s held 20 windows over 19.3 s and was never
+    /// `full`: the first engagement's continued fit never re-seeded, and the PI carried a 2.4 ppm
+    /// hand-over error to e ≈ +190 µs.
+    #[test]
+    fn the_ring_fills_whatever_the_window_spacing_136() {
+        for dt in [0.5, 1.0, 1.016, 0.987, 1.3] {
+            let mut f = BootFreqFit::new();
+            let mut full_at = None;
+            for n in 0..200 {
+                f.observe(0.0, dt, 0.0);
+                if f.full() && full_at.is_none() {
+                    full_at = Some(n as f64 * dt);
+                }
+            }
+            let at = full_at.unwrap_or_else(|| panic!("dt {dt}: never full"));
+            assert!(
+                at >= BOOT_FIT_WINDOW_S - 1e-6 && at < BOOT_FIT_WINDOW_S + dt,
+                "dt {dt}: full after {at}s"
+            );
+        }
     }
 
     #[test]

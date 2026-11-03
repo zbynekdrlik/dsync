@@ -159,6 +159,17 @@ pub const FSTEP_PULL_TAU_S: f64 = 20.0;
 /// Below this (µs) the pull reference is dropped (its rate is then < 0.03 ppm).
 pub const FSTEP_PULL_DONE_US: f64 = 0.5;
 
+/// dsync#136 — a window whose `e` jumps more than this (µs) from the last window the PI took is a
+/// LATE window, held: the PI keeps its word and learns nothing from it. The [41] unlock bound,
+/// ~8 σ of the steady window noise at 30 µs per-sample jitter. mbc-snv's USB Dante NIC delivers
+/// 3 of a window's 4 Syncs ~0.5 ms late now and then; its +455…+504 µs windows each moved the
+/// line 8-10 µs through the P term.
+pub const LATE_WINDOW_JUMP_US: f64 = 150.0;
+
+/// The escape valve: a jump that persists this many windows is the clock (a path change, a
+/// re-anchor's aftermath), and the next window is taken whatever it reads.
+pub const LATE_WINDOW_MAX_HOLD: usize = 3;
+
 /// What happened to the anchor `D` in one window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnchorEvent {
@@ -253,6 +264,11 @@ pub struct PhaseLockCore {
     i_before_far_ppm: f64,
     /// dsync#146: the tracked error (ns) of the last engaged window, to tell a jump.
     last_tracked_ns: Option<f64>,
+    /// dsync#136: the `e` (µs) of the last window the PI took, the consecutive late windows held
+    /// since, and every late window held since start.
+    last_taken_e_us: Option<f64>,
+    late_held: usize,
+    late_windows: u64,
 }
 
 impl PhaseLockCore {
@@ -293,6 +309,11 @@ impl PhaseLockCore {
 
     pub fn last_freq_ppm(&self) -> f64 {
         self.last_freq_ppm
+    }
+
+    /// dsync#136: late windows the PI held since start.
+    pub fn late_windows(&self) -> u64 {
+        self.late_windows
     }
 
     /// Grandmaster frequency steps followed since start (camera-box issue 1372).
@@ -344,6 +365,13 @@ impl PhaseLockCore {
         self.close_boot_fit();
     }
 
+    /// The boot fit's line while it is open (diagnostics: its slope and σ, even when refused).
+    pub fn boot_fit_line(&self) -> Option<LineFit> {
+        (!self.engaged_once || self.boot_fit_open)
+            .then(|| self.boot_fit.line())
+            .flatten()
+    }
+
     /// dsync#146: windows in the acquisition / first-engagement fit (0 = none running).
     pub fn boot_fit_points(&self) -> usize {
         self.boot_fit.points()
@@ -367,6 +395,8 @@ impl PhaseLockCore {
     fn drop_step_state(&mut self) {
         self.fstep.reset();
         self.pull_us = 0.0;
+        self.last_taken_e_us = None;
+        self.late_held = 0;
     }
 
     /// The grandmaster (or the sync source) changed: re-anchor `D` from the next window, so the
@@ -563,9 +593,24 @@ impl PhaseLockCore {
             .fstep
             .observe(e_raw_us, dt_s, self.i_ppm)
             .map(|est| self.follow_freq_step(est, e_raw_us));
-        let f = if self.pull_us != 0.0 {
+        // dsync#136: a lone late window is held, not learned from (the escape valve takes a
+        // jump that persists).
+        let late = freq_step.is_none()
+            && self.late_held < LATE_WINDOW_MAX_HOLD
+            && self
+                .last_taken_e_us
+                .is_some_and(|taken| (e_raw_us - taken).abs() > LATE_WINDOW_JUMP_US);
+        let f = if late {
+            self.late_held += 1;
+            self.late_windows = self.late_windows.saturating_add(1);
+            self.last_freq_ppm
+        } else if self.pull_us != 0.0 {
+            self.late_held = 0;
+            self.last_taken_e_us = Some(e_raw_us);
             self.pulled_word(e_raw_us, dt)
         } else {
+            self.late_held = 0;
+            self.last_taken_e_us = Some(e_raw_us);
             let e_us = e_raw_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
             // offset = local − master: a fast local clock GROWS e, so the correction is negative.
             self.i_ppm =

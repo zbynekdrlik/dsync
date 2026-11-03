@@ -54,6 +54,10 @@ struct World {
     noise: Noise,
     seq: u16,
     source_ip: Ipv4Addr,
+    sync_period_ns: i64,
+    /// Extra receive delay of the Syncs whose sequence id is in the set (late windows).
+    late: std::collections::HashSet<u16>,
+    late_ns: i64,
 }
 
 impl World {
@@ -70,6 +74,9 @@ impl World {
             noise: Noise(seed),
             seq: 0,
             source_ip: Ipv4Addr::new(10, 77, 9, 184),
+            sync_period_ns: SYNC_PERIOD_NS,
+            late: std::collections::HashSet::new(),
+            late_ns: 0,
         }
     }
 
@@ -84,13 +91,19 @@ impl World {
     /// One Sync period: the Sync and its Follow_Up reach `core` (the same packets, each core with
     /// its own latency jitter, when there are several).
     fn tick(&mut self, cores: &mut [&mut FollowerCore]) {
-        self.t += SYNC_PERIOD_NS;
+        self.t += self.sync_period_ns;
         self.seq = self.seq.wrapping_add(1);
         let t1 = self.gm_time(self.t);
         let sync = ptp_tx::sync(&self.gm, self.seq, t1);
         let follow_up = ptp_tx::follow_up(&self.gm, self.seq, t1);
         for core in cores.iter_mut() {
-            let rx = self.t + LATENCY_NS + (self.jitter_ns * self.noise.gauss()).abs() as i64;
+            let late = if self.late.contains(&self.seq) {
+                self.late_ns
+            } else {
+                0
+            };
+            let rx =
+                self.t + LATENCY_NS + late + (self.jitter_ns * self.noise.gauss()).abs() as i64;
             let mono_rx = self.mono(rx);
             let wall_rx = mono_rx + self.wall_minus_mono;
             let packet = |data| RxPacket {
@@ -112,7 +125,7 @@ impl World {
     fn silence(&mut self, ns: i64, cores: &mut [&mut FollowerCore]) {
         let end = self.t + ns;
         while self.t < end {
-            self.t += SYNC_PERIOD_NS;
+            self.t += self.sync_period_ns;
             for core in cores.iter_mut() {
                 core.on_tick(self.mono(self.t));
             }
@@ -213,6 +226,99 @@ fn cold_lock_run(seed: u64) {
         "D off by {}",
         wall_now - ptp_now - d
     );
+}
+
+/// dsync#136, the dstack probe on mbc-snv (3.11.2026): the Windows follower engaged on the rate
+/// servo's word ~2.4 ppm off, and its boot fit, measuring the right frequency at σ 0.3-0.5 ppm,
+/// never re-seeded: the Dante grandmaster's 4 Syncs a second made a window every ~1.016 s of
+/// grandmaster time, which a 20 s ring never spans exactly. The PI then walked `e` to +190 µs
+/// (lost [41]) or never reached it. Here: 254 ms Syncs, a window median scattering by ~15 µs.
+#[test]
+fn a_follower_whose_windows_do_not_divide_the_fit_window_locks_and_holds_136() {
+    for seed in SEEDS {
+        let mut world = World::new(seed, 35_000.0);
+        world.sync_period_ns = 254_000_000;
+        // mbc-snv: the counter 5.4 ppm fast of the grandmaster, so the rate servo locks within a
+        // few windows of the anchor and the first engagement continues its fit.
+        world.gm_ppm = 0.0;
+        world.pc_ppm = 5.4;
+        let mut core = new_core(&world);
+        let locked_at = run_to_lock(&mut world, &mut core, 120);
+        let mut worst = 0;
+        for i in 0..(240 * 4) {
+            world.tick(&mut [&mut core]);
+            assert!(
+                core.model().locked,
+                "seed {seed:#x}: locked at {locked_at}s, lost at {}s (e {:?})",
+                world.t as f64 / 1e9,
+                core.model().offset_ns
+            );
+            if i >= 120 * 4 {
+                worst = worst.max(world.error_ns(&core).expect("anchored").abs());
+            }
+        }
+        assert!(
+            core.core.boot_reseed().is_some() || core.core.engaged_on_fit().is_some(),
+            "seed {seed:#x}: the first engagement's frequency came from no fit"
+        );
+        // The line the follower trails is the MEAN latency: |gauss| × 35 µs adds √(2/π) × 35 µs
+        // ≈ 27.9 µs to the nominal one this judge measures against.
+        let mean_jitter_ns = (35_000.0 * (2.0 / std::f64::consts::PI).sqrt()) as i64;
+        assert!(
+            worst <= LOCK_BOUND_NS + mean_jitter_ns,
+            "seed {seed:#x}: settled error {worst}ns"
+        );
+    }
+}
+
+/// dsync#136, the mbc-snv probe: the Dante NIC there is a USB adapter, and now and then 3 of a
+/// window's 4 Syncs arrive ~0.5 ms late. That window's median `e` reads +455…+504 µs, and the PI's
+/// proportional term turned each into an 8-10 µs move of the follower's line (the probe's
+/// diff stepped −19 → −28 → −35 → −45 µs). A lone late window says nothing about the clock: the
+/// line must not move for it.
+#[test]
+fn a_lone_late_window_does_not_move_the_followers_line_136() {
+    for seed in SEEDS {
+        let run = |late: bool| {
+            let mut world = World::new(seed, 10_000.0);
+            world.sync_period_ns = 250_000_000;
+            world.gm_ppm = 0.0;
+            world.pc_ppm = 5.4;
+            world.late_ns = 500_000;
+            let mut core = new_core(&world);
+            run_to_lock(&mut world, &mut core, 120);
+            for _ in 0..(120 * 4) {
+                world.tick(&mut [&mut core]);
+            }
+            if late {
+                // Three late windows a few seconds apart, as at 69 / 72 / 79 s on mbc: 3 of the
+                // 4 Syncs of each.
+                for start in [0u16, 12, 40] {
+                    for k in 1..=3 {
+                        world.late.insert(world.seq.wrapping_add(start + k));
+                    }
+                }
+            }
+            let mut errors = Vec::new();
+            for _ in 0..(60 * 4) {
+                world.tick(&mut [&mut core]);
+                errors.push(world.error_ns(&core).expect("anchored"));
+                assert!(core.model().locked, "seed {seed:#x}: the lock dropped");
+            }
+            errors
+        };
+        let (clean, late) = (run(false), run(true));
+        let worst = clean
+            .iter()
+            .zip(&late)
+            .map(|(a, b)| (a - b).abs())
+            .max()
+            .unwrap();
+        assert!(
+            worst <= 3_000,
+            "seed {seed:#x}: the late windows moved the line by {worst}ns"
+        );
+    }
 }
 
 /// The acceptance shape on one PC, in the model: two followers, each with its own receive

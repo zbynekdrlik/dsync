@@ -15,6 +15,8 @@
 //! `[48-55]`): the same QPC / `CLOCK_MONOTONIC_RAW` the follower runs on. The reply's wall and
 //! counter are read a few µs apart, so the difference carries that read skew.
 //!
+//! The follower's log goes to stderr (`RUST_LOG=debug` for every window).
+//!
 //! At the end it prints a summary: time to lock, and the max and p99 of |diff| over the seconds
 //! both clocks were locked. Exit codes:
 //!
@@ -176,6 +178,9 @@ fn kind(e: &FollowerError) -> &'static str {
 }
 
 fn main() -> ExitCode {
+    // The follower's own log on stderr (engagement, boot fit, lock gate); RUST_LOG=debug adds
+    // every window. stdout stays the one-line-per-second comparison.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse_args(&raw).and_then(|a| Ok((resolve_interface(&a.interface)?, a))) {
         Ok(v) => v,
@@ -246,9 +251,15 @@ fn main() -> ExitCode {
             }
         }
         println!(
-            "t={t:>4}s follower_locked={} diff_us={} service_locked={svc}",
+            "t={t:>4}s follower_locked={} diff_us={} service_locked={svc} e_us={} freq_ppm={:+.3} windows={} reanchors={}",
             u8::from(state.locked),
             diff.map_or("-".to_string(), |d| format!("{d:+.1}")),
+            state
+                .offset_ns
+                .map_or("-".to_string(), |e| format!("{:+.1}", e as f64 / 1000.0)),
+            state.freq_ppm,
+            state.windows,
+            state.reanchors,
         );
     }
     drop(follower);
