@@ -82,7 +82,7 @@ fn a_stamp_converts_to_the_same_raw_instant_whatever_the_read_delay_under_a_slew
     assert!((a - stamp_mono).abs() <= 1, "A off by {}ns", a - stamp_mono);
     assert!((b - stamp_mono).abs() <= 1, "B off by {}ns", b - stamp_mono);
     // The reading-after conversion alone is off by slew × delay (7.5 µs for B).
-    assert_eq!(stamp_mono - at(25_000_000).to_mono(stamp_wall), -7_500);
+    assert_eq!(stamp_mono - at(25_000_000).to_mono(stamp_wall), 7_500);
 }
 
 #[test]
