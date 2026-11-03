@@ -1514,4 +1514,54 @@ mod tests {
         assert!(c.fstep.points() <= 1, "{}", c.fstep.points());
         assert_eq!(c.freq_steps(), 1, "the count survives");
     }
+
+    // ---- dsync#136: the boot's re-seeds are continuous in their input ----------------------
+
+    /// One boot: the acquisition holds `e` at 0 on the word `w_acq` (so the engagement starts on
+    /// it), then the oscillator needs `+1 ppm`. Returns `e` (ns) of every engaged window.
+    fn boot_trajectory(w_acq: f64, windows: usize) -> Vec<f64> {
+        let mut core = PhaseLockCore::new();
+        for _ in 0..(BOOT_FIT_WINDOW_S / DT) as usize / 2 {
+            core.on_window(D, false, w_acq, DT);
+        }
+        let mut plant = Plant::new(-1.0, 1, w_acq);
+        (0..windows)
+            .map(|_| {
+                let out = core.on_window(D + plant.e_ns.round() as i64, true, w_acq, DT);
+                plant.advance(out.freq_ppm.expect("engaged"), DT);
+                plant.e_ns
+            })
+            .collect()
+    }
+
+    /// PR #156 CI run 41589062657: two followers on one PC read the same kernel stamps up to the
+    /// conversion's few-ns residue, yet ended 0.21 ppm and 16.4 µs apart. The boot re-seeds fired
+    /// only past a threshold (0.5 ppm for the 20 s fit, 0.2 for the refinement), so a residue
+    /// at the edge re-seeded one follower and not the other. A hand-over swept in 0.002 ppm steps
+    /// must move the trajectory by a hair, never jump.
+    #[test]
+    fn the_boot_reseeds_are_continuous_in_the_hand_over_136() {
+        let windows = ((BOOT_FIT_WINDOW_S + BOOT_REFINE_WINDOW_S + 40.0) / DT) as usize;
+        let mut prev = boot_trajectory(1.0, windows);
+        let mut worst = (0.0f64, 0.0f64);
+        for k in 1..=400 {
+            let h = k as f64 * 0.002;
+            let traj = boot_trajectory(1.0 + h, windows);
+            let jump = traj
+                .iter()
+                .zip(&prev)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f64::max);
+            if jump > worst.1 {
+                worst = (h, jump);
+            }
+            prev = traj;
+        }
+        assert!(
+            worst.1 <= 1_000.0,
+            "a 0.002 ppm change of the hand-over at {:.3} ppm moved e by {:.0} ns",
+            worst.0,
+            worst.1
+        );
+    }
 }
