@@ -250,8 +250,11 @@ fn a_follower_whose_windows_do_not_divide_the_fit_window_locks_and_holds_136() {
             core.core.boot_reseed().is_some() || core.core.engaged_on_fit().is_some(),
             "seed {seed:#x}: the first engagement's frequency came from no fit"
         );
+        // The line the follower trails is the MEAN latency: |gauss| × 35 µs adds √(2/π) × 35 µs
+        // ≈ 27.9 µs to the nominal one this judge measures against.
+        let mean_jitter_ns = (35_000.0 * (2.0 / std::f64::consts::PI).sqrt()) as i64;
         assert!(
-            worst <= LOCK_BOUND_NS + JITTER_MEAN_ALLOWANCE_NS,
+            worst <= LOCK_BOUND_NS + mean_jitter_ns,
             "seed {seed:#x}: settled error {worst}ns"
         );
     }
