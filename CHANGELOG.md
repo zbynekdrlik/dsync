@@ -10,11 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The first phase-lock engagement's boot fit re-seeds whatever the window spacing (#136). Its
+  20 s ring was "full" only when it spanned 20 s exactly, which happens only when the window
+  spacing divides 20 s. The Dante grandmaster's ~1.016 s windows left 20 windows over 19.3 s for
+  ever, so the fit (right frequency, σ 0.3–0.5 ppm) never re-seeded and the ~100 s PI carried
+  the rate servo's 2–5 ppm hand-over error to e ≈ +190 µs: dstack's Windows follower probe on
+  mbc-snv never locked, or locked and walked away. The service shares the code (a cold boot
+  without `drift.json`).
+
 - `install.ps1` removes every older name of dsync's that the fleet still had, not only the
   DanteSync ones (#153, owner: no PC keeps a mix of the old and the new): the `dantetimesync`
   service and process, `C:\ProgramData\DanteTimeSync` (found on mbc-snv with a
   December 2025 `dantetimesync.exe`), the `DanteTimeSync` uninstall entry, the `DanteTray` /
   `DanteTimeSyncTray` run keys and task, and the `DanteTimeSync.lnk` Start-menu shortcut.
+
+### Added
+
+- The follower logs its first engagement (on the acquisition fit or on the rate servo's word),
+  the boot fit's re-seed or close, and at debug every window with the fit's slope and σ. The
+  `dsync-ptp-probe` prints `e_us`, `freq_ppm`, `windows` and `reanchors` each second and the
+  follower's log on stderr (`RUST_LOG=debug` for every window) (#136).
 
 ## [1.27.1] - 2026-11-03
 

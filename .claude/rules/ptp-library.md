@@ -86,6 +86,16 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
     receive jitter for the first windows, ≤ 20 µs once settled.
   - A rebase keeps the lock (e = 0 at the re-anchor).
   - A 10 ppm grandmaster frequency change drops it once and it returns, as on the service.
+- **A ring judged "full" by its SPAN is full only when the window spacing divides the window**
+  (#136, v1.27.2). The boot fit trimmed to 20 s and required a 20 s span; the Dante GM's
+  ~1.016 s windows gave 19.3 s for ever, so the continued fit never re-seeded and the PI walked
+  `e` to +190 µs. Judge fullness by the time since the ring started (`clock_s`), as
+  `freq_step` does. A simulation on exact 0.5 s / 1 s windows cannot see it: give a window test a
+  non-dividing spacing (254 ms Syncs) and the real oscillator offset (mbc: 5.4 ppm, so the rate
+  servo hands over early, on a short ring).
+- **On-rig diagnosis:** the probe prints `e_us` / `freq_ppm` per second, and
+  `RUST_LOG=dsync_ptp::follower=debug` logs every window with the boot fit's slope and σ
+  (stderr). Read those before theorising about jitter: the fit was right, it just never fired.
 - `epoch` counts time-base changes (`Rebased`). `reanchors` counts every discontinuity
   (`Rebased` + `Realigned`). A consumer re-syncs on either.
 - Holdover: no allowed time message for `REJOIN_AFTER` (10 s). The follower then holds the
