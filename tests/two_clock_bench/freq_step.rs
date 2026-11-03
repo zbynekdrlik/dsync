@@ -35,6 +35,7 @@
 use super::*;
 use dsync::ptp_phase_lock::{
     FreqStep, DT_MAX_S, DT_MIN_S, ERROR_CLAMP_US, FREQ_CLAMP_PPM, K_I_PER_S2, K_P_PER_S,
+    LATE_WINDOW_JUMP_US, LATE_WINDOW_MAX_HOLD,
 };
 
 /// The box's oscillator vs true time, and the word the rate servo hands over (0.4 ppm off).
@@ -75,9 +76,15 @@ struct Events {
 }
 
 /// The law before the frequency-step follow: the same PI on the same error, with nothing else.
+/// The plain PI law, mirrored from the module's public constants: the PI, and (dsync#136) the
+/// late-window hold — a window whose `e` jumps more than `LATE_WINDOW_JUMP_US` from the last one
+/// taken keeps the last word, at most `LATE_WINDOW_MAX_HOLD` windows in a row.
 struct PlainPi {
     anchor_ns: Option<i64>,
     i_ppm: f64,
+    last_word: f64,
+    last_taken_e_us: Option<f64>,
+    held: usize,
 }
 
 impl PlainPi {
@@ -88,9 +95,21 @@ impl PlainPi {
             self.i_ppm = handover_ppm;
         }
         let dt = dt_s.clamp(DT_MIN_S, DT_MAX_S);
-        let e_us = ((median_ns - anchor) as f64 / 1_000.0).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+        let e_raw_us = (median_ns - anchor) as f64 / 1_000.0;
+        let late = self.held < LATE_WINDOW_MAX_HOLD
+            && self
+                .last_taken_e_us
+                .is_some_and(|taken| (e_raw_us - taken).abs() > LATE_WINDOW_JUMP_US);
+        if late {
+            self.held += 1;
+            return self.last_word;
+        }
+        self.held = 0;
+        self.last_taken_e_us = Some(e_raw_us);
+        let e_us = e_raw_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
         self.i_ppm = (self.i_ppm - K_I_PER_S2 * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
-        (self.i_ppm - K_P_PER_S * e_us).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM)
+        self.last_word = (self.i_ppm - K_P_PER_S * e_us).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+        self.last_word
     }
 }
 
@@ -132,7 +151,11 @@ impl Law {
     fn request_rebase(&mut self) {
         match self {
             Law::Core(c) => c.request_rebase(),
-            Law::Plain(p) => p.anchor_ns = None,
+            Law::Plain(p) => {
+                p.anchor_ns = None;
+                p.last_taken_e_us = None;
+                p.held = 0;
+            }
         }
     }
     fn absorb(&mut self, delta_ns: i64) {
@@ -255,6 +278,9 @@ fn plain() -> Law {
     Law::Plain(PlainPi {
         anchor_ns: None,
         i_ppm: f64::NAN,
+        last_word: 0.0,
+        last_taken_e_us: None,
+        held: 0,
     })
 }
 
