@@ -441,6 +441,40 @@ fn without_a_seed_the_refinement_brings_the_frequency_within_a_fifth_ppm_136() {
     );
 }
 
+/// dsync#136, the 1.27.3 dev probe on mbc-snv without a seed: two late windows inside the first
+/// engagement's 20 s fit (σ 5.1 ppm) made it refuse, the hand-over stayed ~3 ppm off, and the
+/// follower walked to +113 µs off the service until the 60 s refinement re-seeded at ~87 s. A
+/// late window must not cost the boot its fit.
+#[test]
+fn late_windows_in_the_boot_do_not_cost_the_fit_136() {
+    let truth_ppm = -5.4;
+    for seed in SEEDS {
+        let mut world = mbc_world(seed);
+        world.late_ns = 500_000;
+        // Late windows through the whole boot: 3 of the 4 Syncs of a window every ~8 s.
+        let first = world.seq;
+        for w in 0..12u16 {
+            for k in 1..=3 {
+                world.late.insert(first.wrapping_add(w * 32 + 16 + k));
+            }
+        }
+        let mut core = new_core(&world);
+        while !core.engaged() {
+            world.tick(&mut [&mut core]);
+        }
+        let engaged_at = world.t;
+        while world.t < engaged_at + 30_000_000_000 {
+            world.tick(&mut [&mut core]);
+        }
+        let learned = core.core.integrator_ppm();
+        assert!(
+            (learned - truth_ppm).abs() <= 1.0,
+            "seed {seed:#x}: learned {learned} 30 s after engaging (fit {:?})",
+            core.core.boot_reseed()
+        );
+    }
+}
+
 /// `settled` is the lock AND the recent |e| p90 within 30 µs AND a pull's rest within it; a holdover clears
 /// it with the lock, and the re-join must earn it again over 30 windows.
 #[test]
