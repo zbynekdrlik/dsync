@@ -386,8 +386,17 @@ impl FollowerCore {
         let was_engaged = self.core.engaged();
         let reseed_before = self.core.boot_reseed();
         let fit_before = self.core.boot_fit_line();
+        let late_before = self.core.late_windows();
         let locked = phase_window::engage_on(self.rate.is_locked, self.stale);
         let out = self.core.on_window(median, locked, word_ppm, dt);
+        if self.core.late_windows() > late_before {
+            info!(
+                "[FOLLOWER] late window held: e={:?}ns, the PI keeps {:+.3}ppm ({} held since start)",
+                out.error_ns,
+                self.core.last_freq_ppm(),
+                self.core.late_windows()
+            );
+        }
         if !was_engaged && self.core.engaged() {
             match self.core.engaged_on_fit() {
                 Some(f) => info!(
