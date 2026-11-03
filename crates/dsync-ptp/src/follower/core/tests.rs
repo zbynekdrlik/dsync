@@ -412,7 +412,36 @@ fn a_wrong_seed_is_dropped_and_the_follower_learns_as_a_cold_start_136() {
     }
 }
 
-/// `settled` is the lock AND the recent |e| p90 within 30 µs AND no boot pull; a holdover clears
+/// dsync#136 (dstack): without a seed the boot must not rely on one 20 s fit (σ ~0.5 ppm under
+/// Windows noise) and the ~100 s PI for the rest: the longer refinement brings the learned
+/// frequency within 0.2 ppm of the truth ~90 s after the engagement, and keeps it there.
+#[test]
+fn without_a_seed_the_refinement_brings_the_frequency_within_a_fifth_ppm_136() {
+    let truth_ppm = -5.4;
+    let mut worst_ppm: f64 = 0.0;
+    for seed in 0..8u64 {
+        let mut world = mbc_world(0x0136_0000 + seed);
+        let mut core = new_core(&world);
+        while !core.engaged() {
+            world.tick(&mut [&mut core]);
+        }
+        let engaged_at = world.t;
+        while world.t < engaged_at + 90_000_000_000 {
+            world.tick(&mut [&mut core]);
+        }
+        for _ in 0..(120 * 4) {
+            world.tick(&mut [&mut core]);
+            worst_ppm = worst_ppm.max((core.core.integrator_ppm() - truth_ppm).abs());
+        }
+        assert!(!core.core.refining(), "seed {seed}: the refinement closed");
+    }
+    assert!(
+        worst_ppm <= 0.2,
+        "the learned frequency strayed {worst_ppm:.3} ppm from the truth 90-210 s after engaging"
+    );
+}
+
+/// `settled` is the lock AND the recent |e| p90 within 30 µs AND a pull's rest within it; a holdover clears
 /// it with the lock, and the re-join must earn it again over 30 windows.
 #[test]
 fn settled_needs_thirty_quiet_windows_and_a_holdover_clears_it_136() {

@@ -126,7 +126,7 @@ pub struct FollowerState {
     pub reanchors: u32,
     pub holdovers: u32,
     pub windows: u64,
-    /// dsync#136: locked, and the recent |e| p90 within 30 µs with no boot pull running: the
+    /// dsync#136: locked, and the recent |e| p90 within 30 µs (and a boot pull's rest too): the
     /// follower is on the grandmaster line as well as the service is, not just within [41].
     pub settled: bool,
     /// dsync#136: |e| p90 (ns) over the last 30 engaged windows, late windows left out.

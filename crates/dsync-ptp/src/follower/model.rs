@@ -92,7 +92,7 @@ pub struct ClockModel {
     /// Closed sample windows.
     pub windows: u64,
     /// dsync#136: locked AND settled — the recent |e| is within [`super::core::SETTLED_P90_NS`]
-    /// at p90 over the last [`super::core::SETTLED_WINDOWS`] windows, and no boot pull runs.
+    /// at p90 over the last [`super::core::SETTLED_WINDOWS`] windows, and so is a boot pull's rest.
     pub settled: bool,
     /// dsync#136: |e| p90 (ns) over the last [`super::core::SETTLED_WINDOWS`] engaged windows,
     /// late windows left out; `None` until that many.

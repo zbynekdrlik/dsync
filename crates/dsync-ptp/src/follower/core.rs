@@ -54,7 +54,8 @@ pub const MIN_SAMPLE_SPACING_NS: i64 = 100_000_000;
 pub const STALE_AFTER_NS: i64 = REJOIN_AFTER.as_nanos() as i64;
 
 /// dsync#136: the follower is SETTLED when, locked, its |e| p90 over the last this many engaged
-/// windows (late windows left out) is within [`SETTLED_P90_NS`] and no boot pull runs.
+/// windows (late windows left out) is within [`SETTLED_P90_NS`] and the phase a boot pull still
+/// retires is within it too.
 pub const SETTLED_WINDOWS: usize = 30;
 
 /// 30 µs. On mbc-snv's Windows Npcap the follower's steady |e| p90 read 20-27 µs (late windows
@@ -227,7 +228,8 @@ impl FollowerCore {
         }
     }
 
-    /// dsync#136: settled = locked, not stale, no boot pull, and the recent |e| p90 within
+    /// dsync#136: settled = locked, not stale, a pull left within [`SETTLED_P90_NS`], and the
+    /// recent |e| p90 within
     /// [`SETTLED_P90_NS`] over [`SETTLED_WINDOWS`] windows.
     fn recent_abs_e_ns(&self) -> Option<i64> {
         if self.recent_e.len() < SETTLED_WINDOWS {
@@ -259,7 +261,7 @@ impl FollowerCore {
             windows: self.windows,
             settled: self.gate.locked()
                 && !self.stale
-                && self.core.pull_us() == 0.0
+                && self.core.pull_us().abs() * 1_000.0 <= SETTLED_P90_NS as f64
                 && self
                     .recent_abs_e_ns()
                     .is_some_and(|p90| p90 <= SETTLED_P90_NS),
