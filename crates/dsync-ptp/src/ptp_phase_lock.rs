@@ -344,6 +344,13 @@ impl PhaseLockCore {
         self.close_boot_fit();
     }
 
+    /// The boot fit's line while it is open (diagnostics: its slope and σ, even when refused).
+    pub fn boot_fit_line(&self) -> Option<LineFit> {
+        (!self.engaged_once || self.boot_fit_open)
+            .then(|| self.boot_fit.line())
+            .flatten()
+    }
+
     /// dsync#146: windows in the acquisition / first-engagement fit (0 = none running).
     pub fn boot_fit_points(&self) -> usize {
         self.boot_fit.points()

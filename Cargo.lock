@@ -682,6 +682,7 @@ version = "1.27.2"
 dependencies = [
  "anyhow",
  "byteorder",
+ "env_logger",
  "if-addrs",
  "libc",
  "log",
