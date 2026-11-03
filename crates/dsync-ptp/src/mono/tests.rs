@@ -61,3 +61,43 @@ fn a_step_between_two_readings_is_detected_with_its_size() {
         Continuity::Continuous
     );
 }
+
+/// dsync#136, CI run 41558600507: two followers on one PC read the clocks at different delays
+/// after the same packet. While the host's wall slews (here 500 ppm, the most a frequency word
+/// allows), a conversion with the reading AFTER the receive is off by slew × delay, so the two
+/// disagreed (4.5 µs). Converted with `wall − raw` interpolated at the stamp, both land on the
+/// stamp's raw instant whatever their delay.
+#[test]
+fn a_stamp_converts_to_the_same_raw_instant_whatever_the_read_delay_under_a_slew() {
+    const W0: i64 = 1_789_000_000_000_000_000;
+    // wall − raw grows 500 ns per ms of raw time.
+    let wmm = |m: i64| W0 + m / 2_000;
+    let at = |m: i64| reading(m, wmm(m));
+    let stamp_mono = 10_000_000;
+    let stamp_wall = stamp_mono + wmm(stamp_mono);
+
+    // Follower A reads 0.2 ms after the packet; follower B stalled 15 ms.
+    let a = at(10_200_000).to_mono_between(Some(at(9_500_000)), stamp_wall);
+    let b = at(25_000_000).to_mono_between(Some(at(9_900_000)), stamp_wall);
+    assert!((a - stamp_mono).abs() <= 1, "A off by {}ns", a - stamp_mono);
+    assert!((b - stamp_mono).abs() <= 1, "B off by {}ns", b - stamp_mono);
+    // The reading-after conversion alone is off by slew × delay (7.5 µs for B).
+    assert_eq!(stamp_mono - at(25_000_000).to_mono(stamp_wall), -7_500);
+}
+
+#[test]
+fn a_stamp_outside_the_bracket_uses_the_nearest_reading_and_no_bracket_the_current_one() {
+    const W0: i64 = 1_789_000_000_000_000_000;
+    let prev = reading(5_000_000, W0);
+    let cur = reading(6_000_000, W0 + 500);
+    // A packet queued before the previous reading: the previous reading converts it.
+    let early = 4_000_000 + W0;
+    assert_eq!(cur.to_mono_between(Some(prev), early), prev.to_mono(early));
+    // A stamp at or after the current reading: the current one.
+    let late = 6_000_000 + W0 + 500;
+    assert_eq!(cur.to_mono_between(Some(prev), late), cur.to_mono(late));
+    // No previous reading: the current one.
+    assert_eq!(cur.to_mono_between(None, early), cur.to_mono(early));
+    // A previous reading not before the current one (no bracket): the current one.
+    assert_eq!(cur.to_mono_between(Some(cur), early), cur.to_mono(early));
+}

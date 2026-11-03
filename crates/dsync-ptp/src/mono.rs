@@ -63,6 +63,12 @@ impl TimeBaseReading {
     pub fn to_mono(&self, wall_ns: i64) -> i64 {
         wall_ns.wrapping_sub(self.wall_minus_mono_ns)
     }
+
+    /// A wall stamp received between `prev` and this reading, converted with `wall − raw` at the
+    /// stamp itself (dsync#136).
+    pub fn to_mono_between(&self, _prev: Option<TimeBaseReading>, wall_ns: i64) -> i64 {
+        self.to_mono(wall_ns)
+    }
 }
 
 /// Read both clocks: raw, wall, raw; re-read (up to 3 times) when the two raw reads are more than
@@ -113,6 +119,11 @@ impl StampConverter {
     /// Steps seen so far.
     pub fn steps(&self) -> u64 {
         self.steps
+    }
+
+    /// The last reading taken, if any.
+    pub fn last(&self) -> Option<TimeBaseReading> {
+        self.last
     }
 
     /// Take a new reading: [`Continuity::Stepped`] when `wall − raw` moved by more than
