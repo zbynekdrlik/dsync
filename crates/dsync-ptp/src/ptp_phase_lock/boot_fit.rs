@@ -181,6 +181,29 @@ mod tests {
         assert_eq!(f.estimate(), None);
     }
 
+    /// dsync#136, the mbc-snv probe: the Dante grandmaster's windows came every ~1.016 s of
+    /// grandmaster time, so a ring trimmed to 20 s held 20 windows over 19.3 s and was never
+    /// `full`: the first engagement's continued fit never re-seeded, and the PI carried a 2.4 ppm
+    /// hand-over error to e ≈ +190 µs.
+    #[test]
+    fn the_ring_fills_whatever_the_window_spacing_136() {
+        for dt in [0.5, 1.0, 1.016, 0.987, 1.3] {
+            let mut f = BootFreqFit::new();
+            let mut full_at = None;
+            for n in 0..200 {
+                f.observe(0.0, dt, 0.0);
+                if f.full() && full_at.is_none() {
+                    full_at = Some(n as f64 * dt);
+                }
+            }
+            let at = full_at.unwrap_or_else(|| panic!("dt {dt}: never full"));
+            assert!(
+                at >= BOOT_FIT_WINDOW_S - 1e-6 && at < BOOT_FIT_WINDOW_S + dt,
+                "dt {dt}: full after {at}s"
+            );
+        }
+    }
+
     #[test]
     fn a_gap_or_a_reset_starts_the_ring_again_146() {
         let mut f = acquisition(-35.0, 60, |_| 0.0);

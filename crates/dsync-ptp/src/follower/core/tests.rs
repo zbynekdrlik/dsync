@@ -54,6 +54,7 @@ struct World {
     noise: Noise,
     seq: u16,
     source_ip: Ipv4Addr,
+    sync_period_ns: i64,
 }
 
 impl World {
@@ -70,6 +71,7 @@ impl World {
             noise: Noise(seed),
             seq: 0,
             source_ip: Ipv4Addr::new(10, 77, 9, 184),
+            sync_period_ns: SYNC_PERIOD_NS,
         }
     }
 
@@ -84,7 +86,7 @@ impl World {
     /// One Sync period: the Sync and its Follow_Up reach `core` (the same packets, each core with
     /// its own latency jitter, when there are several).
     fn tick(&mut self, cores: &mut [&mut FollowerCore]) {
-        self.t += SYNC_PERIOD_NS;
+        self.t += self.sync_period_ns;
         self.seq = self.seq.wrapping_add(1);
         let t1 = self.gm_time(self.t);
         let sync = ptp_tx::sync(&self.gm, self.seq, t1);
@@ -112,7 +114,7 @@ impl World {
     fn silence(&mut self, ns: i64, cores: &mut [&mut FollowerCore]) {
         let end = self.t + ns;
         while self.t < end {
-            self.t += SYNC_PERIOD_NS;
+            self.t += self.sync_period_ns;
             for core in cores.iter_mut() {
                 core.on_tick(self.mono(self.t));
             }
@@ -213,6 +215,46 @@ fn cold_lock_run(seed: u64) {
         "D off by {}",
         wall_now - ptp_now - d
     );
+}
+
+/// dsync#136, the dstack probe on mbc-snv (3.11.2026): the Windows follower engaged on the rate
+/// servo's word ~2.4 ppm off, and its boot fit, measuring the right frequency at σ 0.3-0.5 ppm,
+/// never re-seeded: the Dante grandmaster's 4 Syncs a second made a window every ~1.016 s of
+/// grandmaster time, which a 20 s ring never spans exactly. The PI then walked `e` to +190 µs
+/// (lost [41]) or never reached it. Here: 254 ms Syncs, a window median scattering by ~15 µs.
+#[test]
+fn a_follower_whose_windows_do_not_divide_the_fit_window_locks_and_holds_136() {
+    for seed in SEEDS {
+        let mut world = World::new(seed, 35_000.0);
+        world.sync_period_ns = 254_000_000;
+        // mbc-snv: the counter 5.4 ppm fast of the grandmaster, so the rate servo locks within a
+        // few windows of the anchor and the first engagement continues its fit.
+        world.gm_ppm = 0.0;
+        world.pc_ppm = 5.4;
+        let mut core = new_core(&world);
+        let locked_at = run_to_lock(&mut world, &mut core, 120);
+        let mut worst = 0;
+        for i in 0..(240 * 4) {
+            world.tick(&mut [&mut core]);
+            assert!(
+                core.model().locked,
+                "seed {seed:#x}: locked at {locked_at}s, lost at {}s (e {:?})",
+                world.t as f64 / 1e9,
+                core.model().offset_ns
+            );
+            if i >= 120 * 4 {
+                worst = worst.max(world.error_ns(&core).expect("anchored").abs());
+            }
+        }
+        assert!(
+            core.core.boot_reseed().is_some() || core.core.engaged_on_fit().is_some(),
+            "seed {seed:#x}: the first engagement's frequency came from no fit"
+        );
+        assert!(
+            worst <= LOCK_BOUND_NS + JITTER_MEAN_ALLOWANCE_NS,
+            "seed {seed:#x}: settled error {worst}ns"
+        );
+    }
 }
 
 /// The acceptance shape on one PC, in the model: two followers, each with its own receive
