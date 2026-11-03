@@ -701,12 +701,7 @@ impl PhaseLockCore {
             return;
         }
         if let Some(fit) = self.boot_fit.estimate() {
-            let off = fit.freq_ppm - self.i_ppm;
-            if off.abs() >= BOOT_RESEED_MIN_PPM.max(3.0 * fit.sigma_ppm) {
-                self.i_ppm = fit.freq_ppm.clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
-                if e_us.abs() >= FSTEP_PULL_DONE_US {
-                    self.pull_us = e_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
-                }
+            if self.reseed(fit, BOOT_RESEED_MIN_PPM, e_us) {
                 self.boot_reseed = Some(fit);
             }
         }
@@ -714,8 +709,8 @@ impl PhaseLockCore {
     }
 
     /// dsync#136: one window of the refinement. Once it spans [`BOOT_REFINE_WINDOW_S`]: re-seed
-    /// the integrator once if the fit says it is off by ≥ [`BOOT_REFINE_MIN_PPM`] and 3 σ, the
-    /// phase left retired along the pull reference (no wall step, `D` untouched).
+    /// the integrator once if the fit says it is off by ≥ [`BOOT_REFINE_MIN_PPM`] and 3 σ
+    /// (ramped, [`Self::reseed`]), the phase left retired along the pull reference (no wall step, `D` untouched).
     fn continue_refine(&mut self, e_fit_us: f64, dt_s: f64, f: f64, disturbed: bool) {
         let Some(fit) = self.refine.as_mut() else {
             return;
@@ -729,16 +724,34 @@ impl PhaseLockCore {
             return;
         }
         if let Some(est) = fit.estimate() {
-            let off = est.freq_ppm - self.i_ppm;
-            if off.abs() >= BOOT_REFINE_MIN_PPM.max(3.0 * est.sigma_ppm) {
-                self.i_ppm = est.freq_ppm.clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
-                if e_fit_us.abs() >= FSTEP_PULL_DONE_US {
-                    self.pull_us = e_fit_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
-                }
+            if self.reseed(est, BOOT_REFINE_MIN_PPM, e_fit_us) {
                 self.boot_refine = Some(est);
             }
         }
         self.refine = None;
+    }
+
+    /// A boot fit's re-seed, CONTINUOUS in the fit (dsync#136, PR #156 CI): the integrator
+    /// moves by `w × (fit − integrator)` and the pull reference by `w × (e − pull)`, with `w`
+    /// ramping 0 → 1 as the difference goes from half the threshold to the threshold
+    /// (`min_ppm` or 3 σ, whichever is larger). An all-or-nothing re-seed turned a few-ns stamp
+    /// residue at the edge into a 0.2 ppm split between two followers on one PC. Returns
+    /// whether it moved anything.
+    fn reseed(&mut self, fit: BootFit, min_ppm: f64, e_us: f64) -> bool {
+        let threshold = min_ppm.max(3.0 * fit.sigma_ppm);
+        let off = fit.freq_ppm - self.i_ppm;
+        let w = ((off.abs() - threshold / 2.0) / (threshold / 2.0)).clamp(0.0, 1.0);
+        if w == 0.0 {
+            return false;
+        }
+        self.i_ppm = (self.i_ppm + w * off).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+        let pull = self.pull_us + w * (e_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US) - self.pull_us);
+        self.pull_us = if pull.abs() >= FSTEP_PULL_DONE_US {
+            pull
+        } else {
+            0.0
+        };
+        true
     }
 
     /// Follow a confirmed step: the integrator jumps by the measured error (bounded), and the phase

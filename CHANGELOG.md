@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   windows inside the first engagement's 20 s fit (σ 5.1 ppm) made it refuse; the hand-over
   stayed ~3 ppm off and an unseeded follower walked to +113 µs off the service until the
   refinement re-seeded at ~87 s.
+- The boot re-seeds (the 20 s fit and the refinement) are continuous in the fit (#136). They
+  fired all-or-nothing past a threshold, so two followers on one PC whose stamps differ by the
+  conversion's few-ns residue could land on both sides of it: PR #156's CI read them 0.21 ppm
+  and 16.4 µs apart. The re-seed now ramps in from half the threshold to the threshold.
 
 ## [1.27.2] - 2026-11-03
 

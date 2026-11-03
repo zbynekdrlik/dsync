@@ -31,7 +31,8 @@ pub const BOOT_FIT_MAX_SIGMA_PPM: f64 = 1.0;
 
 /// A first engagement that started on a SHORT ring (a seeded boot locks seconds after the anchor)
 /// keeps fitting through the engagement, and once the ring spans [`BOOT_FIT_WINDOW_S`] re-seeds
-/// the integrator ONCE when the fit differs from it by at least this (ppm) and 3 σ. Without it a
+/// the integrator ONCE when the fit differs from it by at least this (ppm) and 3 σ (from half of
+/// that the re-seed ramps in, so it is continuous in the fit: PhaseLockCore::reseed). Without it a
 /// hand-over a few ppm off walks `e` out by ~37 µs per ppm through the ~100 s PI (peak at ~100 s):
 /// past the 150 µs unlock bound from ~4 ppm — a [41] flap seconds after the first lock.
 pub const BOOT_RESEED_MIN_PPM: f64 = 0.5;
@@ -42,7 +43,7 @@ pub const BOOT_RESEED_MIN_PPM: f64 = 0.5;
 pub const BOOT_REFINE_WINDOW_S: f64 = 60.0;
 
 /// The refinement re-seeds when its fit differs from the integrator by at least this (ppm) and
-/// 3 σ.
+/// 3 σ, ramping in from half of that (continuous in the fit).
 pub const BOOT_REFINE_MIN_PPM: f64 = 0.2;
 
 /// The frequency measured on the acquisition, as the engagement used it.
