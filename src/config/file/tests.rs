@@ -203,7 +203,10 @@ fn a_first_install_writes_the_template_and_runs_it_116() {
     assert_eq!(loaded.state, ConfigState::file());
     assert_eq!(read(&d.config), TEMPLATE.as_bytes());
     assert!(d.last_good.exists());
-    assert_eq!(loaded.config.ntp_server, "10.77.8.2");
+    assert_eq!(
+        loaded.config.ntp_server, "strih.lan",
+        "#153: NTP from the strih PC"
+    );
     assert_eq!(
         loaded.config.system.interface, None,
         "the template pins nothing"
