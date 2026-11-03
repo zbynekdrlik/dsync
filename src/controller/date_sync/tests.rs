@@ -215,8 +215,9 @@ fn once_locked_the_phase_lock_owns_the_frequency_word_117() {
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
     c.servo_window_after(0.0, 0.5);
     // Bumpless: the first word is the rate servo's (12 ppm, rate 0).
-    // A +500 µs phase error half a second later (grandmaster time) pulls the word DOWN.
-    c.date_sync.pending_median_ns = Some(d + 500_000);
+    // A +100 µs phase error half a second later (grandmaster time) pulls the word DOWN (under
+    // LATE_WINDOW_JUMP_US: a larger one-window jump is a late window the PI holds, dsync#136).
+    c.date_sync.pending_median_ns = Some(d + 100_000);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + 500_000_000;
     c.servo_window_after(0.0, 0.5);
     let words = captured.lock().expect("cap").clone();
@@ -226,8 +227,8 @@ fn once_locked_the_phase_lock_owns_the_frequency_word_117() {
         words[0]
     );
     let expect = 12.0
-        - crate::ptp_phase_lock::K_I_PER_S2 * 500.0 * 0.5
-        - crate::ptp_phase_lock::K_P_PER_S * 500.0;
+        - crate::ptp_phase_lock::K_I_PER_S2 * 100.0 * 0.5
+        - crate::ptp_phase_lock::K_P_PER_S * 100.0;
     assert!(
         (words[1] - expect).abs() < 1e-6,
         "the PI word from the PTP error, got {} want {}",
@@ -237,7 +238,7 @@ fn once_locked_the_phase_lock_owns_the_frequency_word_117() {
     let st = c.get_status_shared();
     let st = st.read().expect("status");
     assert!(st.ptp_phase_locked);
-    assert_eq!(st.ptp_phase_error_us, Some(500.0));
+    assert_eq!(st.ptp_phase_error_us, Some(100.0));
     assert_eq!(st.clock_discipline, "ptp_phase_lock");
     assert_eq!(st.rate_source, "ptp");
     assert!(
@@ -883,8 +884,9 @@ fn a_ptp_outage_holds_the_learned_integrator_not_the_last_word_117() {
     c.date_sync.pending_median_ns = Some(d);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS;
     c.servo_window_after(0.0, 0.5);
-    // A +500 µs error: the last word carries a large P term on top of the learned frequency.
-    c.date_sync.pending_median_ns = Some(d + 500_000);
+    // A +100 µs error: the last word carries a 2 ppm P term on top of the learned frequency
+    // (under LATE_WINDOW_JUMP_US, dsync#136).
+    c.date_sync.pending_median_ns = Some(d + 100_000);
     c.date_sync.pending_t1_ns = PL_PTP_NOW_NS + 500_000_000;
     c.servo_window_after(0.0, 0.5);
     let learned = c.date_sync.core.integrator_ppm();
