@@ -19,7 +19,7 @@ Owner rules from 2026-11-01:
   - Non-rig boxes are dsync's only: companion-snv, mbc, fohabl (Ableton-FOH), iem-snv, alex-nb. The owner granted MCP access (`linux-presenter`, `win-mbc-snv`, `win-ableton-foh`, `win-iem-snv`, `win-alex-nb`), 2026-11-03.
   - mbc is shared with dstack and iem-snv with dasio: touch only dsync's program there.
 - Upgrading a non-rig box (#153): the owner allows NO mix of old and new names, and NTP must point at the strih PC (`strih.lan`).
-  - Windows: `install.ps1` (1.27.1+ moves `C:\ProgramData\DanteSync` and removes the older names).
+  - Windows: `install.ps1` (1.27.1+ moves `C:\ProgramData\DanteSync`; 1.27.2+ also removes every DanteTimeSync name).
   - Verify `/status` `state_dir`, `is_locked`, the version, `ntp_server` and that no dante* name of dsync's is left. Audinate's and dante-asio's names are not dsync's.
 
 ## What else acts on the machines
