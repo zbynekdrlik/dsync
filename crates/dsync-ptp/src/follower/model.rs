@@ -91,10 +91,16 @@ pub struct ClockModel {
     pub holdovers: u32,
     /// Closed sample windows.
     pub windows: u64,
+    /// dsync#136: locked AND settled — the recent |e| is within [`super::core::SETTLED_P90_NS`]
+    /// at p90 over the last [`super::core::SETTLED_WINDOWS`] windows, and so is a boot pull's rest.
+    pub settled: bool,
+    /// dsync#136: |e| p90 (ns) over the last [`super::core::SETTLED_WINDOWS`] engaged windows,
+    /// late windows left out; `None` until that many.
+    pub recent_abs_e_ns: Option<i64>,
 }
 
 /// The seqlock words of a [`ClockModel`].
-pub const MODEL_WORDS: usize = 11;
+pub const MODEL_WORDS: usize = 12;
 
 const F_ANCHORED: u64 = 1;
 const F_LOCKED: u64 = 2;
@@ -102,6 +108,8 @@ const F_HOLDOVER: u64 = 4;
 const F_GM: u64 = 8;
 const F_DATE: u64 = 16;
 const F_OFFSET: u64 = 32;
+const F_SETTLED: u64 = 64;
+const F_RECENT: u64 = 128;
 
 impl ClockModel {
     /// PTP time (ns) at the raw counter value `mono_ns`; `None` before the anchor.
@@ -121,6 +129,8 @@ impl ClockModel {
             (self.gm_uuid.is_some(), F_GM),
             (self.date_offset_ns.is_some(), F_DATE),
             (self.offset_ns.is_some(), F_OFFSET),
+            (self.settled, F_SETTLED),
+            (self.recent_abs_e_ns.is_some(), F_RECENT),
         ] {
             if on {
                 flags |= bit;
@@ -141,6 +151,7 @@ impl ClockModel {
             self.reanchors as u64,
             self.holdovers as u64,
             self.windows,
+            self.recent_abs_e_ns.unwrap_or(0) as u64,
         ]
     }
 
@@ -168,6 +179,8 @@ impl ClockModel {
             reanchors: w[8] as u32,
             holdovers: w[9] as u32,
             windows: w[10],
+            settled: on(F_SETTLED),
+            recent_abs_e_ns: on(F_RECENT).then_some(w[11] as i64),
         }
     }
 }
@@ -206,6 +219,8 @@ mod tests {
             reanchors: 4,
             holdovers: 2,
             windows: 99,
+            settled: true,
+            recent_abs_e_ns: Some(12_345),
         };
         assert_eq!(ClockModel::from_words(m.to_words()), m);
         let empty = ClockModel::default();

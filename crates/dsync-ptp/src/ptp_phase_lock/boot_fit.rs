@@ -31,10 +31,20 @@ pub const BOOT_FIT_MAX_SIGMA_PPM: f64 = 1.0;
 
 /// A first engagement that started on a SHORT ring (a seeded boot locks seconds after the anchor)
 /// keeps fitting through the engagement, and once the ring spans [`BOOT_FIT_WINDOW_S`] re-seeds
-/// the integrator ONCE when the fit differs from it by at least this (ppm) and 3 σ. Without it a
+/// the integrator ONCE when the fit differs from it by at least this (ppm) and 3 σ (from half of
+/// that the re-seed ramps in, so it is continuous in the fit: PhaseLockCore::reseed). Without it a
 /// hand-over a few ppm off walks `e` out by ~37 µs per ppm through the ~100 s PI (peak at ~100 s):
 /// past the 150 µs unlock bound from ~4 ppm — a [41] flap seconds after the first lock.
 pub const BOOT_RESEED_MIN_PPM: f64 = 0.5;
+
+/// dsync#136: the second, longer refinement after the first engagement's fit closes. A 20 s fit
+/// under Windows Npcap noise is good to ~0.5 ppm (σ ∝ T^-1.5); 60 s brings it to ~0.1 ppm, and
+/// the ~100 s PI would otherwise take minutes over the rest (+20…40 µs on mbc-snv for ~5 min).
+pub const BOOT_REFINE_WINDOW_S: f64 = 60.0;
+
+/// The refinement re-seeds when its fit differs from the integrator by at least this (ppm) and
+/// 3 σ, ramping in from half of that (continuous in the fit).
+pub const BOOT_REFINE_MIN_PPM: f64 = 0.2;
 
 /// The frequency measured on the acquisition, as the engagement used it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,13 +57,21 @@ pub struct BootFit {
 }
 
 /// The open-loop phase of the acquisition windows.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct BootFreqFit {
     ring: VecDeque<(f64, f64)>,
     clock_s: f64,
     applied_us: f64,
     /// The last two words the rate servo applied (ppm), oldest first.
     words: Option<(f64, f64)>,
+    /// The fit window (s): [`BOOT_FIT_WINDOW_S`], or [`BOOT_REFINE_WINDOW_S`] for the refinement.
+    window_s: f64,
+}
+
+impl Default for BootFreqFit {
+    fn default() -> Self {
+        Self::with_window(BOOT_FIT_WINDOW_S)
+    }
 }
 
 impl BootFreqFit {
@@ -61,9 +79,20 @@ impl BootFreqFit {
         Self::default()
     }
 
-    /// Start again (a new time base, an unconfirmed anchor).
+    /// A fit over `window_s` seconds of windows.
+    pub fn with_window(window_s: f64) -> Self {
+        BootFreqFit {
+            ring: VecDeque::new(),
+            clock_s: 0.0,
+            applied_us: 0.0,
+            words: None,
+            window_s,
+        }
+    }
+
+    /// Start again (a new time base, an unconfirmed anchor), over the same window.
     pub fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self::with_window(self.window_s);
     }
 
     pub fn points(&self) -> usize {
@@ -83,7 +112,7 @@ impl BootFreqFit {
     /// spacing divides it — the Dante grandmaster's ~1.016 s windows left 20 windows over 19.3 s
     /// for ever, and the continued fit never re-seeded (dsync#136, mbc-snv).
     pub fn full(&self) -> bool {
-        !self.ring.is_empty() && self.clock_s >= BOOT_FIT_WINDOW_S - 1e-6
+        !self.ring.is_empty() && self.clock_s >= self.window_s - 1e-6
     }
 
     /// One anchored acquisition window: its phase error, the seconds since the previous window
@@ -102,7 +131,7 @@ impl BootFreqFit {
                 while self
                     .ring
                     .front()
-                    .is_some_and(|&(t, _)| now - t > BOOT_FIT_WINDOW_S + 1e-9)
+                    .is_some_and(|&(t, _)| now - t > self.window_s + 1e-9)
                 {
                     self.ring.pop_front();
                 }

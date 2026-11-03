@@ -82,6 +82,10 @@ pub struct FollowerConfig {
     /// Accept PTP only from these grandmaster sources (IPs, CIDRs, hostnames; empty = any), the
     /// service's `system.gm_allowlist`.
     pub gm_allowlist: Vec<String>,
+    /// dsync#136: the frequency to start from (ppb, the oscillator's rate against the
+    /// grandmaster on the raw counter), `None` = learn it. Judged like the service's
+    /// `drift.json`: a seed the first measured windows disagree with is dropped.
+    pub frequency_seed_ppb: Option<i64>,
 }
 
 impl FollowerConfig {
@@ -89,7 +93,16 @@ impl FollowerConfig {
         FollowerConfig {
             interface: interface.into(),
             gm_allowlist: Vec::new(),
+            frequency_seed_ppb: None,
         }
+    }
+
+    /// dsync#136: start from this frequency (ppb) instead of learning it. The dsync service's
+    /// applied word is DSYX `[36-39]` (ppm × 1000 = ppb, `/status.drift_ppm`): the same
+    /// quantity on the same PC. Else the follower's own last [`FollowerState::freq_ppm`] × 1000.
+    pub fn with_frequency_seed(mut self, ppb: i64) -> Self {
+        self.frequency_seed_ppb = Some(ppb);
+        self
     }
 }
 
@@ -113,6 +126,11 @@ pub struct FollowerState {
     pub reanchors: u32,
     pub holdovers: u32,
     pub windows: u64,
+    /// dsync#136: locked, and the recent |e| p90 within 30 µs (and a boot pull's rest too): the
+    /// follower is on the grandmaster line as well as the service is, not just within [41].
+    pub settled: bool,
+    /// dsync#136: |e| p90 (ns) over the last 30 engaged windows, late windows left out.
+    pub recent_abs_e_ns: Option<i64>,
 }
 
 impl From<ClockModel> for FollowerState {
@@ -128,6 +146,8 @@ impl From<ClockModel> for FollowerState {
             reanchors: m.reanchors,
             holdovers: m.holdovers,
             windows: m.windows,
+            settled: m.settled,
+            recent_abs_e_ns: m.recent_abs_e_ns,
         }
     }
 }
@@ -152,6 +172,7 @@ impl PtpClock {
         let beat = self.heartbeat.load(Ordering::Acquire);
         if beat == DEAD || mono_ns.saturating_sub(beat) > STALE_AFTER_NS {
             model.locked = false;
+            model.settled = false;
             model.holdover = model.anchored;
         }
         model
@@ -227,7 +248,10 @@ impl Follower {
         if allowlist.has_hostnames() {
             allowlist.resolve(&crate::gm_filter::StdResolver);
         }
-        let core = FollowerCore::new(allowlist, mono::mono_now_ns());
+        let mut core = FollowerCore::new(allowlist, mono::mono_now_ns());
+        if let Some(ppb) = config.frequency_seed_ppb {
+            core = core.with_seed(ppb as f64 / 1_000.0);
+        }
         let (lock, writer) = SeqLock::new(core.model().to_words());
         let heartbeat = Arc::new(AtomicI64::new(mono::mono_now_ns()));
         let clock = PtpClock {

@@ -455,6 +455,19 @@ impl<T: ServoTime> RateServo<T> {
         }
     }
 
+    /// dsync#142 / dsync#136: a seed the judge rejected. Put the servo where a cold start would
+    /// be — the integrator and the lock count at 0, the smoothed rate rebased from the seeded
+    /// word (`word_ppm`, the word in force over the judged window) to a word of 0, the spike
+    /// filter and the jitter estimate cleared (their history mixes rates against both words).
+    /// The caller takes `word_ppm` off this window's raw rate too.
+    pub fn drop_seed(&mut self, word_ppm: f64) {
+        self.drift_baseline_ppm = 0.0;
+        self.lock_stable_count = 0;
+        self.smoothed_rate_ppm -= word_ppm;
+        self.spike_filter.clear();
+        self.jitter_estimator.clear();
+    }
+
     /// Forget the previous window's offset: the next window is no measurement (dsync#142).
     /// For every measurement reset (a clock step, a PTP outage, a new time base).
     pub fn reset_measurement(&mut self) {

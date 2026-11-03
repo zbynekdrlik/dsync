@@ -76,7 +76,8 @@ pub mod boot_fit;
 pub mod freq_step;
 
 pub use boot_fit::{
-    BootFit, BootFreqFit, BOOT_FIT_MAX_SIGMA_PPM, BOOT_FIT_WINDOW_S, BOOT_RESEED_MIN_PPM,
+    BootFit, BootFreqFit, BOOT_FIT_MAX_SIGMA_PPM, BOOT_FIT_WINDOW_S, BOOT_REFINE_MIN_PPM,
+    BOOT_REFINE_WINDOW_S, BOOT_RESEED_MIN_PPM,
 };
 
 pub use freq_step::{
@@ -269,6 +270,13 @@ pub struct PhaseLockCore {
     last_taken_e_us: Option<f64>,
     late_held: usize,
     late_windows: u64,
+    /// dsync#136: the second, longer fit of the first engagement (opened when the first one
+    /// closes), and the re-seed it made.
+    refine: Option<BootFreqFit>,
+    boot_refine: Option<BootFit>,
+    /// dsync#136: the acquisition's last `e` taken into the boot fit, and its late windows in a row.
+    boot_last_e_us: Option<f64>,
+    boot_late_held: usize,
 }
 
 impl PhaseLockCore {
@@ -309,6 +317,16 @@ impl PhaseLockCore {
 
     pub fn last_freq_ppm(&self) -> f64 {
         self.last_freq_ppm
+    }
+
+    /// dsync#136: the refinement's re-seed of the first engagement, when it happened.
+    pub fn boot_refine(&self) -> Option<BootFit> {
+        self.boot_refine
+    }
+
+    /// dsync#136: the refinement is still fitting.
+    pub fn refining(&self) -> bool {
+        self.refine.is_some()
     }
 
     /// dsync#136: late windows the PI held since start.
@@ -363,6 +381,7 @@ impl PhaseLockCore {
         self.engaged = false;
         self.drop_step_state();
         self.close_boot_fit();
+        self.refine = None;
     }
 
     /// The boot fit's line while it is open (diagnostics: its slope and σ, even when refused).
@@ -528,9 +547,27 @@ impl PhaseLockCore {
         if !self.engaged_once && !ptp_locked {
             if event != AnchorEvent::None {
                 self.boot_fit.reset();
+                self.boot_last_e_us = None;
+                self.boot_late_held = 0;
             }
-            self.boot_fit
-                .observe(e_ns as f64 / 1_000.0, dt_s, rate_servo_freq_ppm);
+            // dsync#136: a late window enters the open-loop phase at the previous window's `e`
+            // (it says nothing about the clock); the ∫ word dt stays exact.
+            let e_us = e_ns as f64 / 1_000.0;
+            let e_fit = match self.boot_last_e_us {
+                Some(prev)
+                    if (e_us - prev).abs() > LATE_WINDOW_JUMP_US
+                        && self.boot_late_held < LATE_WINDOW_MAX_HOLD =>
+                {
+                    self.boot_late_held += 1;
+                    prev
+                }
+                _ => {
+                    self.boot_late_held = 0;
+                    self.boot_last_e_us = Some(e_us);
+                    e_us
+                }
+            };
+            self.boot_fit.observe(e_fit, dt_s, rate_servo_freq_ppm);
         }
 
         if !ptp_locked {
@@ -540,6 +577,7 @@ impl PhaseLockCore {
                 self.engaged = false;
                 self.drop_step_state();
                 self.close_boot_fit();
+                self.refine = None;
             }
             return WindowOutcome {
                 freq_ppm: None,
@@ -560,6 +598,10 @@ impl PhaseLockCore {
                 self.engaged_on_fit = fit;
                 // A short ring keeps fitting through the engagement (re-seeded once when full).
                 self.boot_fit_open = event == AnchorEvent::None && !self.boot_fit.full();
+                // dsync#136: a full ring starts the longer refinement at once.
+                if event == AnchorEvent::None && !self.boot_fit_open {
+                    self.refine = Some(BootFreqFit::with_window(BOOT_REFINE_WINDOW_S));
+                }
             }
             if !self.boot_fit_open {
                 self.boot_fit.reset();
@@ -619,13 +661,23 @@ impl PhaseLockCore {
         };
         self.fstep.note_word(f);
         self.last_freq_ppm = f;
+        let disturbed = event != AnchorEvent::None || freq_step.is_some();
+        // A late window enters the boot fits' open-loop phase at the last taken `e` (it says
+        // nothing about the clock); the ∫ word dt stays exact.
+        let e_fit = if late {
+            self.last_taken_e_us.unwrap_or(e_raw_us)
+        } else {
+            e_raw_us
+        };
+        if self.refine.is_some() {
+            self.continue_refine(e_fit, dt_s, f, disturbed);
+        }
         if self.boot_fit_open {
-            self.continue_boot_fit(
-                e_raw_us,
-                dt_s,
-                f,
-                event != AnchorEvent::None || freq_step.is_some(),
-            );
+            self.continue_boot_fit(e_fit, dt_s, f, disturbed);
+            if !self.boot_fit_open && !disturbed {
+                // dsync#136: the 20 s fit closed: the longer refinement takes over.
+                self.refine = Some(BootFreqFit::with_window(BOOT_REFINE_WINDOW_S));
+            }
         }
         WindowOutcome {
             freq_ppm: Some(f),
@@ -649,16 +701,57 @@ impl PhaseLockCore {
             return;
         }
         if let Some(fit) = self.boot_fit.estimate() {
-            let off = fit.freq_ppm - self.i_ppm;
-            if off.abs() >= BOOT_RESEED_MIN_PPM.max(3.0 * fit.sigma_ppm) {
-                self.i_ppm = fit.freq_ppm.clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
-                if e_us.abs() >= FSTEP_PULL_DONE_US {
-                    self.pull_us = e_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
-                }
+            if self.reseed(fit, BOOT_RESEED_MIN_PPM, e_us) {
                 self.boot_reseed = Some(fit);
             }
         }
         self.close_boot_fit();
+    }
+
+    /// dsync#136: one window of the refinement. Once it spans [`BOOT_REFINE_WINDOW_S`]: re-seed
+    /// the integrator once if the fit says it is off by ≥ [`BOOT_REFINE_MIN_PPM`] and 3 σ
+    /// (ramped, [`Self::reseed`]), the phase left retired along the pull reference (no wall step, `D` untouched).
+    fn continue_refine(&mut self, e_fit_us: f64, dt_s: f64, f: f64, disturbed: bool) {
+        let Some(fit) = self.refine.as_mut() else {
+            return;
+        };
+        if disturbed {
+            self.refine = None;
+            return;
+        }
+        fit.observe(e_fit_us, dt_s, f);
+        if !fit.full() {
+            return;
+        }
+        if let Some(est) = fit.estimate() {
+            if self.reseed(est, BOOT_REFINE_MIN_PPM, e_fit_us) {
+                self.boot_refine = Some(est);
+            }
+        }
+        self.refine = None;
+    }
+
+    /// A boot fit's re-seed, CONTINUOUS in the fit (dsync#136, PR #156 CI): the integrator
+    /// moves by `w × (fit − integrator)` and the pull reference by `w × (e − pull)`, with `w`
+    /// ramping 0 → 1 as the difference goes from half the threshold to the threshold
+    /// (`min_ppm` or 3 σ, whichever is larger). An all-or-nothing re-seed turned a few-ns stamp
+    /// residue at the edge into a 0.2 ppm split between two followers on one PC. Returns
+    /// whether it moved anything.
+    fn reseed(&mut self, fit: BootFit, min_ppm: f64, e_us: f64) -> bool {
+        let threshold = min_ppm.max(3.0 * fit.sigma_ppm);
+        let off = fit.freq_ppm - self.i_ppm;
+        let w = ((off.abs() - threshold / 2.0) / (threshold / 2.0)).clamp(0.0, 1.0);
+        if w == 0.0 {
+            return false;
+        }
+        self.i_ppm = (self.i_ppm + w * off).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+        let pull = self.pull_us + w * (e_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US) - self.pull_us);
+        self.pull_us = if pull.abs() >= FSTEP_PULL_DONE_US {
+            pull
+        } else {
+            0.0
+        };
+        true
     }
 
     /// Follow a confirmed step: the integrator jumps by the measured error (bounded), and the phase
@@ -1433,5 +1526,55 @@ mod tests {
         assert_eq!(c.pull_us(), 0.0);
         assert!(c.fstep.points() <= 1, "{}", c.fstep.points());
         assert_eq!(c.freq_steps(), 1, "the count survives");
+    }
+
+    // ---- dsync#136: the boot's re-seeds are continuous in their input ----------------------
+
+    /// One boot: the acquisition holds `e` at 0 on the word `w_acq` (so the engagement starts on
+    /// it), then the oscillator needs `+1 ppm`. Returns `e` (ns) of every engaged window.
+    fn boot_trajectory(w_acq: f64, windows: usize) -> Vec<f64> {
+        let mut core = PhaseLockCore::new();
+        for _ in 0..(BOOT_FIT_WINDOW_S / DT) as usize / 2 {
+            core.on_window(D, false, w_acq, DT);
+        }
+        let mut plant = Plant::new(-1.0, 1, w_acq);
+        (0..windows)
+            .map(|_| {
+                let out = core.on_window(D + plant.e_ns.round() as i64, true, w_acq, DT);
+                plant.advance(out.freq_ppm.expect("engaged"), DT);
+                plant.e_ns
+            })
+            .collect()
+    }
+
+    /// PR #156 CI run 41589062657: two followers on one PC read the same kernel stamps up to the
+    /// conversion's few-ns residue, yet ended 0.21 ppm and 16.4 µs apart. The boot re-seeds fired
+    /// only past a threshold (0.5 ppm for the 20 s fit, 0.2 for the refinement), so a residue
+    /// at the edge re-seeded one follower and not the other. A hand-over swept in 0.002 ppm steps
+    /// must move the trajectory by a hair, never jump.
+    #[test]
+    fn the_boot_reseeds_are_continuous_in_the_hand_over_136() {
+        let windows = ((BOOT_FIT_WINDOW_S + BOOT_REFINE_WINDOW_S + 40.0) / DT) as usize;
+        let mut prev = boot_trajectory(1.0, windows);
+        let mut worst = (0.0f64, 0.0f64);
+        for k in 1..=400 {
+            let h = k as f64 * 0.002;
+            let traj = boot_trajectory(1.0 + h, windows);
+            let jump = traj
+                .iter()
+                .zip(&prev)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f64::max);
+            if jump > worst.1 {
+                worst = (h, jump);
+            }
+            prev = traj;
+        }
+        assert!(
+            worst.1 <= 1_000.0,
+            "a 0.002 ppm change of the hand-over at {:.3} ppm moved e by {:.0} ns",
+            worst.0,
+            worst.1
+        );
     }
 }

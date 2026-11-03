@@ -145,12 +145,7 @@ where
                      off the seed",
                     SEED_JUDGE_WINDOWS, mean_rate_ppm
                 );
-                self.rate.drift_baseline_ppm = 0.0;
-                self.rate.lock_stable_count = 0;
-                self.rate.smoothed_rate_ppm -= word_ppm;
-                self.rate.spike_filter.clear();
-                // Its history mixes rates against the seed with rates against 0: a false jitter.
-                self.rate.jitter_estimator.clear();
+                self.rate.drop_seed(word_ppm);
                 word_ppm
             }
         }
