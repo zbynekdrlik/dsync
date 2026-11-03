@@ -55,6 +55,9 @@ struct World {
     seq: u16,
     source_ip: Ipv4Addr,
     sync_period_ns: i64,
+    /// Extra receive delay of the Syncs whose sequence id is in the set (late windows).
+    late: std::collections::HashSet<u16>,
+    late_ns: i64,
 }
 
 impl World {
@@ -72,6 +75,8 @@ impl World {
             seq: 0,
             source_ip: Ipv4Addr::new(10, 77, 9, 184),
             sync_period_ns: SYNC_PERIOD_NS,
+            late: std::collections::HashSet::new(),
+            late_ns: 0,
         }
     }
 
@@ -92,7 +97,13 @@ impl World {
         let sync = ptp_tx::sync(&self.gm, self.seq, t1);
         let follow_up = ptp_tx::follow_up(&self.gm, self.seq, t1);
         for core in cores.iter_mut() {
-            let rx = self.t + LATENCY_NS + (self.jitter_ns * self.noise.gauss()).abs() as i64;
+            let late = if self.late.contains(&self.seq) {
+                self.late_ns
+            } else {
+                0
+            };
+            let rx =
+                self.t + LATENCY_NS + late + (self.jitter_ns * self.noise.gauss()).abs() as i64;
             let mono_rx = self.mono(rx);
             let wall_rx = mono_rx + self.wall_minus_mono;
             let packet = |data| RxPacket {
@@ -256,6 +267,56 @@ fn a_follower_whose_windows_do_not_divide_the_fit_window_locks_and_holds_136() {
         assert!(
             worst <= LOCK_BOUND_NS + mean_jitter_ns,
             "seed {seed:#x}: settled error {worst}ns"
+        );
+    }
+}
+
+/// dsync#136, the mbc-snv probe: the Dante NIC there is a USB adapter, and now and then 3 of a
+/// window's 4 Syncs arrive ~0.5 ms late. That window's median `e` reads +455…+504 µs, and the PI's
+/// proportional term turned each into an 8-10 µs move of the follower's line (the probe's
+/// diff stepped −19 → −28 → −35 → −45 µs). A lone late window says nothing about the clock: the
+/// line must not move for it.
+#[test]
+fn a_lone_late_window_does_not_move_the_followers_line_136() {
+    for seed in SEEDS {
+        let run = |late: bool| {
+            let mut world = World::new(seed, 10_000.0);
+            world.sync_period_ns = 250_000_000;
+            world.gm_ppm = 0.0;
+            world.pc_ppm = 5.4;
+            world.late_ns = 500_000;
+            let mut core = new_core(&world);
+            run_to_lock(&mut world, &mut core, 120);
+            for _ in 0..(120 * 4) {
+                world.tick(&mut [&mut core]);
+            }
+            if late {
+                // Three late windows a few seconds apart, as at 69 / 72 / 79 s on mbc: 3 of the
+                // 4 Syncs of each.
+                for start in [0u16, 12, 40] {
+                    for k in 1..=3 {
+                        world.late.insert(world.seq.wrapping_add(start + k));
+                    }
+                }
+            }
+            let mut errors = Vec::new();
+            for _ in 0..(60 * 4) {
+                world.tick(&mut [&mut core]);
+                errors.push(world.error_ns(&core).expect("anchored"));
+                assert!(core.model().locked, "seed {seed:#x}: the lock dropped");
+            }
+            errors
+        };
+        let (clean, late) = (run(false), run(true));
+        let worst = clean
+            .iter()
+            .zip(&late)
+            .map(|(a, b)| (a - b).abs())
+            .max()
+            .unwrap();
+        assert!(
+            worst <= 3_000,
+            "seed {seed:#x}: the late windows moved the line by {worst}ns"
         );
     }
 }
