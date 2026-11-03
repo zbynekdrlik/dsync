@@ -78,9 +78,12 @@ impl BootFreqFit {
         }
     }
 
-    /// The ring spans the whole fit window.
+    /// The fit has run for the whole fit window. Judged on the time since the ring started, not
+    /// on the ring's span: trimmed to the window, the ring spans it exactly only when the window
+    /// spacing divides it — the Dante grandmaster's ~1.016 s windows left 20 windows over 19.3 s
+    /// for ever, and the continued fit never re-seeded (dsync#136, mbc-snv).
     pub fn full(&self) -> bool {
-        self.span_s() >= BOOT_FIT_WINDOW_S - 1e-6
+        !self.ring.is_empty() && self.clock_s >= BOOT_FIT_WINDOW_S - 1e-6
     }
 
     /// One anchored acquisition window: its phase error, the seconds since the previous window
