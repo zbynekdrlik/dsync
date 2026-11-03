@@ -4,12 +4,15 @@
 //! synchronized with system time. This uses KeQuerySystemTimePrecise() which
 //! provides microsecond-level precision AND tracks system clock adjustments.
 //!
-//! Key: We use TimestampType::HostHighPrec which maps to PCAP_TSTAMP_HOST_HIPREC
-//! and uses KeQuerySystemTimePrecise() internally - NOT the default UNSYNCED mode.
+//! Key: we request PCAP_TSTAMP_HOST_HIPREC, which uses KeQuerySystemTimePrecise() internally -
+//! NOT the default UNSYNCED mode.
+//!
+//! dsync#136: Npcap is loaded at run time ([`crate::wpcap`]); a PC without it gets a typed
+//! [`crate::wpcap::NpcapMissing`] error from every entry point here, never a failed process start.
 
+use crate::wpcap::{Capture, CaptureSettings, Device};
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
-use pcap::{Active, Capture, Device, TimestampType};
 use std::net::{Ipv4Addr, UdpSocket};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -45,75 +48,16 @@ fn join_multicast(iface_ip: Ipv4Addr) -> Result<UdpSocket> {
     Ok(socket.into())
 }
 
-/// Probe whether the Npcap RUNTIME (`wpcap.dll`) is actually loadable,
-/// WITHOUT ever making a delay-loaded `pcap::` call.
-///
-/// #58: `build.rs` delay-loads `wpcap.dll` (`/DELAYLOAD:wpcap.dll`) so the
-/// process can still START on a machine that has only the Npcap SDK
-/// (link-time `.lib` stubs, e.g. every `windows-latest` CI runner) and not
-/// the runtime -- but delay-load only defers WHEN the DLL is resolved, not
-/// WHETHER a missing DLL is recoverable: MSVC's default delay-load failure
-/// hook raises an unrecoverable structured exception the moment a
-/// delay-loaded symbol is first called and the DLL can't be found (observed
-/// live: `NtpClient::new()` -> `PcapNtpTransport::new()` -> `find_device()`
-/// -> `Device::list()` crashed the whole test binary with `0xc06d007e` on a
-/// runtime-less CI runner, run 30337735289). `LoadLibraryW`/`FreeLibrary`
-/// live in `kernel32.dll`, which every Windows process implicitly and
-/// STATICALLY imports (never delay-loaded) -- probing with them lets us
-/// detect a missing runtime BEFORE the first real pcap:: call, so we return
-/// a normal `Err` (exactly like any other pcap failure -- `NtpClient::new`
-/// already logs and falls back to userspace `rsntp` for this case) instead
-/// of crashing the process. This also hardens a real deployed box: if
-/// Npcap's runtime is ever missing/corrupted there, dsync now degrades
-/// gracefully instead of crashing outright.
-#[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
+/// Whether the Npcap runtime loads on this PC (dsync#136: the loader is the probe).
+#[doc(hidden)] // a service internal (its pcap NTP transport), not the library API
 pub fn wpcap_runtime_available() -> bool {
-    use std::ffi::c_void;
-    use std::os::windows::ffi::OsStrExt;
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
-        fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
-    }
-
-    let wide_name: Vec<u16> = std::ffi::OsStr::new("wpcap.dll")
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    // SAFETY: `wide_name` is a valid NUL-terminated UTF-16 string that
-    // outlives this call; `LoadLibraryW`/`FreeLibrary` are the standard
-    // Win32 module-loading APIs used exactly per their documented contract
-    // (probe-then-release, never retaining the handle).
-    unsafe {
-        let handle = LoadLibraryW(wide_name.as_ptr());
-        if handle.is_null() {
-            false
-        } else {
-            FreeLibrary(handle);
-            true
-        }
-    }
+    crate::wpcap::available().is_ok()
 }
 
-/// Guarded device enumeration — the SINGLE choke point before any
-/// `pcap::Device::list()` call (the #58 delay-load crash guard). BOTH
-/// name-based selection (`find_device`, PTP) and NTP-server-reachability
-/// selection (`find_device_for_ntp_server`, dsync#53 continuation) go
-/// through this, so neither path can bypass the guard.
+/// Every Npcap capture device. Without the Npcap runtime: a [`crate::wpcap::NpcapMissing`] error.
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
-pub fn list_devices_guarded() -> Result<Vec<Device>> {
-    // #58: check BEFORE the first delay-loaded pcap:: call (Device::list(),
-    // right below), not after -- see `wpcap_runtime_available()`.
-    if !wpcap_runtime_available() {
-        return Err(anyhow!(
-            "Npcap runtime (wpcap.dll) is not installed/loadable -- only the \
-             Npcap SDK's link-time stubs are present. Install the Npcap \
-             runtime (https://npcap.com) to use Npcap-based capture."
-        ));
-    }
-    Ok(Device::list()?)
+pub fn list_devices() -> Result<Vec<Device>> {
+    crate::wpcap::devices()
 }
 
 /// Find the Npcap device matching `interface_name` by name, description, or
@@ -125,7 +69,7 @@ pub fn list_devices_guarded() -> Result<Vec<Device>> {
 /// name — see that function's doc comment for why).
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
 pub fn find_device(interface_name: &str) -> Result<Device> {
-    let devices = list_devices_guarded()?;
+    let devices = list_devices()?;
     devices
         .iter()
         .find(|d| {
@@ -183,7 +127,7 @@ pub fn find_ptp_capture_device(
     gm_allowlist: &crate::gm_filter::GmAllowlist,
     fallback_name: &str,
 ) -> Result<(Device, Option<Ipv4Addr>)> {
-    let devices = list_devices_guarded()?;
+    let devices = list_devices()?;
 
     // One (ip, netmask) candidate per device IPv4 address, remembering which
     // device each came from (a device can carry several addresses).
@@ -277,18 +221,21 @@ pub fn device_ipv4(device: &Device) -> Result<Ipv4Addr> {
 /// transport (dsync#53) — both need the same precise-timestamp capture
 /// setup, differing only in which traffic the filter selects.
 #[doc(hidden)] // dsync#136: a service internal (its pcap NTP transport), not the library API
-pub fn open_hiprec_capture(device: &Device, bpf_filter: &str) -> Result<Capture<Active>> {
+pub fn open_hiprec_capture(device: &Device, bpf_filter: &str) -> Result<Capture> {
     info!("[TS] Requesting HostHighPrec timestamps (KeQuerySystemTimePrecise)");
 
-    let mut capture = Capture::from_device(device.clone())?
-        .promisc(false) // Don't use promiscuous - rely on the traffic actually reaching this NIC
-        .immediate_mode(true) // Critical: disable buffering for lowest latency
-        .snaplen(256) // PTP/NTP packets are both small
-        .timeout(1) // 1ms timeout for responsiveness
-        .tstamp_type(TimestampType::HostHighPrec)
-        .open()?;
+    let mut capture = Capture::open(
+        device,
+        CaptureSettings {
+            promisc: false, // Don't use promiscuous - rely on the traffic actually reaching this NIC
+            immediate: true, // Critical: disable buffering for lowest latency
+            snaplen: 256,   // PTP/NTP packets are both small
+            timeout_ms: 1,  // 1ms timeout for responsiveness
+            host_hiprec: true,
+        },
+    )?;
 
-    capture.filter(bpf_filter, true)?;
+    capture.filter(bpf_filter)?;
     info!("[Filter] Applied BPF: {}", bpf_filter);
     info!("[TS] Using HostHighPrec timestamps (KeQuerySystemTimePrecise)");
 
@@ -308,7 +255,7 @@ pub fn pcap_ts_to_systemtime(ts_sec: i64, ts_usec: i64) -> SystemTime {
 /// One open PTP capture: the pcap handle, the socket that holds the IGMP membership, and where
 /// they were opened.
 struct PtpCapture {
-    capture: Capture<Active>,
+    capture: Capture,
     // Keep the socket alive for IGMP multicast membership (dropped on close);
     // ONE ephemeral-port socket holds the 224.0.1.129 membership (dsync#109).
     _igmp_sock: UdpSocket,
@@ -390,7 +337,7 @@ fn select_pinned_device_at(name: &str, ip: Ipv4Addr) -> Result<(Device, Ipv4Addr
 
 /// dsync#112 — the capture device that carries exactly `ip` now, if any.
 fn device_with_ip(ip: Ipv4Addr) -> Option<Device> {
-    list_devices_guarded().ok()?.into_iter().find(|d| {
+    list_devices().ok()?.into_iter().find(|d| {
         d.addresses
             .iter()
             .any(|a| a.addr == std::net::IpAddr::V4(ip))
@@ -499,19 +446,18 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
         };
         let joined_ip = open.iface_ip;
         match open.capture.next_packet() {
-            Ok(packet) => {
+            Ok(Some(packet)) => {
                 let data = packet.data;
 
                 // Use Npcap's HostHighPrec timestamps - these are both precise AND synced
                 // with system time (using KeQuerySystemTimePrecise on Windows 8+)
-                let header = packet.header;
+                let stamp = packet.ts;
                 let ts = if using_hiprec {
                     // Npcap provides high-precision timestamps synced with system time
-                    let ts =
-                        pcap_ts_to_systemtime(header.ts.tv_sec as i64, header.ts.tv_usec as i64);
+                    let ts = pcap_ts_to_systemtime(stamp.tv_sec as i64, stamp.tv_usec as i64);
                     debug!(
                         "[TS] Npcap HostHighPrec: {}.{:06}",
-                        header.ts.tv_sec, header.ts.tv_usec
+                        stamp.tv_sec, stamp.tv_usec
                     );
                     ts
                 } else {
@@ -552,13 +498,13 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
                     Ok(None)
                 }
             }
-            Err(pcap::Error::TimeoutExpired) => {
+            Ok(None) => {
                 // Normal timeout - no packet available
                 Ok(None)
             }
             Err(e) => {
-                warn!("Npcap recv error: {} ({:?})", e, e);
-                Err(e.into())
+                warn!("Npcap recv error: {:#}", e);
+                Err(e)
             }
         }
     }
@@ -619,18 +565,9 @@ impl NpcapPtpNetwork {
     }
 }
 
-/// Get list of available Npcap devices.
-///
-/// Adversarial-review fix (#53 continuation): this used to call
-/// `Device::list()` directly, bypassing `list_devices_guarded()` -- making
-/// that function's own doc comment ("the SINGLE choke point ... so neither
-/// path can bypass the guard") false. Zero live callers today, so there was
-/// no real #58 crash exposure yet, but a future caller (e.g. a `--list-devices`
-/// CLI flag) would have hit the exact unguarded delay-load crash #58 fixed
-/// for every other pcap:: entry point. Routed through the guard instead of
-/// just correcting the comment.
+/// Every Npcap device as `name: description` (a diagnostic listing).
 pub fn list_npcap_devices() -> Result<Vec<String>> {
-    let devices = list_devices_guarded()?;
+    let devices = list_devices()?;
     Ok(devices
         .iter()
         .map(|d| format!("{}: {:?}", d.name, d.desc))

@@ -26,8 +26,11 @@
 //! - Several followers and the dsync service share the PTP ports on one PC: on Linux every
 //!   receiver binds 319/320 with `SO_REUSEADDR` and the kernel delivers each multicast datagram to
 //!   every member (binding 319 needs `CAP_NET_BIND_SERVICE` or root); on Windows each process has
-//!   its own Npcap capture (the Npcap runtime is required, and the app's binary should delay-load
-//!   `wpcap.dll` as the service's `build.rs` does).
+//!   its own Npcap capture. The Npcap runtime is loaded at run time ([`crate::wpcap`]): the app
+//!   needs no SDK to build and no linker flag, and without Npcap `start` returns
+//!   [`FollowerError::NpcapMissing`].
+//! - [`Follower::start`] says why it failed ([`FollowerError`]): the app logs the reason and
+//!   falls back to the service's DSYX.
 //! - [`PtpClock::now_ptp_ns`] is a lock-free read that never waits for the writer
 //!   ([`crate::seqlock`], double-buffered): one raw counter read and one multiply-add, no
 //!   allocation, no lock. The counter read is a vDSO call on current Linux kernels
@@ -46,7 +49,10 @@
 //! re-syncs its media clock when either changes.
 
 pub mod core;
+mod error;
 pub mod model;
+
+pub use self::error::FollowerError;
 
 use self::core::{FollowerCore, PacketVerdict, RxPacket};
 use self::model::{ClockModel, MODEL_WORDS};
@@ -204,9 +210,9 @@ pub struct Follower {
 
 impl Follower {
     /// Join the PTP group on `config.interface` with this platform's receive path and follow.
-    pub fn start(config: FollowerConfig) -> Result<Follower> {
+    pub fn start(config: FollowerConfig) -> std::result::Result<Follower, FollowerError> {
         let network = open_network(&config)?;
-        Self::with_network(network, &config)
+        Self::with_network(network, &config).map_err(FollowerError::Other)
     }
 
     /// Follow over a given receive path (a test's sockets, or a backend the app opened itself).
@@ -398,24 +404,39 @@ impl Receiver {
     }
 }
 
+/// The interface first (the most specific reason), then the platform's receive path.
+fn interface_ip(config: &FollowerConfig) -> std::result::Result<std::net::Ipv4Addr, FollowerError> {
+    pinned_ip(&config.interface).map_err(|cause| FollowerError::InterfaceNotFound {
+        interface: config.interface.clone(),
+        cause,
+    })
+}
+
 #[cfg(unix)]
-fn open_network(config: &FollowerConfig) -> Result<impl PtpNetwork + Send + 'static> {
+fn open_network(
+    config: &FollowerConfig,
+) -> std::result::Result<impl PtpNetwork + Send + 'static, FollowerError> {
     use crate::net_linux::{KernelSockets, UdpPtpNetwork};
-    let ip = pinned_ip(&config.interface)?;
-    Ok(
-        UdpPtpNetwork::join(KernelSockets, config.interface.clone(), ip)?
-            .pinned_to(Some(config.interface.clone())),
-    )
+    let ip = interface_ip(config)?;
+    let network = UdpPtpNetwork::join(KernelSockets, config.interface.clone(), ip)
+        .map_err(FollowerError::from_open)?;
+    Ok(network.pinned_to(Some(config.interface.clone())))
 }
 
 #[cfg(windows)]
-fn open_network(config: &FollowerConfig) -> Result<impl PtpNetwork + Send + 'static> {
-    let ip = pinned_ip(&config.interface)?;
+fn open_network(
+    config: &FollowerConfig,
+) -> std::result::Result<impl PtpNetwork + Send + 'static, FollowerError> {
+    let ip = interface_ip(config)?;
+    crate::wpcap::available().map_err(|missing| FollowerError::NpcapMissing {
+        detail: missing.detail,
+    })?;
     crate::net_pcap::NpcapPtpNetwork::new(
         &config.interface,
         &GmAllowlist::default(),
         Some((config.interface.clone(), ip)),
     )
+    .map_err(FollowerError::from_open)
 }
 
 /// The pinned interface's IPv4 now (a link-local one counts: an audio network segment without DHCP).

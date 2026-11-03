@@ -70,7 +70,7 @@ on either platform skips `publish` — no release with a missing asset).
   past a size budget (cargo has no `target/` GC, rust-lang/cargo#5026); it skips while the
   dsync daemon/tray is running.
 
-**Windows cross-compilation** requires Npcap SDK 1.13+ with `LIB` env var set to `npcap-sdk/Lib/x64`.
+**Windows builds need no Npcap SDK** since 1.27 (#136): `crates/dsync-ptp/src/wpcap.rs` loads `wpcap.dll` at run time.
 
 ## Playbook router
 
@@ -83,7 +83,7 @@ on either platform skips `publish` — no release with a missing asset).
   step, why followers on one PC read bit-identical times, and the real-socket acceptance test
   beside the service → `.claude/rules/ptp-library.md` (auto-loads on `crates/dsync-ptp/**`)
 - Windows-only (`#[cfg(windows)]`) code — what CI actually verifies + a free local compile-check
-  without the Npcap SDK → `.claude/rules/windows-only-code.md` (auto-loads on its `paths:`)
+  → `.claude/rules/windows-only-code.md` (auto-loads on its `paths:`)
 - Editing `.github/workflows/*.yml` — local `actionlint` validation, and why a workflow being
   syntactically valid doesn't prove a new step actually works at runtime → `.claude/rules/github-workflows.md`
   (auto-loads on its `paths:`)

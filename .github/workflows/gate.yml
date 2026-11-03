@@ -86,7 +86,7 @@ jobs:
             ${{ runner.os }}-cargo-gate-
 
       - name: Install Linux dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libgtk-3-dev libpcap-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libgtk-3-dev
 
       - name: Build daemon (release)
         run: cargo build --release --bin dsync

@@ -35,9 +35,9 @@ use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 // `enable_privilege` below) for the legacy SetSystemTime call this replaces.
 //
 // Deliberately a STATIC link (`#[link(name = "ntdll")]`), unlike this codebase's own
-// established pattern for an undocumented/optional Windows surface -- net_pcap.rs's
-// `wpcap_runtime_available()` probes the (third-party, genuinely-optional) Npcap runtime
-// dynamically via `LoadLibraryW`/`GetProcAddress` specifically so a missing DLL degrades
+// established pattern for an undocumented/optional Windows surface -- dsync-ptp's `wpcap.rs`
+// loads the (third-party, genuinely-optional) Npcap runtime dynamically via
+// `LoadLibraryExW`/`GetProcAddress` (dsync#136) specifically so a missing DLL degrades
 // gracefully instead of crashing the whole process at load time (review finding, #80).
 // `ntdll.dll` is different in kind: it is core, unconditionally-loaded OS infrastructure on
 // every NT-based Windows version (not optional third-party software), and `SetSystemTime`

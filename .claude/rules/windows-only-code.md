@@ -2,12 +2,20 @@
 paths:
   - "src/net_pcap.rs"
   - "crates/dsync-ptp/src/net_pcap.rs"
+  - "crates/dsync-ptp/src/wpcap.rs"
   - "src/net_winsock.rs"
   - "src/clock/windows.rs"
   - "src/bin/tray.rs"
 ---
 
 # Windows-only (`#[cfg(windows)]`) code — what CI actually verifies, and how to check more locally
+
+> **Since 1.27 (dsync#136) the #58 story below is history.** `crates/dsync-ptp/src/wpcap.rs` loads
+> `wpcap.dll` at RUN time (`LoadLibraryExW` + `GetProcAddress`); the `pcap` crate, both `build.rs`
+> delay-load files and CI's Npcap SDK step are gone. Nothing imports `wpcap.dll`, so every test
+> binary starts on a runner without Npcap and every pcap entry point returns a typed
+> `NpcapMissing`. A new libpcap call goes through `wpcap::Api` (resolved at load), never a
+> link-time import. The GNU-target `cargo check` below now needs no SDK for any target.
 
 `net_pcap.rs`, `net_winsock.rs`, `clock/windows.rs`, and the tray binary are gated behind
 `#[cfg(windows)]` (module-level in `lib.rs`, or `[target.'cfg(windows)'.dependencies]` in

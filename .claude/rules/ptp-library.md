@@ -103,6 +103,35 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
   must never steer the host clock, so the controller's `SystemClock` is a virtual WALL over the raw
   counter, and its `PtpNetwork` moves each kernel stamp onto that wall. All three receivers lock
   in ~52 s. The test takes ~82 s.
-- Windows: `cargo check --target x86_64-pc-windows-gnu --workspace --tests --lib`. CI's Windows leg
-  runs `cargo test --workspace`. The crate's `build.rs` delay-loads `wpcap.dll` for its own test
-  binaries. A consumer app needs the Npcap runtime, and should delay-load `wpcap.dll` the same way.
+- Windows: `cargo check --target x86_64-pc-windows-gnu --workspace --tests --lib --examples`.
+  CI's Windows leg runs `cargo test --workspace` with NO Npcap SDK or runtime installed.
+
+## Windows: Npcap at run time, a typed start error, the probe (v1.27)
+
+- `wpcap.rs` is the ONE owner of the Npcap API (the PTP capture and the service's NTP capture).
+  It loads `System32\Npcap\wpcap.dll` with `LOAD_WITH_ALTERED_SEARCH_PATH` (so `Packet.dll`
+  resolves beside it), then the default search, and resolves 15 functions with `GetProcAddress`.
+  No `pcap` crate, no SDK, no `/DELAYLOAD`. A new libpcap call is a new `Api` field + one
+  `resolve!` line. `struct timeval` is two 32-bit longs on Windows (a layout test pins it).
+- `pcap_activate` returning a WARNING is an error, as the `pcap` crate did: a capture without
+  `HOST_HIPREC` stamps is not one the clock can use.
+- `Follower::start` → `FollowerError`. The interface is judged first (`InterfaceNotFound`), then
+  Npcap (`NpcapMissing`), then the open (`from_open` reads the anyhow chain: an
+  `io::ErrorKind::PermissionDenied` anywhere is `PermissionDenied`). A loopback never counts as a
+  pinned interface (#131), so a test of the Linux bind uses `net::get_default_interface()`.
+- `examples/dsync-ptp-probe.rs` (`test = true` in `[[example]]`, so its tests run in
+  `cargo test`) is a release asset on Windows. It compares the follower at the DSYX reply's raw
+  counter instant (`[16-23]` / `[48-55]`) with the reply's `now_ptp_ns` (`[96-103]`). dsync has
+  no fleet access: dstack runs it on a node and posts the output on #136.
+
+## The seqlock: a read counts only if the active index is unchanged after it (dsync#150, v1.26)
+
+`crates/dsync-ptp/src/seqlock.rs` is double-buffered with one writer. A reader loads `active`,
+then reads that slot. If the reader stalls, the writer can publish the other slot and then
+COMPLETE a newer write into the reader's slot, not yet published. The slot's own sequence is even
+and stable, so a per-slot check passes, and the reader returns a state newer than the published
+one. Its next read returns the older published state: time goes back. `try_read_at` therefore
+re-loads `active` after the slot read and retries when it moved. The regression test
+`a_stale_index_never_returns_a_complete_but_unpublished_write` drives that interleaving
+deterministically. The concurrent stress test only caught it on CI's slower Coverage runner; to
+reproduce locally, pin it to two cores (`taskset -c 0,1`) and loop it.

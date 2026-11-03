@@ -332,3 +332,98 @@ fn a_step_seen_only_after_the_empty_receive_also_drops_the_next_pass() {
     );
     assert!(rx.pass(&mut next, &mut core, &mut steady));
 }
+
+// ---- dsync#136: the typed start error ----
+
+#[test]
+fn a_missing_interface_is_interface_not_found_naming_it_136() {
+    match Follower::start(FollowerConfig::on_interface("dsync-no-such-nic0")) {
+        Err(FollowerError::InterfaceNotFound { interface, .. }) => {
+            assert_eq!(interface, "dsync-no-such-nic0")
+        }
+        other => panic!("expected InterfaceNotFound, got {:?}", other.err()),
+    }
+}
+
+#[test]
+fn a_refused_bind_anywhere_in_the_chain_is_permission_denied_136() {
+    let io = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+    let cause = anyhow::Error::new(io).context("bind 0.0.0.0:319");
+    let err = FollowerError::from_open(cause);
+    assert!(
+        matches!(err, FollowerError::PermissionDenied { .. }),
+        "{err:?}"
+    );
+    let text = err.to_string();
+    assert!(
+        text.contains("bind 0.0.0.0:319") && text.contains("CAP_NET_BIND_SERVICE"),
+        "{text}"
+    );
+    assert!(
+        std::error::Error::source(&err).is_some(),
+        "the cause stays reachable"
+    );
+}
+
+#[test]
+fn a_pinned_interface_gone_at_open_is_interface_not_found_136() {
+    let pin = crate::net::PinnedInterfaceUnavailable {
+        name: "Ethernet 2".into(),
+        missing: true,
+    };
+    match FollowerError::from_open(pin.into()) {
+        FollowerError::InterfaceNotFound { interface, .. } => assert_eq!(interface, "Ethernet 2"),
+        other => panic!("expected InterfaceNotFound, got {other:?}"),
+    }
+}
+
+#[test]
+fn any_other_open_failure_is_other_with_its_text_136() {
+    let err = FollowerError::from_open(anyhow::anyhow!("socket: address family not supported"));
+    assert!(matches!(err, FollowerError::Other(_)), "{err:?}");
+    assert_eq!(err.to_string(), "socket: address family not supported");
+}
+
+/// Linux: binding 319 without the right is `PermissionDenied`; with it the follower starts.
+#[cfg(target_os = "linux")]
+#[test]
+fn binding_the_ptp_port_without_the_right_is_permission_denied_136() {
+    // SAFETY: geteuid has no preconditions.
+    let root = unsafe { libc::geteuid() } == 0;
+    let unprivileged_from: u16 =
+        std::fs::read_to_string("/proc/sys/net/ipv4/ip_unprivileged_port_start")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(1024);
+    let may_bind = root || unprivileged_from <= 319;
+    let (name, _) = crate::net::get_default_interface().expect("an IPv4 NIC");
+    let result = Follower::start(FollowerConfig::on_interface(name));
+    if may_bind {
+        assert!(result.is_ok(), "may bind 319: {:?}", result.err());
+    } else {
+        match result {
+            Err(FollowerError::PermissionDenied { .. }) => {}
+            other => panic!("expected PermissionDenied, got {:?}", other.err()),
+        }
+    }
+}
+
+/// Windows: on a PC without Npcap (every GitHub `windows-latest` runner) a follower on a real
+/// interface is `NpcapMissing` at start; the test binary running at all proves it imports no
+/// `wpcap.dll`.
+#[cfg(windows)]
+#[test]
+fn without_npcap_a_follower_on_a_real_interface_is_npcap_missing_136() {
+    let (name, _) = crate::net::get_default_interface().expect("the runner has an IPv4 NIC");
+    let result = Follower::start(FollowerConfig::on_interface(name.clone()));
+    match crate::wpcap::available() {
+        Err(missing) => match result {
+            Err(FollowerError::NpcapMissing { detail }) => assert_eq!(detail, missing.detail),
+            other => panic!("expected NpcapMissing on {name}, got {:?}", other.err()),
+        },
+        Ok(()) => assert!(
+            !matches!(result, Err(FollowerError::NpcapMissing { .. })),
+            "Npcap loads here, so the start never says it is missing"
+        ),
+    }
+}

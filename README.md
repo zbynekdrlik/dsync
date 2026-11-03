@@ -98,7 +98,7 @@ built without it and never links gtk.
 
 **Windows Build Requirements:**
 - Rust Toolchain (`x86_64-pc-windows-msvc`)
-- Npcap SDK 1.13+ (set `LIB` env var to `npcap-sdk/Lib/x64`)
+- No Npcap SDK: `wpcap.dll` is loaded at run time (since 1.27). Running needs the Npcap runtime.
 
 ## Configuration
 

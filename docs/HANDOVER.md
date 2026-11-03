@@ -36,6 +36,18 @@ The file was removed from the tree in v1.20.1 (issue #108). Its old values stay 
 
 One self-hosted runner: `companion` (labels `dsync-gate`, `companion`), for the stability gate (#98, airuleset#1280). `.github/workflows/gate.yml` is the only thing that touches companion, through `/usr/local/sbin/dsync-gate-install`. A release is tagged only after the gate passed on the same tree. See `docs/stability-gate.md`.
 
+### Companion access (dsync#147, owner ruling via airuleset, 2026-11-02)
+
+- The gate on companion is dsync's. airuleset no longer maintains `dsync-gate-install`, its sudo rule, its restore timer or the runner.
+- dsync reaches companion through `linux-presenter` (`http://100.104.8.125:8796/linux-presenter/mcp`), the MCP server remoteos set up. `fleet` on the same gateway only lists and looks up machines.
+- "Pending approval" is Claude Code's project-server trust prompt. Only the owner clears it, through `/mcp` in the dsync session. Never edit the settings to skip it.
+- remoteos reads the server's rights (2026-11-02). Until that answer, leave the helper as it is; the gate works with it.
+- Conditions for every touch:
+  - Read `http://100.104.8.125:8890/rig-lease.json` before each touch.
+  - Do nothing while the lease is held or during a production.
+  - Never restart Companion itself.
+- Known leftover: the helper still installs into the pre-1.25 unit, binary and paths (it swaps the binary inside the old unit). Rename it, or move its job into `gate.yml`, once the access is clear. Then tell airuleset when the old helper, its timer and the runner can be removed.
+
 ## Backlog
 
 Owner-requested:
