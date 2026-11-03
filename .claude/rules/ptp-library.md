@@ -64,7 +64,12 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
   So the follower-vs-service spread is the algorithm's difference, not receive jitter. It reads
   27 µs worst and 14 µs mean in the 30 s right after all three lock, while the boot pulls run.
 - Stamp conversion (`mono::StampConverter`):
-  - After EVERY receive, read raw / wall / raw and convert with that reading.
+  - After EVERY receive, read raw / wall / raw. Convert with `wall − raw` INTERPOLATED at the
+    stamp between the previous reading and this one (`TimeBaseReading::to_mono_between`, v1.27.1).
+    Converting with the after-reading alone is off by the host slew × the read delay, so two
+    followers disagreed by 4.5 µs on a CI runner with a slewing wall clock (run 41558600507),
+    while dev1 read 0.0 µs. A follower-vs-follower failure that only CI shows = a host-slew bug,
+    not noise.
   - `wall − raw` moves only by the clock owner's word (≤ 500 ppm).
   - Beyond 20 µs + 500 ppm of the elapsed time, it is a step: drop that packet and the pending
     Syncs.

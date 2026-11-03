@@ -21,7 +21,8 @@ if (Test-Path $NewDataDir) {
     $DataDir = $NewDataDir
 }
 
-# The pre-1.25 installation, removed below (one daemon per box). Its data dir stays.
+# The pre-1.25 installation, removed below (one daemon per box). Its data dir is MOVED to the new
+# one once both daemons are stopped (dsync#153, owner 2026-11-03: no mix of old and new names).
 $LegacyServiceName = "dantesync"
 $LegacyInstallDir = "C:\Program Files\DanteSync"
 
@@ -602,6 +603,19 @@ Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Dan
 if (Test-Path $LegacyInstallDir) {
     Remove-Item -Path $LegacyInstallDir -Recurse -Force -ErrorAction SilentlyContinue
 }
+# dsync#153: the legacy data dir becomes the new one (config, last-good, drift, date offset, log).
+# Moved, never copied: one drift.json per box (ROZHODNUTÉ #147). Every daemon is stopped above.
+Stop-Process -Name "dsync" -Force -ErrorAction SilentlyContinue
+if ((Test-Path $LegacyDataDir) -and !(Test-Path $NewDataDir)) {
+    Write-Host "Moving $LegacyDataDir to $NewDataDir..."
+    Move-Item -Path $LegacyDataDir -Destination $NewDataDir
+} elseif ((Test-Path $LegacyDataDir) -and (Test-Path "$NewDataDir\config.json")) {
+    Write-Host "Removing the stale pre-1.25 data dir $LegacyDataDir (the new one has the config)..."
+    Remove-Item -Path $LegacyDataDir -Recurse -Force
+} elseif (Test-Path $LegacyDataDir) {
+    throw "Both $LegacyDataDir and $NewDataDir exist and the new one has no config.json: merge them by hand"
+}
+$DataDir = $NewDataDir
 
 # Kill processes - try graceful close for tray first to avoid ghost icons
 Write-Host "Checking for running processes..."
