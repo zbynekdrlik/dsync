@@ -1239,7 +1239,7 @@ mod tests {
         let config: Config =
             serde_json::from_str(json).expect("a minimal gm_allowlist-only config must parse");
         assert_eq!(
-            config.ntp_server, "10.77.8.2",
+            config.ntp_server, "strih.lan",
             "missing ntp_server must fall back to the fleet default, not fail the parse"
         );
         assert_eq!(config.system.gm_allowlist, vec!["10.77.9.0/24".to_string()]);
