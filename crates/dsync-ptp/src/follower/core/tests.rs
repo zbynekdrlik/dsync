@@ -321,6 +321,126 @@ fn a_lone_late_window_does_not_move_the_followers_line_136() {
     }
 }
 
+/// mbc-snv's world (dsync#136): 254 ms Syncs, the counter 5.4 ppm fast of the grandmaster,
+/// Windows-level receive jitter (25 µs per sample: a window `e` sd of ~11 µs, mbc read ~14).
+fn mbc_world(seed: u64) -> World {
+    let mut world = World::new(seed, 25_000.0);
+    world.sync_period_ns = 254_000_000;
+    world.gm_ppm = 0.0;
+    world.pc_ppm = 5.4;
+    world
+}
+
+/// The line the follower trails is the MEAN latency: |gauss| × 25 µs adds √(2/π) × 25 µs.
+fn mbc_mean_jitter_ns() -> i64 {
+    (25_000.0 * (2.0 / std::f64::consts::PI).sqrt()) as i64
+}
+
+/// The worst |error| (ns) over `secs` of `world` once `core` is locked, and when it locked (s).
+fn worst_after_lock(world: &mut World, core: &mut FollowerCore, secs: i64) -> (i64, f64) {
+    let locked_at = run_to_lock(world, core, 120);
+    let mut worst = 0;
+    let end = world.t + secs * 1_000_000_000;
+    while world.t < end {
+        world.tick(&mut [&mut *core]);
+        worst = worst.max(world.error_ns(core).expect("anchored").abs());
+    }
+    (worst, locked_at)
+}
+
+/// dsync#136 (dstack, 3.11.2026): the boot must not be worse than the service's, which starts
+/// from `drift.json`. Without a seed the 20 s fit hands over ~0.5 ppm off and the follower sat
+/// +20…40 µs off the service for ~5 minutes on mbc. The app hands in the service's word (DSYX
+/// [36-39]); here 0.3 ppm off the truth, about its P term.
+#[test]
+fn a_seeded_follower_holds_the_line_from_its_lock_on_136() {
+    let truth_ppm = -5.4;
+    for seed in SEEDS {
+        let mut world = mbc_world(seed);
+        let mut core = new_core(&world).with_seed(truth_ppm + 0.3);
+        // From the first engagement on, the learned frequency is within 0.5 ppm of the truth:
+        // the hand-over the boot fit could only get to ~0.5 ppm on mbc after 20 s.
+        while !core.engaged() {
+            world.tick(&mut [&mut core]);
+        }
+        let mut first_lock = None;
+        for _ in 0..(60 * 4) {
+            if core.model().locked && first_lock.is_none() {
+                first_lock = Some(world.t as f64 / 1e9);
+            }
+            let learned = core.core.integrator_ppm();
+            assert!(
+                (learned - truth_ppm).abs() <= 0.5,
+                "seed {seed:#x}: learned {learned} at {}s",
+                world.t as f64 / 1e9
+            );
+            world.tick(&mut [&mut core]);
+        }
+        let (worst, _) = worst_after_lock(&mut world, &mut core, 300);
+        let locked_at = first_lock.expect("locked within the first minute of engagement");
+        assert!(
+            locked_at < 30.0,
+            "seed {seed:#x}: locked only at {locked_at}s"
+        );
+        assert!(
+            worst <= SETTLED_P90_NS + mbc_mean_jitter_ns(),
+            "seed {seed:#x}: worst {worst}ns after the lock"
+        );
+        assert!(core.model().settled, "seed {seed:#x}: not settled");
+    }
+}
+
+/// A seed from another oscillator (40 ppm off) is dropped by the judge, and the follower learns
+/// as a cold start does.
+#[test]
+fn a_wrong_seed_is_dropped_and_the_follower_learns_as_a_cold_start_136() {
+    for seed in SEEDS {
+        let mut world = mbc_world(seed);
+        let mut core = new_core(&world).with_seed(-5.4 + 40.0);
+        let (worst, _) = worst_after_lock(&mut world, &mut core, 300);
+        assert!(core.seed_judge.is_none(), "judged");
+        assert_eq!(core.rate.lock_stable_count > 0, true);
+        assert!(
+            worst <= LOCK_BOUND_NS + mbc_mean_jitter_ns(),
+            "seed {seed:#x}: worst {worst}ns after the lock"
+        );
+        assert!(
+            (core.model().rate_ppm + 5.4).abs() < 0.5,
+            "seed {seed:#x}: learned {}",
+            core.model().rate_ppm
+        );
+    }
+}
+
+/// `settled` is the lock AND the recent |e| p90 within 30 µs AND no boot pull; a holdover clears
+/// it with the lock, and the re-join must earn it again over 30 windows.
+#[test]
+fn settled_needs_thirty_quiet_windows_and_a_holdover_clears_it_136() {
+    let mut world = mbc_world(SEEDS[0]);
+    let mut core = new_core(&world).with_seed(-5.4);
+    run_to_lock(&mut world, &mut core, 120);
+    for _ in 0..(120 * 4) {
+        world.tick(&mut [&mut core]);
+    }
+    let m = core.model();
+    assert!(m.settled, "{m:?}");
+    let p90 = m.recent_abs_e_ns.expect("30 windows");
+    assert!(p90 <= SETTLED_P90_NS, "{p90}");
+    world.silence(12_000_000_000, &mut [&mut core]);
+    let m = core.model();
+    assert!(!m.settled && !m.locked && m.holdover, "{m:?}");
+    assert_eq!(m.recent_abs_e_ns, None, "the measurement was dropped");
+    // Back: 30 windows (~30 s at 1 s windows) before it can be settled again.
+    for _ in 0..(20 * 4) {
+        world.tick(&mut [&mut core]);
+    }
+    assert!(!core.model().settled, "settled after only ~20 windows");
+    for _ in 0..(60 * 4) {
+        world.tick(&mut [&mut core]);
+    }
+    assert!(core.model().settled, "{:?}", core.model());
+}
+
 /// The acceptance shape on one PC, in the model: two followers, each with its own receive
 /// jitter, agree with each other within the lock bound (the real-socket version beside the
 /// service is the root crate's `tests/library_acceptance.rs`).

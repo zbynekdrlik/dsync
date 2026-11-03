@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! dsync-ptp-probe --interface <name|IPv4> [--seconds 120] [--service 127.0.0.1:31900]
+//!                 [--seed-ppb N | --seed-from-service]
 //! ```
 //!
 //! Every second it asks the local service for a DSYX reply (UDP 31900) and prints one line:
@@ -36,12 +37,18 @@ struct Args {
     interface: String,
     seconds: u64,
     service: SocketAddr,
+    /// dsync#136: start the follower from this frequency (ppb).
+    seed_ppb: Option<i64>,
+    /// dsync#136: start it from the service's word (DSYX [36-39], ppb), as dstack does.
+    seed_from_service: bool,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut interface = None;
     let mut seconds = 120;
     let mut service: SocketAddr = "127.0.0.1:31900".parse().expect("valid default");
+    let mut seed_ppb = None;
+    let mut seed_from_service = false;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -59,6 +66,14 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                     .parse()
                     .map_err(|_| "--service needs host:port, e.g. 127.0.0.1:31900")?
             }
+            "--seed-ppb" => {
+                seed_ppb = Some(
+                    value()?
+                        .parse()
+                        .map_err(|_| "--seed-ppb needs a whole number of ppb")?,
+                )
+            }
+            "--seed-from-service" => seed_from_service = true,
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -66,6 +81,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         interface: interface.ok_or("--interface <name|IPv4> is required")?,
         seconds,
         service,
+        seed_ppb,
+        seed_from_service,
     })
 }
 
@@ -83,6 +100,8 @@ fn resolve_interface(given: &str) -> Result<String, String> {
 struct ServiceReading {
     /// The reply's raw counter, in ns.
     mono_ns: i64,
+    /// `[36-39]`: the service's applied frequency word (ppm × 1000 = ppb).
+    word_ppb: i64,
     /// The service's PTP time; `None` without a date state (no extension).
     ptp_ns: Option<i64>,
     /// Byte [41].
@@ -103,6 +122,7 @@ fn parse_reply(reply: &[u8], request_id: u32) -> Option<ServiceReading> {
     let ptp_ns = (reply.len() >= 104 && reply[64] != 0).then(|| be_u64(&reply[96..104]) as i64);
     Some(ServiceReading {
         mono_ns,
+        word_ppb: i32::from_be_bytes(reply[36..40].try_into().expect("4 bytes")) as i64,
         ptp_ns,
         locked: reply[41] == 1,
     })
@@ -199,14 +219,6 @@ fn main() -> ExitCode {
         args.seconds,
         args.service
     );
-    let follower = match Follower::start(FollowerConfig::on_interface(interface.clone())) {
-        Ok(f) => f,
-        Err(e) => {
-            println!("START FAILED: {}: {e}", kind(&e));
-            return ExitCode::from(2);
-        }
-    };
-    let clock = follower.clock();
     let socket = match UdpSocket::bind("0.0.0.0:0") {
         Ok(s) => s,
         Err(e) => {
@@ -215,13 +227,40 @@ fn main() -> ExitCode {
         }
     };
     let _ = socket.set_read_timeout(Some(Duration::from_millis(300)));
+    let mut buf = [0u8; 256];
+    let mut config = FollowerConfig::on_interface(interface.clone());
+    let seed = if args.seed_from_service {
+        socket
+            .send_to(&request(0), args.service)
+            .ok()
+            .and_then(|_| socket.recv(&mut buf).ok())
+            .and_then(|n| parse_reply(&buf[..n], 0))
+            .map(|r| r.word_ppb)
+    } else {
+        args.seed_ppb
+    };
+    match seed {
+        Some(ppb) => {
+            println!("seed: {ppb} ppb");
+            config = config.with_frequency_seed(ppb);
+        }
+        None if args.seed_from_service => println!("seed: none (the service did not answer)"),
+        None => {}
+    }
+    let follower = match Follower::start(config) {
+        Ok(f) => f,
+        Err(e) => {
+            println!("START FAILED: {}: {e}", kind(&e));
+            return ExitCode::from(2);
+        }
+    };
+    let clock = follower.clock();
 
     let start = Instant::now();
     let mut summary = Summary {
         seconds: args.seconds,
         ..Summary::default()
     };
-    let mut buf = [0u8; 256];
     for t in 1..=args.seconds {
         std::thread::sleep(
             (start + Duration::from_secs(t)).saturating_duration_since(Instant::now()),
@@ -251,7 +290,7 @@ fn main() -> ExitCode {
             }
         }
         println!(
-            "t={t:>4}s follower_locked={} diff_us={} service_locked={svc} e_us={} freq_ppm={:+.3} windows={} reanchors={}",
+            "t={t:>4}s follower_locked={} diff_us={} service_locked={svc} e_us={} freq_ppm={:+.3} windows={} reanchors={} settled={} recent_e_us={}",
             u8::from(state.locked),
             diff.map_or("-".to_string(), |d| format!("{d:+.1}")),
             state
@@ -260,6 +299,10 @@ fn main() -> ExitCode {
             state.freq_ppm,
             state.windows,
             state.reanchors,
+            u8::from(state.settled),
+            state
+                .recent_abs_e_ns
+                .map_or("-".to_string(), |e| format!("{:.1}", e as f64 / 1000.0)),
         );
     }
     drop(follower);
@@ -289,6 +332,11 @@ mod tests {
         assert!(parse_args(&s(&["--interface", "x", "--seconds", "ten"])).is_err());
         assert!(parse_args(&s(&["--interface"])).is_err());
         assert!(parse_args(&s(&["--interface", "x", "--bogus"])).is_err());
+        let a = parse_args(&s(&["--interface", "x", "--seed-ppb", "-4933"])).unwrap();
+        assert_eq!((a.seed_ppb, a.seed_from_service), (Some(-4933), false));
+        let a = parse_args(&s(&["--interface", "x", "--seed-from-service"])).unwrap();
+        assert_eq!((a.seed_ppb, a.seed_from_service), (None, true));
+        assert!(parse_args(&s(&["--interface", "x", "--seed-ppb", "-4.9"])).is_err());
     }
 
     fn reply(id: u32, counter: u64, freq: u64, locked: u8, now_ptp: Option<i64>) -> Vec<u8> {
@@ -296,6 +344,7 @@ mod tests {
         r[0..4].copy_from_slice(b"DSYR");
         r[4..8].copy_from_slice(&id.to_be_bytes());
         r[16..24].copy_from_slice(&counter.to_be_bytes());
+        r[36..40].copy_from_slice(&(-4_933i32).to_be_bytes());
         r[41] = locked;
         r[48..56].copy_from_slice(&freq.to_be_bytes());
         if let Some(p) = now_ptp {
@@ -313,6 +362,7 @@ mod tests {
             r,
             ServiceReading {
                 mono_ns: 2_500_000_000,
+                word_ppb: -4_933,
                 ptp_ns: Some(123_456_789),
                 locked: true
             }

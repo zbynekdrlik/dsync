@@ -26,6 +26,7 @@
 //! base shift and would read as a ±500 ppm rate).
 
 use super::model::{ClockModel, VirtualClock};
+use crate::freq_seed::{SeedJudge, SeedVerdict, SEED_JUDGE_WINDOWS};
 use crate::gm_filter::GmAllowlist;
 use crate::lock_gate::PhaseLockGate;
 use crate::phase_window;
@@ -34,7 +35,7 @@ use crate::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
 use crate::ptp_rejoin::REJOIN_AFTER;
 use crate::rate_servo::{MonoNs, OffsetMeasurement, RateServo, ServoWord, WordDeviation};
 use log::{debug, info, warn};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::Ipv4Addr;
 
 /// Samples per window (the service's `filters.sample_window_size` default).
@@ -51,6 +52,14 @@ pub const MIN_SAMPLE_SPACING_NS: i64 = 100_000_000;
 
 /// No allowed time message for this long = stale = holdover (the service's `PTP_TIMEOUT_SECS`).
 pub const STALE_AFTER_NS: i64 = REJOIN_AFTER.as_nanos() as i64;
+
+/// dsync#136: the follower is SETTLED when, locked, its |e| p90 over the last this many engaged
+/// windows (late windows left out) is within [`SETTLED_P90_NS`] and no boot pull runs.
+pub const SETTLED_WINDOWS: usize = 30;
+
+/// 30 µs. On mbc-snv's Windows Npcap the follower's steady |e| p90 read 20-27 µs (late windows
+/// out), and the boot transient dstack must not take over on sat at +20…40 µs.
+pub const SETTLED_P90_NS: i64 = 30_000;
 
 /// Pending Syncs kept at most (the service's bound against a flood of unmatched Syncs).
 const MAX_PENDING_SYNCS: usize = 200;
@@ -114,6 +123,14 @@ pub struct FollowerCore {
     holdovers: u32,
     windows: u64,
     straddled: u64,
+    /// dsync#136: the frequency seed the app handed in, its judge (until the verdict), and the
+    /// words in force over the last two windows (a window's median sits mid-window).
+    seed_ppm: Option<f64>,
+    seed_judge: Option<SeedJudge>,
+    word_last: f64,
+    word_before: f64,
+    /// dsync#136: |e| (ns) of the last engaged windows the PI took, for `settled`.
+    recent_e: VecDeque<i64>,
 }
 
 impl FollowerCore {
@@ -144,7 +161,82 @@ impl FollowerCore {
             holdovers: 0,
             windows: 0,
             straddled: 0,
+            seed_ppm: None,
+            seed_judge: None,
+            word_last: 0.0,
+            word_before: 0.0,
+            recent_e: VecDeque::with_capacity(SETTLED_WINDOWS),
         }
+    }
+
+    /// dsync#136: start from `ppm` (the app's seed) instead of 0: the virtual clock runs it
+    /// from now and the rate servo's integrator starts on it. Judged on the first
+    /// [`SEED_JUDGE_WINDOWS`] measured windows like the service's `drift.json`; a seed that
+    /// belongs to another oscillator is dropped and the follower learns as a cold start does.
+    /// A non-finite seed or one beyond ±500 ppm is ignored.
+    pub fn with_seed(mut self, ppm: f64) -> Self {
+        if !ppm.is_finite() || ppm.abs() > crate::rate_servo::DRIFT_MAX_PPM {
+            warn!(
+                "[FOLLOWER] frequency seed {ppm} ppm ignored: not a finite value within ±500 ppm"
+            );
+            return self;
+        }
+        let (m0, _) = self.clock.anchor();
+        self.clock.set_rate(m0, ppm);
+        self.rate.drift_baseline_ppm = ppm;
+        self.seed_ppm = Some(ppm);
+        self.seed_judge = Some(SeedJudge::default());
+        self.word_last = ppm;
+        self.word_before = ppm;
+        info!(
+            "[FOLLOWER] seeded {:+.3}ppm; judged on the first {} measured windows",
+            ppm, SEED_JUDGE_WINDOWS
+        );
+        self
+    }
+
+    /// dsync#136: the seed's judge. Returns what to take off this window's raw rate: 0, or at a
+    /// rejection the word in force (the servo is put where a cold start would be).
+    fn judge_seed(&mut self, raw_rate_ppm: f64, dt_s: f64) -> f64 {
+        let seed = self.seed_ppm.unwrap_or(0.0);
+        let word_ppm = (self.word_before + self.word_last) / 2.0;
+        let Some(judge) = self.seed_judge.as_mut() else {
+            return 0.0;
+        };
+        let Some(verdict) = judge.on_measured(raw_rate_ppm - (word_ppm - seed), dt_s) else {
+            return 0.0;
+        };
+        self.seed_judge = None;
+        match verdict {
+            SeedVerdict::Accepted { mean_rate_ppm } => {
+                info!(
+                    "[FOLLOWER] seed {:+.3}ppm accepted: the oscillator runs {:+.1}us/s off it",
+                    seed, mean_rate_ppm
+                );
+                0.0
+            }
+            SeedVerdict::Rejected { mean_rate_ppm } => {
+                warn!(
+                    "[FOLLOWER] seed {:+.3}ppm REJECTED: the oscillator runs {:+.1}us/s off it \
+                     (another oscillator?) — learning the frequency from 0",
+                    seed, mean_rate_ppm
+                );
+                self.rate.drop_seed(word_ppm);
+                word_ppm
+            }
+        }
+    }
+
+    /// dsync#136: settled = locked, not stale, no boot pull, and the recent |e| p90 within
+    /// [`SETTLED_P90_NS`] over [`SETTLED_WINDOWS`] windows.
+    fn recent_abs_e_ns(&self) -> Option<i64> {
+        if self.recent_e.len() < SETTLED_WINDOWS {
+            return None;
+        }
+        let mut v: Vec<i64> = self.recent_e.iter().copied().collect();
+        v.sort_unstable();
+        let idx = ((v.len() as f64 * 0.9).ceil() as usize).clamp(1, v.len()) - 1;
+        Some(v[idx])
     }
 
     /// The model a reader sees now.
@@ -165,6 +257,13 @@ impl FollowerCore {
             reanchors: self.reanchors,
             holdovers: self.holdovers,
             windows: self.windows,
+            settled: self.gate.locked()
+                && !self.stale
+                && self.core.pull_us() == 0.0
+                && self
+                    .recent_abs_e_ns()
+                    .is_some_and(|p90| p90 <= SETTLED_P90_NS),
+            recent_abs_e_ns: self.recent_abs_e_ns(),
         }
     }
 
@@ -255,6 +354,7 @@ impl FollowerCore {
     }
 
     fn drop_measurement(&mut self) {
+        self.recent_e.clear();
         self.pending.clear();
         self.window.clear();
         self.prev_t1_ns = 0;
@@ -371,6 +471,13 @@ impl FollowerCore {
         } else {
             raw_rate_ppm
         };
+        // dsync#136: a seeded start is judged on its first measured windows (the service's
+        // order: before the integrator step, so a dropped seed learns from 0 in this window).
+        let raw_rate_ppm = if measured && dt_secs > 0.1 {
+            raw_rate_ppm - self.judge_seed(raw_rate_ppm, dt_secs)
+        } else {
+            raw_rate_ppm
+        };
         let rate_ppm = if measured {
             self.rate.measure(raw_rate_ppm, || MonoNs(mono_ns))
         } else {
@@ -389,7 +496,18 @@ impl FollowerCore {
         let late_before = self.core.late_windows();
         let locked = phase_window::engage_on(self.rate.is_locked, self.stale);
         let out = self.core.on_window(median, locked, word_ppm, dt);
-        if self.core.late_windows() > late_before {
+        let late = self.core.late_windows() > late_before;
+        match (self.core.engaged(), out.event, out.error_ns) {
+            (true, AnchorEvent::None, Some(e)) if !late => {
+                if self.recent_e.len() == SETTLED_WINDOWS {
+                    self.recent_e.pop_front();
+                }
+                self.recent_e.push_back(e.saturating_abs());
+            }
+            (true, AnchorEvent::None, _) => {}
+            _ => self.recent_e.clear(),
+        }
+        if late {
             info!(
                 "[FOLLOWER] late window held: e={:?}ns, the PI keeps {:+.3}ppm ({} held since start)",
                 out.error_ns,
@@ -467,6 +585,8 @@ impl FollowerCore {
         }
         let applied = close.word_ppm;
         self.clock.set_rate(mono_ns, applied);
+        self.word_before = self.word_last;
+        self.word_last = applied;
         self.date_offset_ns = self.core.anchor_ns().map(|d| wall_minus_v.wrapping_add(d));
         debug!(
             "[FOLLOWER] window: e={:?}ns word {:+.3}ppm rate {:+.2}us/s rate-lock {} engaged {} locked {} boot-fit {}",
