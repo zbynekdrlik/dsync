@@ -309,6 +309,9 @@ pub struct PhaseLockCore {
     gm_fit_shift_us: f64,
     gm_refit: Option<BootFit>,
     gm_continued: u32,
+    /// dsync#158 (review of PR #159): a grandmaster change (or its fit) that no engaged window
+    /// took yet: the next engagement retires `e` along the pull and opens the fit.
+    gm_change_unengaged: bool,
 }
 
 impl PhaseLockCore {
@@ -442,6 +445,7 @@ impl PhaseLockCore {
         self.drop_step_state();
         self.close_boot_fit();
         self.refine = None;
+        self.close_gm_fit();
     }
 
     /// The boot fit's line while it is open (diagnostics: its slope and σ, even when refused).
@@ -461,6 +465,17 @@ impl PhaseLockCore {
     /// length: the fit starts again from the first window after it (review of #146).
     pub fn on_ptp_outage(&mut self) {
         self.close_boot_fit();
+        self.close_gm_fit();
+    }
+
+    /// dsync#158 (review of PR #159): the fit after a grandmaster change belongs to one
+    /// continuous engagement, like the boot fit: an outage or a disengagement ends it. A change
+    /// still unlearned is learned again at the next engagement (`gm_change_unengaged`).
+    fn close_gm_fit(&mut self) {
+        if self.gm_fit.take().is_some() {
+            self.gm_change_unengaged = true;
+        }
+        self.gm_fit_shift_us = 0.0;
     }
 
     /// dsync#146: the first engagement's fit ends (resolved, or its engagement ended).
@@ -577,6 +592,13 @@ impl PhaseLockCore {
             }
         };
 
+        if matches!(
+            event,
+            AnchorEvent::GmContinued { .. } | AnchorEvent::Rebased { .. }
+        ) && !(ptp_locked && self.engaged)
+        {
+            self.gm_change_unengaged = true;
+        }
         let mut e_ns = median_diff_ns.wrapping_sub(anchor);
         // dsync#146: a phase jump while engaged is re-aligned, not slewed.
         if ptp_locked && self.engaged && event == AnchorEvent::None {
@@ -646,6 +668,7 @@ impl PhaseLockCore {
                 self.drop_step_state();
                 self.close_boot_fit();
                 self.refine = None;
+                self.close_gm_fit();
             }
             return WindowOutcome {
                 freq_ppm: None,
@@ -655,8 +678,12 @@ impl PhaseLockCore {
             };
         }
 
+        let mut gm_at_engagement = false;
         if !self.engaged {
             self.engaged = true;
+            // dsync#158: a grandmaster change taken while not engaged (the boot's own
+            // acquisition fit covers a first engagement).
+            gm_at_engagement = std::mem::take(&mut self.gm_change_unengaged) && !first_engagement;
             // dsync#146: the first engagement after the early anchor starts on the frequency
             // the acquisition measured (when good enough), so the boot pull follows `e`.
             let fit = (first_engagement && event == AnchorEvent::None)
@@ -695,6 +722,18 @@ impl PhaseLockCore {
             event,
             AnchorEvent::GmContinued { .. } | AnchorEvent::Rebased { .. }
         ) {
+            self.gm_fit = Some(BootFreqFit::with_window(GM_FIT_WINDOW_S));
+            self.gm_fit_shift_us = 0.0;
+            self.gm_change_unengaged = false;
+        } else if gm_at_engagement {
+            // The change came on an unlocked window: what it left (the residual plus the
+            // free-run since) is retired along the pull, and the new rate fitted from here.
+            if event == AnchorEvent::None {
+                let e_us = (e_ns as f64 / 1_000.0).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+                if e_us.abs() >= FSTEP_PULL_DONE_US {
+                    self.pull_us = e_us;
+                }
+            }
             self.gm_fit = Some(BootFreqFit::with_window(GM_FIT_WINDOW_S));
             self.gm_fit_shift_us = 0.0;
         }
