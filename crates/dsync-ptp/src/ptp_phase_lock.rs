@@ -1645,13 +1645,16 @@ mod tests {
                 worst_rate <= 50.0,
                 "shift {shift}: slewed at {worst_rate:.1} ppm"
             );
-            // … and is gone: |e| ≤ 5 µs after 120 s, and after 300 s.
-            let (e120, _) = trace[240];
-            let (e_end, _) = *trace.last().unwrap();
-            assert!(e120.abs() <= 5.0, "shift {shift}: e {e120:.1} µs at 120 s");
+            // … and is gone: |e| ≤ 5 µs from 120 s on. (Not ≤ 1 µs: a 45 ppm pull through the
+            // plant's one-window delay winds the integrator by ~2 µs worth, which the ~100 s PI
+            // takes minutes to leave — the same tail as a followed frequency step's pull.)
+            let worst_late = trace[240..]
+                .iter()
+                .map(|&(e, _)| e.abs())
+                .fold(0.0, f64::max);
             assert!(
-                e_end.abs() <= 1.0,
-                "shift {shift}: e {e_end:.1} µs at 300 s"
+                worst_late <= 5.0,
+                "shift {shift}: |e| {worst_late:.1} µs after 120 s"
             );
         }
     }
@@ -1686,13 +1689,19 @@ mod tests {
                     learned.abs() <= 1.0,
                     "{label}: integrator {learned:+.2} ppm off at 200 s"
                 );
-                let worst_after_40s = trace[80..]
+                // A change of up to 10 ppm (a Dante failover): |e| ≤ 50 µs from 40 s on. A 25 ppm
+                // one (a leader re-election, camera-box issue 1372) leaves ~240 µs by the time a
+                // fit at 10 µs jitter is good (8-10 s); the bounded pull (τ 20 s, ≤ 50 ppm, the
+                // dstack ruling) retires that to ~50 µs only by ~45 s: from 60 s on.
+                let from = if gm_ppm.abs() <= 10.0 { 80 } else { 120 };
+                let worst_after = trace[from..]
                     .iter()
                     .map(|&(e, _)| e.abs())
                     .fold(0.0, f64::max);
                 assert!(
-                    worst_after_40s <= 50.0,
-                    "{label}: |e| {worst_after_40s:.1} µs after 40 s"
+                    worst_after <= 50.0,
+                    "{label}: |e| {worst_after:.1} µs after {} s",
+                    from / 2
                 );
                 let worst_rate = trace.iter().map(|&(_, r)| r.abs()).fold(0.0, f64::max);
                 assert!(worst_rate <= 50.0, "{label}: slewed at {worst_rate:.1} ppm");
