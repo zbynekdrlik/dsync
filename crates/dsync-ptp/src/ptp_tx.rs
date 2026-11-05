@@ -15,14 +15,21 @@ pub struct Sender {
 const SYNC_LEN: usize = 124;
 const FOLLOW_UP_LEN: usize = 52;
 
-fn header(buf: &mut [u8], sender: &Sender, sequence_id: u16, message_type: u8, control: u8) {
+fn header(
+    buf: &mut [u8],
+    sender: &Sender,
+    port: u16,
+    sequence_id: u16,
+    message_type: u8,
+    control: u8,
+) {
     buf[0..2].copy_from_slice(&1u16.to_be_bytes()); // versionPTP
     buf[2..4].copy_from_slice(&1u16.to_be_bytes()); // versionNetwork
     buf[4..9].copy_from_slice(b"_DFLT");
     buf[20] = message_type;
     buf[21] = 1; // sourceCommunicationTechnology: Ethernet
     buf[22..28].copy_from_slice(&sender.source_uuid);
-    buf[28..30].copy_from_slice(&1u16.to_be_bytes()); // sourcePortId
+    buf[28..30].copy_from_slice(&port.to_be_bytes()); // sourcePortId
     buf[30..32].copy_from_slice(&sequence_id.to_be_bytes());
     buf[32] = control;
 }
@@ -33,10 +40,18 @@ fn timestamp(buf: &mut [u8], ns: i64) {
     buf[4..8].copy_from_slice(&((ns % 1_000_000_000) as u32).to_be_bytes());
 }
 
-/// A Sync (control 0). Its origin timestamp is the coarse send time; the precise one follows.
+/// A Sync (control 0) from port 1. Its origin timestamp is the coarse send time; the precise one
+/// follows.
 pub fn sync(sender: &Sender, sequence_id: u16, origin_ns: i64) -> Vec<u8> {
+    sync_on_port(sender, 1, sequence_id, origin_ns)
+}
+
+/// A Sync from the grandmaster's port `port` (sourcePortId). A Dante grandmaster with a primary
+/// and a secondary port sends each Sync on both, under one clock id and one sequence id (dsync#136,
+/// strih-snv).
+pub fn sync_on_port(sender: &Sender, port: u16, sequence_id: u16, origin_ns: i64) -> Vec<u8> {
     let mut b = vec![0u8; SYNC_LEN];
-    header(&mut b, sender, sequence_id, 1, 0);
+    header(&mut b, sender, port, sequence_id, 1, 0);
     timestamp(&mut b[40..48], origin_ns);
     b[53] = 1; // grandmasterCommunicationTechnology
     b[54..60].copy_from_slice(&sender.grandmaster_uuid);
@@ -48,10 +63,21 @@ pub fn sync(sender: &Sender, sequence_id: u16, origin_ns: i64) -> Vec<u8> {
     b
 }
 
-/// The Follow_Up (control 2) carrying `precise_origin_ns`, the Sync's precise send time.
+/// The Follow_Up (control 2) from port 1, carrying `precise_origin_ns`, the Sync's precise send
+/// time.
 pub fn follow_up(sender: &Sender, sequence_id: u16, precise_origin_ns: i64) -> Vec<u8> {
+    follow_up_on_port(sender, 1, sequence_id, precise_origin_ns)
+}
+
+/// The Follow_Up from port `port` (see [`sync_on_port`]).
+pub fn follow_up_on_port(
+    sender: &Sender,
+    port: u16,
+    sequence_id: u16,
+    precise_origin_ns: i64,
+) -> Vec<u8> {
     let mut b = vec![0u8; FOLLOW_UP_LEN];
-    header(&mut b, sender, sequence_id, 2, 2);
+    header(&mut b, sender, port, sequence_id, 2, 2);
     b[42..44].copy_from_slice(&sequence_id.to_be_bytes());
     timestamp(&mut b[44..52], precise_origin_ns);
     b

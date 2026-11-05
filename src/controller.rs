@@ -6997,4 +6997,62 @@ mod tests {
             raw
         );
     }
+
+    /// dsync#136, dstack's capture on strih-snv (5.11.2026): the Dante grandmaster sends every
+    /// Sync and Follow_Up from two ports under one clock id and one sequence id; the secondary's
+    /// stamps run ~466-474 µs later and its Syncs arrive ~440-455 µs later. Paired by sequence id
+    /// alone, the primary's Follow_Up took the secondary's Sync (the last one kept): ~470 µs off.
+    /// Only strih's allowlist (dropping the primary's address) kept the service on one port.
+    #[test]
+    fn a_dual_port_grandmaster_is_paired_on_one_port_never_mixed_136() {
+        let (mut c, _) = create_locked_controller();
+        c.pending_syncs.clear();
+        c.current_sync_source = None;
+        c.current_gm_uuid = None;
+        c.settling_threshold = usize::MAX; // pairing only: no servo, no clock call
+        let gm = dsync_ptp::ptp_tx::Sender {
+            source_uuid: [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14],
+            grandmaster_uuid: [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14],
+        };
+        let base = std::time::UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+        let ns = |t: SystemTime| t.duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as i64;
+        for seq in 1..=4u16 {
+            let t1 = 3_600_000_000_000 + seq as i64 * 250_000_000;
+            let rx1 = base + Duration::from_millis(seq as u64 * 250);
+            let rx2 = rx1 + Duration::from_micros(450);
+            let feed = |c: &mut PtpController<_, _, _>, data: Vec<u8>, t2: SystemTime| {
+                let header = PtpV1Header::parse(&data).unwrap();
+                match header.message_type {
+                    PtpV1Control::Sync => c.handle_sync_message(&header, &data, t2),
+                    PtpV1Control::FollowUp => c.handle_followup_message(&header, &data),
+                    _ => unreachable!(),
+                }
+            };
+            feed(
+                &mut c,
+                dsync_ptp::ptp_tx::sync_on_port(&gm, 1, seq, t1),
+                rx1,
+            );
+            feed(
+                &mut c,
+                dsync_ptp::ptp_tx::sync_on_port(&gm, 2, seq, t1 + 470_000),
+                rx2,
+            );
+            feed(
+                &mut c,
+                dsync_ptp::ptp_tx::follow_up_on_port(&gm, 1, seq, t1),
+                rx1,
+            );
+            feed(
+                &mut c,
+                dsync_ptp::ptp_tx::follow_up_on_port(&gm, 2, seq, t1 + 470_000),
+                rx2,
+            );
+            assert_eq!(
+                (c.prev_t1_ns, c.prev_t2_ns),
+                (t1, ns(rx1)),
+                "seq {seq}: one port's Sync with the same port's Follow_Up"
+            );
+        }
+    }
 }
