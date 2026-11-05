@@ -1577,4 +1577,126 @@ mod tests {
             worst.1
         );
     }
+
+    // ---- dsync#158: a grandmaster change in the same time base is continuous ------------------
+
+    /// One grandmaster change on an engaged, settled core: the new grandmaster's time is
+    /// `shift_ns` ahead of the old one's (`t2 − t1` drops by it) and it runs `gm_ppm` faster.
+    /// Returns, from the change on, every window's (`e` µs, word relative to the new grandmaster's
+    /// tick ppm) and the change window's outcome.
+    fn gm_change(
+        shift_ns: f64,
+        gm_ppm: f64,
+        jitter_us: f64,
+        seed: u64,
+        windows: usize,
+    ) -> (PhaseLockCore, WindowOutcome, Vec<(f64, f64)>) {
+        let mut noise = seed;
+        let mut jitter = move || {
+            noise ^= noise << 13;
+            noise ^= noise >> 7;
+            noise ^= noise << 17;
+            ((noise >> 11) as f64 / (1u64 << 53) as f64 - 0.5) * 2.0 * jitter_us * 1_000.0
+        };
+        let mut c = PhaseLockCore::new();
+        let mut p = Plant::new(-12.0, 1, 12.0);
+        for _ in 0..2_000 {
+            let out = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        assert!(
+            p.e_ns.abs() < 2_000.0 + 3.0 * jitter_us * 1_000.0,
+            "settled before the change"
+        );
+        c.request_rebase();
+        p.e_ns -= shift_ns;
+        p.osc_ppm -= gm_ppm;
+        let first = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
+        let mut trace = vec![(
+            p.e_ns / 1_000.0,
+            first.freq_ppm.expect("engaged") + p.osc_ppm,
+        )];
+        p.advance(first.freq_ppm.expect("engaged"), DT);
+        for _ in 1..windows {
+            let out = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
+            let f = out.freq_ppm.expect("engaged");
+            trace.push((p.e_ns / 1_000.0, f + p.osc_ppm));
+            p.advance(f, DT);
+        }
+        (c, first, trace)
+    }
+
+    #[test]
+    fn a_grandmaster_change_within_a_millisecond_keeps_d_and_slews_the_residual_158() {
+        // dstack#1, the FOH reboot of 5.11.2026: a Dante failover hands the time over within
+        // tens of µs; re-anchoring on it stepped the published time by −88 µs.
+        for shift in [88_000.0, -88_000.0, 900_000.0] {
+            let (c, first, trace) = gm_change(shift, 0.0, 0.0, 1, 600);
+            assert!(
+                !matches!(first.event, AnchorEvent::Rebased { .. }),
+                "shift {shift}: re-anchored ({:?}) = a step of the published time",
+                first.event
+            );
+            assert_eq!(c.anchor_ns(), Some(D), "shift {shift}: D kept");
+            assert!(!c.rebase_pending());
+            // The residual is retired at a bounded rate: ≤ 50 ppm against the grandmaster's tick.
+            let worst_rate = trace.iter().map(|&(_, r)| r.abs()).fold(0.0, f64::max);
+            assert!(
+                worst_rate <= 50.0,
+                "shift {shift}: slewed at {worst_rate:.1} ppm"
+            );
+            // … and is gone: |e| ≤ 5 µs after 120 s, and after 300 s.
+            let (e120, _) = trace[240];
+            let (e_end, _) = *trace.last().unwrap();
+            assert!(e120.abs() <= 5.0, "shift {shift}: e {e120:.1} µs at 120 s");
+            assert!(
+                e_end.abs() <= 1.0,
+                "shift {shift}: e {e_end:.1} µs at 300 s"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_time_base_beyond_a_millisecond_still_re_anchors_158() {
+        let (c, first, _) = gm_change(1_500_000.0, 0.0, 0.0, 1, 4);
+        assert!(
+            matches!(first.event, AnchorEvent::Rebased { .. }),
+            "{:?}",
+            first.event
+        );
+        assert_ne!(c.anchor_ns(), Some(D));
+    }
+
+    #[test]
+    fn a_grandmaster_change_relearns_the_new_rate_in_seconds_158() {
+        // dstack#1: after the change the service sat at e = +177 µs, still drifting 3 µs/s,
+        // minutes later (the ~100 s PI pulling from the old word). A fresh open-loop fit re-seeds
+        // the integrator: within 1 ppm of the new grandmaster by 30 s, |e| ≤ 50 µs from 40 s on.
+        for (gm_ppm, shift) in [
+            (8.0, 88_000.0),
+            (-8.0, -88_000.0),
+            (4.0, 20_000.0),
+            (-25.0, 0.0),
+        ] {
+            for (jitter_us, seed) in [(0.0, 1), (10.0, 0x5eed_0158), (10.0, 0x5eed_0159)] {
+                let (c, _, trace) = gm_change(shift, gm_ppm, jitter_us, seed, 400);
+                let label = format!("GM {gm_ppm:+} ppm, shift {shift} ns, jitter {jitter_us} µs");
+                let learned = c.integrator_ppm() - (12.0 + gm_ppm);
+                assert!(
+                    learned.abs() <= 1.0,
+                    "{label}: integrator {learned:+.2} ppm off at 200 s"
+                );
+                let worst_after_40s = trace[80..]
+                    .iter()
+                    .map(|&(e, _)| e.abs())
+                    .fold(0.0, f64::max);
+                assert!(
+                    worst_after_40s <= 50.0,
+                    "{label}: |e| {worst_after_40s:.1} µs after 40 s"
+                );
+                let worst_rate = trace.iter().map(|&(_, r)| r.abs()).fold(0.0, f64::max);
+                assert!(worst_rate <= 50.0, "{label}: slewed at {worst_rate:.1} ppm");
+            }
+        }
+    }
 }
