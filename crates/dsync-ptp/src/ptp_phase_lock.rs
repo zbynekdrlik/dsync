@@ -1689,11 +1689,13 @@ mod tests {
                     learned.abs() <= 1.0,
                     "{label}: integrator {learned:+.2} ppm off at 200 s"
                 );
-                // A change of up to 10 ppm (a Dante failover): |e| ≤ 50 µs from 40 s on. A 25 ppm
-                // one (a leader re-election, camera-box issue 1372) leaves ~240 µs by the time a
-                // fit at 10 µs jitter is good (8-10 s); the bounded pull (τ 20 s, ≤ 50 ppm, the
-                // dstack ruling) retires that to ~50 µs only by ~45 s: from 60 s on.
-                let from = if gm_ppm.abs() <= 10.0 { 80 } else { 120 };
+                // A change of up to 10 ppm (a Dante failover): |e| ≤ 50 µs from 50 s on. The fit
+                // re-seeds only at σ ≤ 0.3 ppm (each box on its own noise: a looser fit spreads the
+                // fleet, `GM_FIT_EARLY_SIGMA_PPM`), ~13 s at 10 µs window jitter; over 20 seeds
+                // the worst 8 ppm case was back within 50 µs at 48 s. A 25 ppm one (a leader
+                // re-election, camera-box issue 1372) leaves ~350 µs by then; the bounded pull
+                // (τ 20 s, ≤ 50 ppm, the dstack ruling) needs up to 54 s: from 60 s on.
+                let from = if gm_ppm.abs() <= 10.0 { 100 } else { 120 };
                 let worst_after = trace[from..]
                     .iter()
                     .map(|&(e, _)| e.abs())
