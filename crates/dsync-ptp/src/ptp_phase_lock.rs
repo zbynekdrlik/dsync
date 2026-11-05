@@ -1831,4 +1831,79 @@ mod tests {
             }
         }
     }
+
+    /// An engaged, settled core on a plant (as `gm_change` before its change).
+    fn settled_core() -> (PhaseLockCore, Plant) {
+        let mut c = PhaseLockCore::new();
+        let mut p = Plant::new(-12.0, 1, 12.0);
+        for _ in 0..2_000 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, 12.0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        (c, p)
+    }
+
+    #[test]
+    fn a_grandmaster_change_on_an_unlocked_window_is_slewed_and_learned_at_the_engagement_158() {
+        // Review of #158: a failover often arrives while the rate lock is lost. The rate servo
+        // holds the word meanwhile; the engagement must still retire the residual along the pull
+        // and learn the new grandmaster's rate.
+        let (mut c, mut p) = settled_core();
+        let held = c.integrator_ppm();
+        // Lock lost for 4 windows; the new grandmaster (88 µs ahead, 8 ppm faster) on the 2nd.
+        for n in 0..4 {
+            if n == 1 {
+                c.request_rebase();
+                p.e_ns -= 88_000.0;
+                p.osc_ppm -= 8.0;
+            }
+            let out = c.on_window(D + p.e_ns.round() as i64, false, held, DT);
+            assert!(
+                !matches!(out.event, AnchorEvent::Rebased { .. }),
+                "window {n}: {:?}",
+                out.event
+            );
+            p.advance(held, DT);
+        }
+        assert_eq!(c.anchor_ns(), Some(D), "D kept");
+        let mut trace = Vec::new();
+        for _ in 0..400 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, held, DT);
+            let f = out.freq_ppm.expect("engaged");
+            trace.push((p.e_ns / 1_000.0, f + p.osc_ppm));
+            p.advance(f, DT);
+        }
+        assert!(c.gm_refit().is_some(), "the new rate was fitted");
+        let worst_rate = trace.iter().map(|&(_, r)| r.abs()).fold(0.0, f64::max);
+        assert!(worst_rate <= 50.0, "slewed at {worst_rate:.1} ppm");
+        let worst_after = trace[100..]
+            .iter()
+            .map(|&(e, _)| e.abs())
+            .fold(0.0, f64::max);
+        assert!(worst_after <= 50.0, "|e| {worst_after:.1} µs after 50 s");
+    }
+
+    #[test]
+    fn a_ptp_outage_closes_the_fit_after_a_grandmaster_change_158() {
+        // Review of #158: after an outage the controller's dt is a fallback and the free-run moved
+        // `e`: the open-loop phase across it is wrong, as for the boot fit.
+        for path in ["outage", "disengage", "unlocked window"] {
+            let (mut c, mut p) = settled_core();
+            c.request_rebase();
+            p.e_ns -= 88_000.0;
+            for _ in 0..6 {
+                let out = c.on_window(D + p.e_ns.round() as i64, true, 12.0, DT);
+                p.advance(out.freq_ppm.expect("engaged"), DT);
+            }
+            assert!(c.gm_fitting(), "{path}: the fit runs");
+            match path {
+                "outage" => c.on_ptp_outage(),
+                "disengage" => c.disengage(),
+                _ => {
+                    c.on_window(D + p.e_ns.round() as i64, false, 12.0, DT);
+                }
+            }
+            assert!(!c.gm_fitting(), "{path}: the fit is closed");
+        }
+    }
 }
