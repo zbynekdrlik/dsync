@@ -19,7 +19,7 @@ sim = []
 anyhow = "1.0"
 log = "0.4"
 byteorder = "1.5"
-socket2 = "0.5"
+socket2 = { version = "0.5", features = ["all"] }
 if-addrs = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 mockall = { version = "0.12", optional = true }

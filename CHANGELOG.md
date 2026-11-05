@@ -6,6 +6,22 @@ Entries before 1.25.0 keep the names of their time (the project was renamed in 1
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.4] - 2026-11-05
+
+### Fixed
+
+- A dual-port grandmaster is followed on ONE port, by the service and the follower (#136, dstack's
+  capture on strih-snv). A Dante grandmaster sends every Sync and Follow_Up from its primary and
+  its secondary port under one clock id and one sequence id; the secondary's stamps run ~470 µs
+  later. Paired by sequence id alone, the primary's Follow_Up took the secondary's Sync, and the
+  follower on strih ran −0.48 ms off the service. A Sync source is now one port
+  (`dsync_ptp::sync_port`): a Follow_Up pairs only with its own port's Sync, the receiver follows
+  the first port it hears and moves to the other one only after 2 s without a Sync from it.
+- A Linux PTP receiver hears the group only on the interface it joined (`IP_MULTICAST_ALL = 0`,
+  #136). The default delivered it from every interface any socket on the host had joined, so on
+  strih the service (`enp7s0`) and the followers (`enp7s0.70`) each heard both ports. The pinned
+  interface (#131) is strict now.
+
 ## [1.27.3] - 2026-11-03
 
 ### Added

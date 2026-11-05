@@ -383,6 +383,11 @@ pub fn create_multicast_socket(port: u16, interface_ip: Ipv4Addr) -> Result<UdpS
 
     let multi_addr: Ipv4Addr = "224.0.1.129".parse()?;
     socket.join_multicast_v4(&multi_addr, &interface_ip)?;
+    // dsync#136: only the interface joined. Linux's default IP_MULTICAST_ALL = 1 also delivers the
+    // group from every other interface some socket on the host joined (strih-snv: the service on
+    // enp7s0 and the followers on enp7s0.70 each heard both ports of a dual-port grandmaster).
+    #[cfg(target_os = "linux")]
+    socket.set_multicast_all_v4(false)?;
 
     socket.set_multicast_loop_v4(false)?;
     socket.set_nonblocking(true)?;

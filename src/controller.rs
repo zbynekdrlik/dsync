@@ -637,6 +637,9 @@ where
     current_gm_uuid: Option<[u8; 6]>,
     /// The source UUID of the device sending Sync messages (may differ from grandmaster_clock_uuid)
     current_sync_source: Option<[u8; 6]>,
+    /// dsync#136: the grandmaster PORT followed (`dsync_ptp::sync_port`): a Dante grandmaster sends
+    /// from a primary and a secondary port under one clock id.
+    port_lock: dsync_ptp::sync_port::PortLock,
     /// IP address of the device sending PTP Sync messages (for display in tray app)
     current_sync_source_ip: Option<std::net::Ipv4Addr>,
     /// dsync#129 — the last Sync's header identity (version, subdomain, source UUID):
@@ -845,6 +848,8 @@ where
 struct PendingSync {
     rx_time_sys: SystemTime,
     source_uuid: [u8; 6],
+    /// dsync#136: the grandmaster port it came from; only that port's Follow_Up pairs with it.
+    source_port: u16,
 }
 
 // ============================================================================
@@ -963,6 +968,7 @@ where
             prev_t2_ns: 0,
             current_gm_uuid: None,
             current_sync_source: None,
+            port_lock: dsync_ptp::sync_port::PortLock::default(),
             current_sync_source_ip: None,
             current_ptp_sender: None,
             gm_allowlist,
@@ -2227,6 +2233,24 @@ where
 
     fn handle_sync_message(&mut self, header: &PtpV1Header, buf: &[u8], t2: SystemTime) {
         self.note_ptp_sender(header);
+        // dsync#136: one port of the grandmaster. Another port of the same clock is ignored while
+        // the followed one is live; a move to it (the followed port silent) drops what is pending.
+        // Another CLOCK goes on to the source change below, as before.
+        use dsync_ptp::sync_port::{PortId, PortVerdict};
+        let port = PortId::of(header);
+        match self.port_lock.on_sync(port, dsync_ptp::mono::mono_now_ns()) {
+            PortVerdict::OtherPort => return,
+            PortVerdict::PortMoved { from } => {
+                warn!(
+                    "Grandmaster {} port {} silent, following port {}",
+                    format_mac(&port.uuid),
+                    from.port,
+                    port.port
+                );
+                self.pending_syncs.clear();
+            }
+            PortVerdict::First | PortVerdict::Followed | PortVerdict::OtherClock { .. } => {}
+        }
         // Check if Sync source changed (different device sending PTP)
         let source_uuid = header.source_uuid;
         match self.current_sync_source {
@@ -2279,6 +2303,7 @@ where
             PendingSync {
                 rx_time_sys: t2,
                 source_uuid: header.source_uuid,
+                source_port: header.source_port_id,
             },
         );
 
@@ -2311,13 +2336,20 @@ where
 
     fn handle_followup_message(&mut self, header: &PtpV1Header, buf: &[u8]) {
         if let Ok(body) = PtpV1FollowUpBody::parse(&buf[PtpV1Header::SIZE..]) {
-            if let Some(sync_info) = self.pending_syncs.remove(&body.associated_sequence_id) {
-                if sync_info.source_uuid == header.source_uuid {
-                    self.process_sync_pair(
-                        body.precise_origin_timestamp.to_nanos(),
-                        sync_info.rx_time_sys,
-                    );
-                }
+            // dsync#136: only the same port's Sync; another port's Follow_Up of the same sequence
+            // id leaves the pending Sync for its own.
+            let seq = body.associated_sequence_id;
+            let same_port = self.pending_syncs.get(&seq).is_some_and(|s| {
+                s.source_uuid == header.source_uuid && s.source_port == header.source_port_id
+            });
+            if !same_port {
+                return;
+            }
+            if let Some(sync_info) = self.pending_syncs.remove(&seq) {
+                self.process_sync_pair(
+                    body.precise_origin_timestamp.to_nanos(),
+                    sync_info.rx_time_sys,
+                );
             }
         }
     }
@@ -4027,6 +4059,7 @@ mod tests {
             PendingSync {
                 rx_time_sys: SystemTime::now(),
                 source_uuid: [0x00, 0x1D, 0xC1, 0x51, 0xD0, 0xD9],
+                source_port: 1,
             },
         );
         controller.sample_window.push(1000);
