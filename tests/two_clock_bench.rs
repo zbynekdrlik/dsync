@@ -604,7 +604,7 @@ impl<'s> Bench<'s> {
         for b in self.boxes.iter_mut() {
             if let Some(anchor) = b.core.anchor_ns() {
                 if let Some(fold) = b.follower.take_completed_slew(anchor, b.wall_ns()) {
-                    b.core.set_anchor(anchor + fold);
+                    b.core.fold_anchor(anchor + fold);
                 }
             }
         }

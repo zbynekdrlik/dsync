@@ -792,3 +792,36 @@ fn a_dante_failover_keeps_the_published_time_continuous_158() {
     );
     assert!(m.locked);
 }
+
+#[test]
+fn the_residual_being_retired_after_a_grandmaster_change_is_published_158() {
+    // dstack#1: dstack's status shows how far the published time still is off the new
+    // grandmaster's line while the residual is slewed out.
+    let mut world = World::new(0x5eed_0258, 2_000.0);
+    let mut core = new_core(&world);
+    run_to_lock(&mut world, &mut core, 300);
+    for _ in 0..(180 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    assert!(core.model().pull_ns.abs() < 1_000, "{:?}", core.model());
+    let t = world.t;
+    let a_now = world.gm_time(t);
+    world.gm = GM_B;
+    world.gm_base = a_now + 88_000 - t - (t as f64 * world.gm_ppm * 1e-6) as i64;
+    // Two windows: the change's window and one more.
+    for _ in 0..8 {
+        world.tick(&mut [&mut core]);
+    }
+    let pull = core.model().pull_ns;
+    let state = crate::follower::FollowerState::from(core.model());
+    assert_eq!(state.pull_ns, pull);
+    // B is 88 µs ahead: the published time is ~88 µs behind its line, retired at τ 20 s.
+    assert!(
+        (-88_000..=-70_000).contains(&pull),
+        "pull {pull} ns right after the change"
+    );
+    for _ in 0..(120 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    assert_eq!(core.model().pull_ns, 0, "retired after 120 s");
+}

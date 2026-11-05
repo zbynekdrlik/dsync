@@ -175,6 +175,10 @@ where
         // dsync#146: the first engagement's measured frequency and its once-only re-seed.
         status.ptp_phase_engaged_on_ppm = ds.core.engaged_on_fit().map(|f| f.freq_ppm);
         status.ptp_phase_boot_reseed_ppm = ds.core.boot_reseed().map(|f| f.freq_ppm);
+        // dsync#158: grandmaster changes in the same time base and the pull still running.
+        status.ptp_phase_gm_continued = ds.core.gm_continued();
+        status.ptp_phase_gm_refit_ppm = ds.core.gm_refit().map(|f| f.freq_ppm);
+        status.ptp_phase_pull_us = ds.core.pull_us();
         status.last_freq_step_ppm = ds.core.last_freq_step().map(|s| s.step_ppm);
         status.last_freq_step_ts = ds.last_freq_step_ts;
     }

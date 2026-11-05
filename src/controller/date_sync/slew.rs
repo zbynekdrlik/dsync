@@ -64,7 +64,7 @@ impl DateSync {
     pub(in crate::controller) fn fold_completed_slew(&mut self, wall_ns: i64) -> Option<i64> {
         let anchor = self.core.anchor_ns()?;
         let fold = self.follower.take_completed_slew(anchor, wall_ns)?;
-        self.core.set_anchor(anchor.wrapping_add(fold));
+        self.core.fold_anchor(anchor.wrapping_add(fold));
         // Samples already in the windows were de-slewed against the old anchor.
         for s in self.window.iter_mut() {
             *s = s.wrapping_add(fold);

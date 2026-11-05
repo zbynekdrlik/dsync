@@ -352,6 +352,7 @@ where
         let dt = phase_window::window_dt(&mut self.date_sync.last_t1_ns, t1, dt_fallback_s);
         let was_engaged = self.date_sync.core.engaged();
         let reseeded_before = self.date_sync.core.boot_reseed().is_some();
+        let gm_refit_before = self.date_sync.core.gm_refit();
         let locked = phase_window::engage_on(self.rate.is_locked, self.ptp_offline);
         let out = self
             .date_sync
@@ -371,6 +372,18 @@ where
                 fit.span_s,
                 out.error_ns.unwrap_or(0) as f64 / 1_000.0
             );
+        }
+        if self.date_sync.core.gm_refit() != gm_refit_before {
+            if let Some(fit) = self.date_sync.core.gm_refit() {
+                info!(
+                    "[PHASE-LOCK] new grandmaster's rate measured: integrator re-seeded to \
+                     {:+.3}ppm (+-{:.3}ppm over {:.1}s); e={:+.1}us retired along the pull",
+                    fit.freq_ppm,
+                    fit.sigma_ppm,
+                    fit.span_s,
+                    out.error_ns.unwrap_or(0) as f64 / 1_000.0
+                );
+            }
         }
         // dsync#146: the reported lock is judged on this window's `e`, and the rate servo's
         // next measurement is decoupled from this word's deviation.
@@ -841,6 +854,18 @@ where
                      the date layer re-aligns the wall to the fleet with one step",
                     new_ns.wrapping_sub(old_ns) / 1_000
                 );
+            }
+            AnchorEvent::GmContinued { residual_ns } => {
+                // dsync#158: the new grandmaster continues the time base (within 1 ms of D, a
+                // Dante failover): D and the fleet D stay, the residual is slewed out along the
+                // phase lock's pull — no step anywhere, nothing for the authority to rebase.
+                info!(
+                    "[PHASE-LOCK] grandmaster change in the same time base (grandmaster {}): D \
+                     kept, {:+.1}us retired along the pull (no step)",
+                    gm_label,
+                    residual_ns as f64 / 1_000.0
+                );
+                self.date_sync.anchor_gm = self.current_gm_uuid;
             }
             AnchorEvent::Rebased { old_ns, new_ns } => {
                 info!(

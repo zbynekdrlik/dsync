@@ -131,6 +131,10 @@ pub struct FollowerState {
     pub settled: bool,
     /// dsync#136: |e| p90 (ns) over the last 30 engaged windows, late windows left out.
     pub recent_abs_e_ns: Option<i64>,
+    /// dsync#158: the phase (ns) still being retired after a grandmaster change in the same
+    /// time base (a frequency step, the boot hold): the published time is about this far off
+    /// the grandmaster line, shrinking with τ 20 s at ≤ 50 ppm. 0 when none.
+    pub pull_ns: i64,
 }
 
 impl From<ClockModel> for FollowerState {
@@ -148,6 +152,7 @@ impl From<ClockModel> for FollowerState {
             windows: m.windows,
             settled: m.settled,
             recent_abs_e_ns: m.recent_abs_e_ns,
+            pull_ns: m.pull_ns,
         }
     }
 }

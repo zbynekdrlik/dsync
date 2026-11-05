@@ -269,6 +269,7 @@ impl FollowerCore {
                     .recent_abs_e_ns()
                     .is_some_and(|p90| p90 <= SETTLED_P90_NS),
             recent_abs_e_ns: self.recent_abs_e_ns(),
+            pull_ns: (self.core.pull_us() * 1_000.0).round() as i64,
         }
     }
 
@@ -514,6 +515,7 @@ impl FollowerCore {
         let fit_before = self.core.boot_fit_line();
         let late_before = self.core.late_windows();
         let refine_before = self.core.boot_refine();
+        let gm_refit_before = self.core.gm_refit();
         let locked = phase_window::engage_on(self.rate.is_locked, self.stale);
         let out = self.core.on_window(median, locked, word_ppm, dt);
         if let (Some(f), None) = (self.core.boot_refine(), refine_before) {
@@ -521,6 +523,14 @@ impl FollowerCore {
                 "[FOLLOWER] boot refinement re-seeded the integrator to {:+.3}ppm (σ {:.2}ppm, {} windows over {:.1}s)",
                 f.freq_ppm, f.sigma_ppm, f.points, f.span_s
             );
+        }
+        if self.core.gm_refit() != gm_refit_before {
+            if let Some(f) = self.core.gm_refit() {
+                info!(
+                    "[FOLLOWER] new grandmaster's rate: the integrator re-seeded to {:+.3}ppm (σ {:.2}ppm, {} windows over {:.1}s)",
+                    f.freq_ppm, f.sigma_ppm, f.points, f.span_s
+                );
+            }
         }
         let late = self.core.late_windows() > late_before;
         match (self.core.engaged(), out.event, out.error_ns) {
@@ -584,6 +594,13 @@ impl FollowerCore {
                     "[FOLLOWER] new time base: re-anchored by {:+}ns (epoch {})",
                     new_ns.wrapping_sub(old_ns),
                     self.epoch
+                );
+            }
+            AnchorEvent::GmContinued { residual_ns } => {
+                // dsync#158: the same time base: D_v kept, the residual slewed out (no step).
+                info!(
+                    "[FOLLOWER] grandmaster change in the same time base: D_v kept, {:+.1}us retired along the pull",
+                    residual_ns as f64 / 1_000.0
                 );
             }
             AnchorEvent::Realigned { old_ns, new_ns } => {
