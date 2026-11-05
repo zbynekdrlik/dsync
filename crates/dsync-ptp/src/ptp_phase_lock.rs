@@ -171,6 +171,25 @@ pub const LATE_WINDOW_JUMP_US: f64 = 150.0;
 /// re-anchor's aftermath), and the next window is taken whatever it reads.
 pub const LATE_WINDOW_MAX_HOLD: usize = 3;
 
+/// dsync#158 — a grandmaster change whose time is within this (ns) of `D` is the SAME time base:
+/// a Dante failover hands the time over continuously (tens of µs on the rig, dstack#1). `D` is
+/// kept and the residual retired along the pull reference ([`FSTEP_PULL_TAU_S`]: at most
+/// 1 ms / 20 s = 50 ppm), so the published time never steps. Beyond it the new grandmaster has
+/// a time base of its own (its own uptime, seconds to days off) and `D` is re-anchored.
+pub const GM_CONTINUITY_NS: i64 = REANCHOR_ON_ENGAGE_NS;
+
+/// dsync#158 — the open-loop frequency fit after a grandmaster change spans at most this (s); a
+/// fit refused at its end leaves the frequency to the PI.
+pub const GM_FIT_WINDOW_S: f64 = BOOT_REFINE_WINDOW_S;
+
+/// dsync#158 — the fit re-seeds as soon as it spans this (s) with a slope σ within
+/// [`GM_FIT_EARLY_SIGMA_PPM`]: seconds on a quiet network, longer on a noisy one. Each box
+/// re-seeds on its own noise, so a looser fit spreads the fleet: the bench (20 µs per sample)
+/// measured 19 µs of relative phase without the fit, 24 µs at 0.3 ppm, ~55 µs at 0.5 ppm. A
+/// gate relative to the change (σ ≤ a tenth of it) was tried and was worse on both counts.
+pub const GM_FIT_MIN_SPAN_S: f64 = 5.0;
+pub const GM_FIT_EARLY_SIGMA_PPM: f64 = 0.3;
+
 /// What happened to the anchor `D` in one window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnchorEvent {
@@ -193,6 +212,12 @@ pub enum AnchorEvent {
     Realigned {
         old_ns: i64,
         new_ns: i64,
+    },
+    /// dsync#158: a grandmaster change in the SAME time base (the new grandmaster's time within
+    /// [`GM_CONTINUITY_NS`] of `D`). `D` is kept, the residual `e` is retired along the pull
+    /// reference: no step of the published time, no new epoch, the fleet D stays.
+    GmContinued {
+        residual_ns: i64,
     },
 }
 
@@ -277,6 +302,16 @@ pub struct PhaseLockCore {
     /// dsync#136: the acquisition's last `e` taken into the boot fit, and its late windows in a row.
     boot_last_e_us: Option<f64>,
     boot_late_held: usize,
+    /// dsync#158: the open-loop frequency fit after a grandmaster change, the re-seed it made
+    /// last, and the grandmaster changes taken in the same time base.
+    gm_fit: Option<BootFreqFit>,
+    /// dsync#158: the `D` moves (µs) since the fit opened, added back to its `e`.
+    gm_fit_shift_us: f64,
+    gm_refit: Option<BootFit>,
+    gm_continued: u32,
+    /// dsync#158 (review of PR #159): a grandmaster change (or its fit) that no engaged window
+    /// took yet: the next engagement retires `e` along the pull and opens the fit.
+    gm_change_unengaged: bool,
 }
 
 impl PhaseLockCore {
@@ -360,9 +395,37 @@ impl PhaseLockCore {
         self.pull_us
     }
 
+    /// dsync#158: the last re-seed of the frequency fit after a grandmaster change.
+    pub fn gm_refit(&self) -> Option<BootFit> {
+        self.gm_refit
+    }
+
+    /// dsync#158: the fit after a grandmaster change is still running.
+    pub fn gm_fitting(&self) -> bool {
+        self.gm_fit.is_some()
+    }
+
+    /// dsync#158: grandmaster changes taken in the same time base since start.
+    pub fn gm_continued(&self) -> u32 {
+        self.gm_continued
+    }
+
     /// Adopt `D` from the date-offset authority (a join or an absorb). The wall is moved by the
     /// caller when the adoption is a step; the anchor simply becomes the authority's value.
     pub fn set_anchor(&mut self, anchor_ns: i64) {
+        // dsync#158: a moved `D` (an absorb of the fleet D right after a rebase, a join) is a
+        // level shift of `e` with no clock behind it: the fit after a grandmaster change takes
+        // `e` with the shift added back, or its slope would carry it.
+        if let (Some(old), true) = (self.anchor_ns, self.gm_fit.is_some()) {
+            self.gm_fit_shift_us += anchor_ns.wrapping_sub(old) as f64 / 1_000.0;
+        }
+        self.anchor_ns = Some(anchor_ns);
+    }
+
+    /// dsync#119 / #158: a completed slew is folded into the anchor. `e` is continuous across it
+    /// by construction (the de-slew displacement moves into `D`), so unlike [`Self::set_anchor`]
+    /// it is no level shift and the fit after a grandmaster change keeps running.
+    pub fn fold_anchor(&mut self, anchor_ns: i64) {
         self.anchor_ns = Some(anchor_ns);
     }
 
@@ -382,6 +445,7 @@ impl PhaseLockCore {
         self.drop_step_state();
         self.close_boot_fit();
         self.refine = None;
+        self.close_gm_fit();
     }
 
     /// The boot fit's line while it is open (diagnostics: its slope and σ, even when refused).
@@ -401,6 +465,17 @@ impl PhaseLockCore {
     /// length: the fit starts again from the first window after it (review of #146).
     pub fn on_ptp_outage(&mut self) {
         self.close_boot_fit();
+        self.close_gm_fit();
+    }
+
+    /// dsync#158 (review of PR #159): the fit after a grandmaster change belongs to one
+    /// continuous engagement, like the boot fit: an outage or a disengagement ends it. A change
+    /// still unlearned is learned again at the next engagement (`gm_change_unengaged`).
+    fn close_gm_fit(&mut self) {
+        if self.gm_fit.take().is_some() {
+            self.gm_change_unengaged = true;
+        }
+        self.gm_fit_shift_us = 0.0;
     }
 
     /// dsync#146: the first engagement's fit ends (resolved, or its engagement ended).
@@ -484,7 +559,15 @@ impl PhaseLockCore {
             }
             Some(a) => {
                 let off = median_diff_ns.wrapping_sub(a).abs();
-                if self.rebase_pending || off > DISCONTINUITY_NS {
+                if self.rebase_pending && off <= GM_CONTINUITY_NS {
+                    // dsync#158: the new grandmaster continues the time base: keep `D`.
+                    self.rebase_pending = false;
+                    self.gm_continued = self.gm_continued.saturating_add(1);
+                    event = AnchorEvent::GmContinued {
+                        residual_ns: median_diff_ns.wrapping_sub(a),
+                    };
+                    a
+                } else if self.rebase_pending || off > DISCONTINUITY_NS {
                     self.rebase_pending = false;
                     self.anchor_ns = Some(median_diff_ns);
                     event = AnchorEvent::Rebased {
@@ -509,6 +592,13 @@ impl PhaseLockCore {
             }
         };
 
+        if matches!(
+            event,
+            AnchorEvent::GmContinued { .. } | AnchorEvent::Rebased { .. }
+        ) && !(ptp_locked && self.engaged)
+        {
+            self.gm_change_unengaged = true;
+        }
         let mut e_ns = median_diff_ns.wrapping_sub(anchor);
         // dsync#146: a phase jump while engaged is re-aligned, not slewed.
         if ptp_locked && self.engaged && event == AnchorEvent::None {
@@ -578,6 +668,7 @@ impl PhaseLockCore {
                 self.drop_step_state();
                 self.close_boot_fit();
                 self.refine = None;
+                self.close_gm_fit();
             }
             return WindowOutcome {
                 freq_ppm: None,
@@ -587,8 +678,12 @@ impl PhaseLockCore {
             };
         }
 
+        let mut gm_at_engagement = false;
         if !self.engaged {
             self.engaged = true;
+            // dsync#158: a grandmaster change taken while not engaged (the boot's own
+            // acquisition fit covers a first engagement).
+            gm_at_engagement = std::mem::take(&mut self.gm_change_unengaged) && !first_engagement;
             // dsync#146: the first engagement after the early anchor starts on the frequency
             // the acquisition measured (when good enough), so the boot pull follows `e`.
             let fit = (first_engagement && event == AnchorEvent::None)
@@ -613,6 +708,34 @@ impl PhaseLockCore {
         }
         if event != AnchorEvent::None {
             self.drop_step_state();
+            self.gm_fit = None;
+        }
+        // dsync#158: after a grandmaster change, the residual of a continued time base is retired
+        // along the pull reference, and a fresh open-loop fit learns the new grandmaster's rate.
+        if let AnchorEvent::GmContinued { residual_ns } = event {
+            let r_us = (residual_ns as f64 / 1_000.0).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+            if r_us.abs() >= FSTEP_PULL_DONE_US {
+                self.pull_us = r_us;
+            }
+        }
+        if matches!(
+            event,
+            AnchorEvent::GmContinued { .. } | AnchorEvent::Rebased { .. }
+        ) {
+            self.gm_fit = Some(BootFreqFit::with_window(GM_FIT_WINDOW_S));
+            self.gm_fit_shift_us = 0.0;
+            self.gm_change_unengaged = false;
+        } else if gm_at_engagement {
+            // The change came on an unlocked window: what it left (the residual plus the
+            // free-run since) is retired along the pull, and the new rate fitted from here.
+            if event == AnchorEvent::None {
+                let e_us = (e_ns as f64 / 1_000.0).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+                if e_us.abs() >= FSTEP_PULL_DONE_US {
+                    self.pull_us = e_us;
+                }
+            }
+            self.gm_fit = Some(BootFreqFit::with_window(GM_FIT_WINDOW_S));
+            self.gm_fit_shift_us = 0.0;
         }
         if first_engagement && event == AnchorEvent::None {
             // dsync#134: the boot hold — the acquisition drift off the early anchor is retired
@@ -672,6 +795,11 @@ impl PhaseLockCore {
         if self.refine.is_some() {
             self.continue_refine(e_fit, dt_s, f, disturbed);
         }
+        if self.gm_fit.is_some() {
+            // The change's own window opens the fit (its `e` is valid in the base kept or
+            // adopted); only a followed frequency step after it owns the frequency instead.
+            self.continue_gm_fit(e_fit, dt_s, f, freq_step.is_some());
+        }
         if self.boot_fit_open {
             self.continue_boot_fit(e_fit, dt_s, f, disturbed);
             if !self.boot_fit_open && !disturbed {
@@ -729,6 +857,38 @@ impl PhaseLockCore {
             }
         }
         self.refine = None;
+    }
+
+    /// dsync#158: one window of the fit after a grandmaster change. Re-seeds the integrator once,
+    /// as soon as the fit spans [`GM_FIT_MIN_SPAN_S`] with σ ≤ [`GM_FIT_EARLY_SIGMA_PPM`], else at
+    /// [`GM_FIT_WINDOW_S`] with the boot fit's σ bound; the phase left is retired along the pull.
+    fn continue_gm_fit(&mut self, e_us: f64, dt_s: f64, f: f64, disturbed: bool) {
+        let Some(fit) = self.gm_fit.as_mut() else {
+            return;
+        };
+        if disturbed {
+            self.gm_fit = None;
+            return;
+        }
+        fit.observe(e_us + self.gm_fit_shift_us, dt_s, f);
+        let early = fit.span_s() >= GM_FIT_MIN_SPAN_S
+            && fit
+                .line()
+                .is_some_and(|l| l.sigma_ppm <= GM_FIT_EARLY_SIGMA_PPM);
+        if !early && !fit.full() {
+            return;
+        }
+        let est = fit.estimate();
+        self.gm_fit = None;
+        if let Some(est) = est {
+            if self.reseed(est, BOOT_RESEED_MIN_PPM, e_us) {
+                self.gm_refit = Some(est);
+                // As at the boot: the longer refinement trims what the short fit left (its σ
+                // allows ~1 ppm, which the ~100 s PI takes minutes and tens of µs to retire).
+                // Only after a re-seed: with no frequency to learn it would only fit the pull.
+                self.refine = Some(BootFreqFit::with_window(BOOT_REFINE_WINDOW_S));
+            }
+        }
     }
 
     /// A boot fit's re-seed, CONTINUOUS in the fit (dsync#136, PR #156 CI): the integrator
@@ -1576,5 +1736,213 @@ mod tests {
             worst.0,
             worst.1
         );
+    }
+
+    // ---- dsync#158: a grandmaster change in the same time base is continuous ------------------
+
+    /// One grandmaster change on an engaged, settled core: the new grandmaster's time is
+    /// `shift_ns` ahead of the old one's (`t2 − t1` drops by it) and it runs `gm_ppm` faster.
+    /// Returns, from the change on, every window's (`e` µs, word relative to the new grandmaster's
+    /// tick ppm) and the change window's outcome.
+    fn gm_change(
+        shift_ns: f64,
+        gm_ppm: f64,
+        jitter_us: f64,
+        seed: u64,
+        windows: usize,
+    ) -> (PhaseLockCore, WindowOutcome, Vec<(f64, f64)>) {
+        let mut noise = seed;
+        let mut jitter = move || {
+            noise ^= noise << 13;
+            noise ^= noise >> 7;
+            noise ^= noise << 17;
+            ((noise >> 11) as f64 / (1u64 << 53) as f64 - 0.5) * 2.0 * jitter_us * 1_000.0
+        };
+        let mut c = PhaseLockCore::new();
+        let mut p = Plant::new(-12.0, 1, 12.0);
+        for _ in 0..2_000 {
+            let out = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        assert!(
+            p.e_ns.abs() < 2_000.0 + 3.0 * jitter_us * 1_000.0,
+            "settled before the change"
+        );
+        c.request_rebase();
+        p.e_ns -= shift_ns;
+        p.osc_ppm -= gm_ppm;
+        let first = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
+        let mut trace = vec![(
+            p.e_ns / 1_000.0,
+            first.freq_ppm.expect("engaged") + p.osc_ppm,
+        )];
+        p.advance(first.freq_ppm.expect("engaged"), DT);
+        for _ in 1..windows {
+            let out = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
+            let f = out.freq_ppm.expect("engaged");
+            trace.push((p.e_ns / 1_000.0, f + p.osc_ppm));
+            p.advance(f, DT);
+        }
+        (c, first, trace)
+    }
+
+    #[test]
+    fn a_grandmaster_change_within_a_millisecond_keeps_d_and_slews_the_residual_158() {
+        // dstack#1, the FOH reboot of 5.11.2026: a Dante failover hands the time over within
+        // tens of µs; re-anchoring on it stepped the published time by −88 µs.
+        for shift in [88_000.0, -88_000.0, 900_000.0] {
+            let (c, first, trace) = gm_change(shift, 0.0, 0.0, 1, 600);
+            assert!(
+                !matches!(first.event, AnchorEvent::Rebased { .. }),
+                "shift {shift}: re-anchored ({:?}) = a step of the published time",
+                first.event
+            );
+            assert_eq!(c.anchor_ns(), Some(D), "shift {shift}: D kept");
+            assert!(!c.rebase_pending());
+            // The residual is retired at a bounded rate: ≤ 50 ppm against the grandmaster's tick.
+            let worst_rate = trace.iter().map(|&(_, r)| r.abs()).fold(0.0, f64::max);
+            assert!(
+                worst_rate <= 50.0,
+                "shift {shift}: slewed at {worst_rate:.1} ppm"
+            );
+            // … and is gone: |e| ≤ 5 µs from 120 s on. (Not ≤ 1 µs: a 45 ppm pull through the
+            // plant's one-window delay winds the integrator by ~2 µs worth, which the ~100 s PI
+            // takes minutes to leave — the same tail as a followed frequency step's pull.)
+            let worst_late = trace[240..]
+                .iter()
+                .map(|&(e, _)| e.abs())
+                .fold(0.0, f64::max);
+            assert!(
+                worst_late <= 5.0,
+                "shift {shift}: |e| {worst_late:.1} µs after 120 s"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_time_base_beyond_a_millisecond_still_re_anchors_158() {
+        let (c, first, _) = gm_change(1_500_000.0, 0.0, 0.0, 1, 4);
+        assert!(
+            matches!(first.event, AnchorEvent::Rebased { .. }),
+            "{:?}",
+            first.event
+        );
+        assert_ne!(c.anchor_ns(), Some(D));
+    }
+
+    #[test]
+    fn a_grandmaster_change_relearns_the_new_rate_in_seconds_158() {
+        // dstack#1: after the change the service sat at e = +177 µs, still drifting 3 µs/s,
+        // minutes later (the ~100 s PI pulling from the old word). A fresh open-loop fit re-seeds
+        // the integrator: within 1 ppm of the new grandmaster by 30 s, |e| ≤ 50 µs from 40 s on.
+        for (gm_ppm, shift) in [
+            (8.0, 88_000.0),
+            (-8.0, -88_000.0),
+            (4.0, 20_000.0),
+            (-25.0, 0.0),
+        ] {
+            for (jitter_us, seed) in [(0.0, 1), (10.0, 0x5eed_0158), (10.0, 0x5eed_0159)] {
+                let (c, _, trace) = gm_change(shift, gm_ppm, jitter_us, seed, 400);
+                let label = format!("GM {gm_ppm:+} ppm, shift {shift} ns, jitter {jitter_us} µs");
+                let learned = c.integrator_ppm() - (12.0 + gm_ppm);
+                assert!(
+                    learned.abs() <= 1.0,
+                    "{label}: integrator {learned:+.2} ppm off at 200 s"
+                );
+                // A change of up to 10 ppm (a Dante failover): |e| ≤ 50 µs from 50 s on. The fit
+                // re-seeds only at σ ≤ 0.3 ppm (each box on its own noise: a looser fit spreads the
+                // fleet, `GM_FIT_EARLY_SIGMA_PPM`), ~13 s at 10 µs window jitter; over 20 seeds
+                // the worst 8 ppm case was back within 50 µs at 48 s. A 25 ppm one (a leader
+                // re-election, camera-box issue 1372) leaves ~350 µs by then; the bounded pull
+                // (τ 20 s, ≤ 50 ppm, the dstack ruling) needs up to 54 s: from 60 s on.
+                let from = if gm_ppm.abs() <= 10.0 { 100 } else { 120 };
+                let worst_after = trace[from..]
+                    .iter()
+                    .map(|&(e, _)| e.abs())
+                    .fold(0.0, f64::max);
+                assert!(
+                    worst_after <= 50.0,
+                    "{label}: |e| {worst_after:.1} µs after {} s",
+                    from / 2
+                );
+                let worst_rate = trace.iter().map(|&(_, r)| r.abs()).fold(0.0, f64::max);
+                assert!(worst_rate <= 50.0, "{label}: slewed at {worst_rate:.1} ppm");
+            }
+        }
+    }
+
+    /// An engaged, settled core on a plant (as `gm_change` before its change).
+    fn settled_core() -> (PhaseLockCore, Plant) {
+        let mut c = PhaseLockCore::new();
+        let mut p = Plant::new(-12.0, 1, 12.0);
+        for _ in 0..2_000 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, 12.0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        (c, p)
+    }
+
+    #[test]
+    fn a_grandmaster_change_on_an_unlocked_window_is_slewed_and_learned_at_the_engagement_158() {
+        // Review of #158: a failover often arrives while the rate lock is lost. The rate servo
+        // holds the word meanwhile; the engagement must still retire the residual along the pull
+        // and learn the new grandmaster's rate.
+        let (mut c, mut p) = settled_core();
+        let held = c.integrator_ppm();
+        // Lock lost for 4 windows; the new grandmaster (88 µs ahead, 8 ppm faster) on the 2nd.
+        for n in 0..4 {
+            if n == 1 {
+                c.request_rebase();
+                p.e_ns -= 88_000.0;
+                p.osc_ppm -= 8.0;
+            }
+            let out = c.on_window(D + p.e_ns.round() as i64, false, held, DT);
+            assert!(
+                !matches!(out.event, AnchorEvent::Rebased { .. }),
+                "window {n}: {:?}",
+                out.event
+            );
+            p.advance(held, DT);
+        }
+        assert_eq!(c.anchor_ns(), Some(D), "D kept");
+        let mut trace = Vec::new();
+        for _ in 0..400 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, held, DT);
+            let f = out.freq_ppm.expect("engaged");
+            trace.push((p.e_ns / 1_000.0, f + p.osc_ppm));
+            p.advance(f, DT);
+        }
+        assert!(c.gm_refit().is_some(), "the new rate was fitted");
+        let worst_rate = trace.iter().map(|&(_, r)| r.abs()).fold(0.0, f64::max);
+        assert!(worst_rate <= 50.0, "slewed at {worst_rate:.1} ppm");
+        let worst_after = trace[100..]
+            .iter()
+            .map(|&(e, _)| e.abs())
+            .fold(0.0, f64::max);
+        assert!(worst_after <= 50.0, "|e| {worst_after:.1} µs after 50 s");
+    }
+
+    #[test]
+    fn a_ptp_outage_closes_the_fit_after_a_grandmaster_change_158() {
+        // Review of #158: after an outage the controller's dt is a fallback and the free-run moved
+        // `e`: the open-loop phase across it is wrong, as for the boot fit.
+        for path in ["outage", "disengage", "unlocked window"] {
+            let (mut c, mut p) = settled_core();
+            c.request_rebase();
+            p.e_ns -= 88_000.0;
+            for _ in 0..6 {
+                let out = c.on_window(D + p.e_ns.round() as i64, true, 12.0, DT);
+                p.advance(out.freq_ppm.expect("engaged"), DT);
+            }
+            assert!(c.gm_fitting(), "{path}: the fit runs");
+            match path {
+                "outage" => c.on_ptp_outage(),
+                "disengage" => c.disengage(),
+                _ => {
+                    c.on_window(D + p.e_ns.round() as i64, false, 12.0, DT);
+                }
+            }
+            assert!(!c.gm_fitting(), "{path}: the fit is closed");
+        }
     }
 }

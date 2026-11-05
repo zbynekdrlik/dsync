@@ -731,3 +731,97 @@ fn a_dual_port_grandmaster_is_followed_on_one_port_never_mixed_136() {
         worst_settled
     );
 }
+
+#[test]
+fn a_dante_failover_keeps_the_published_time_continuous_158() {
+    // dstack#1, the FOH reboot of 5.11.2026: grandmaster B takes over with A's time (88 µs
+    // ahead) and its own rate (8 ppm faster). Re-anchoring stepped the published time by
+    // −88 µs: a re-alignment and a lost block on every dstack device.
+    let mut world = World::new(0x5eed_0158, 5_000.0);
+    let mut core = new_core(&world);
+    run_to_lock(&mut world, &mut core, 300);
+    for _ in 0..(120 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    let t = world.t;
+    let a_now = world.gm_time(t);
+    world.gm = GM_B;
+    world.gm_ppm = 11.0;
+    world.gm_base = a_now + 88_000 - t - (t as f64 * world.gm_ppm * 1e-6) as i64;
+    assert_eq!(world.gm_time(t), a_now + 88_000);
+    let mut worst_jump = 0i64;
+    let mut worst_e_after_60s = 0i64;
+    let mut worst_rate_us_per_s = 0.0f64;
+    let mut last_e: Option<(i64, i64)> = None;
+    for i in 0..(300 * 8) {
+        // The published time at the instant of this tick, before and after it: the tick may only
+        // change its RATE (continuous), never its value.
+        let before = core.model();
+        world.tick(&mut [&mut core]);
+        let m = world.mono(world.t);
+        if let (Some(b), Some(a)) = (before.ptp_at(m), core.model().ptp_at(m)) {
+            worst_jump = worst_jump.max((a - b).abs());
+        }
+        let e = world.error_ns(&core).expect("anchored");
+        if i >= 60 * 8 {
+            worst_e_after_60s = worst_e_after_60s.max(e.abs());
+        }
+        if i % 8 == 0 {
+            if let Some((t0, e0)) = last_e {
+                let rate = (e - e0) as f64 / ((world.t - t0) as f64 / 1e9) / 1_000.0;
+                worst_rate_us_per_s = worst_rate_us_per_s.max(rate.abs());
+            }
+            last_e = Some((world.t, e));
+        }
+    }
+    let m = core.model();
+    assert_eq!(m.gm_uuid, Some(GM_B.grandmaster_uuid));
+    assert!(
+        worst_jump <= 1_000,
+        "the published time stepped by {worst_jump} ns"
+    );
+    assert_eq!(m.epoch, 0, "the same time base: no new epoch");
+    assert_eq!(m.reanchors, 0, "no discontinuity");
+    assert!(
+        worst_rate_us_per_s <= 50.0 + 5.0,
+        "the residual was retired at {worst_rate_us_per_s:.1} µs/s"
+    );
+    assert!(
+        worst_e_after_60s <= LOCK_BOUND_NS + JITTER_MEAN_ALLOWANCE_NS,
+        "{worst_e_after_60s} ns off B's line after 60 s"
+    );
+    assert!(m.locked);
+}
+
+#[test]
+fn the_residual_being_retired_after_a_grandmaster_change_is_published_158() {
+    // dstack#1: dstack's status shows how far the published time still is off the new
+    // grandmaster's line while the residual is slewed out.
+    let mut world = World::new(0x5eed_0258, 2_000.0);
+    let mut core = new_core(&world);
+    run_to_lock(&mut world, &mut core, 300);
+    for _ in 0..(180 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    assert!(core.model().pull_ns.abs() < 1_000, "{:?}", core.model());
+    let t = world.t;
+    let a_now = world.gm_time(t);
+    world.gm = GM_B;
+    world.gm_base = a_now + 88_000 - t - (t as f64 * world.gm_ppm * 1e-6) as i64;
+    // Two windows: the change's window and one more.
+    for _ in 0..8 {
+        world.tick(&mut [&mut core]);
+    }
+    let pull = core.model().pull_ns;
+    let state = crate::follower::FollowerState::from(core.model());
+    assert_eq!(state.pull_ns, pull);
+    // B is 88 µs ahead: the published time is ~88 µs behind its line, retired at τ 20 s.
+    assert!(
+        (-88_000..=-70_000).contains(&pull),
+        "pull {pull} ns right after the change"
+    );
+    for _ in 0..(120 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    assert_eq!(core.model().pull_ns, 0, "retired after 120 s");
+}

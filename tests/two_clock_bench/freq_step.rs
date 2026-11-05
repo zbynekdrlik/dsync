@@ -723,11 +723,14 @@ fn a_path_ramp_the_ring_cannot_tell_from_a_step_is_bounded_and_reversed_1372() {
 #[test]
 fn a_step_that_comes_with_a_new_grandmaster_is_followed_after_the_re_anchor_1372() {
     // The audio VLAN: the new leader is another device (another identity, uptime and oscillator,
-    // 25 ppm off). The box re-anchors `D` on it at once, then follows its frequency.
+    // 25 ppm off). The box re-anchors `D` on it at once, then follows its frequency. Since
+    // dsync#158 the fit after a grandmaster change learns it (a KNOWN event); the step detector
+    // follows it only when that fit has not yet.
     for seed in 0..4u64 {
         for sign in [1.0, -1.0] {
+            let mut law = core();
             let r = run_world(
-                &mut core(),
+                &mut law,
                 LOCKED_WINDOWS + 1_200,
                 seed,
                 BENCH_NOISE,
@@ -744,16 +747,25 @@ fn a_step_that_comes_with_a_new_grandmaster_is_followed_after_the_re_anchor_1372
                 r.anchor_events, 1,
                 "{label}: one re-anchor, on the new grandmaster"
             );
-            assert_eq!(r.steps.len(), 1, "{label}: {:?}", r.steps);
-            let (w, fs) = r.steps[0];
-            assert!(
-                (w + 1 - LOCKED_WINDOWS) as f64 * WINDOW_S <= 30.0,
-                "{label}: {w}"
-            );
-            assert!(
-                (fs.step_ppm - sign * STEP_PPM).abs() < 1.5,
-                "{label}: {fs:?}"
-            );
+            let Law::Core(c) = &law else {
+                unreachable!("the core")
+            };
+            match (r.steps.as_slice(), c.gm_refit()) {
+                ([], Some(fit)) => {
+                    assert!(fit.span_s <= 30.0, "{label}: {fit:?}");
+                }
+                ([(w, fs)], _) => {
+                    assert!(
+                        (w + 1 - LOCKED_WINDOWS) as f64 * WINDOW_S <= 30.0,
+                        "{label}: {w}"
+                    );
+                    assert!(
+                        (fs.step_ppm - sign * STEP_PPM).abs() < 1.5,
+                        "{label}: {fs:?}"
+                    );
+                }
+                (steps, fit) => panic!("{label}: followed by {steps:?} and {fit:?}"),
+            }
             let f_settle = settles(&r.freq_err_ppm, LOCKED_WINDOWS, 1.0).expect("settles");
             let e_settle = settles(&r.phase_err_us, LOCKED_WINDOWS, 50.0).expect("settles");
             assert!(f_settle <= 30.0, "{label}: {f_settle} s");

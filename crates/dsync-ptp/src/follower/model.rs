@@ -97,10 +97,15 @@ pub struct ClockModel {
     /// dsync#136: |e| p90 (ns) over the last [`super::core::SETTLED_WINDOWS`] engaged windows,
     /// late windows left out; `None` until that many.
     pub recent_abs_e_ns: Option<i64>,
+    /// dsync#158: the phase (ns) still being retired along the pull reference: after a
+    /// grandmaster change in the same time base (`D_v` kept), a followed frequency step or the
+    /// boot hold. The published time is about this far off the grandmaster line, shrinking with
+    /// τ 20 s at ≤ 50 ppm; 0 when none.
+    pub pull_ns: i64,
 }
 
 /// The seqlock words of a [`ClockModel`].
-pub const MODEL_WORDS: usize = 12;
+pub const MODEL_WORDS: usize = 13;
 
 const F_ANCHORED: u64 = 1;
 const F_LOCKED: u64 = 2;
@@ -152,6 +157,7 @@ impl ClockModel {
             self.holdovers as u64,
             self.windows,
             self.recent_abs_e_ns.unwrap_or(0) as u64,
+            self.pull_ns as u64,
         ]
     }
 
@@ -181,6 +187,7 @@ impl ClockModel {
             windows: w[10],
             settled: on(F_SETTLED),
             recent_abs_e_ns: on(F_RECENT).then_some(w[11] as i64),
+            pull_ns: w[12] as i64,
         }
     }
 }
@@ -221,6 +228,7 @@ mod tests {
             windows: 99,
             settled: true,
             recent_abs_e_ns: Some(12_345),
+            pull_ns: -88_000,
         };
         assert_eq!(ClockModel::from_words(m.to_words()), m);
         let empty = ClockModel::default();

@@ -6,6 +6,27 @@ Entries before 1.25.0 keep the names of their time (the project was renamed in 1
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.0] - 2026-11-05
+
+### Changed
+
+- A grandmaster change in the SAME time base no longer steps the published time (#158, dstack#1:
+  the FOH reboot of 5.11.2026 stepped the in-process follower by −88 µs, one lost block on every
+  dstack device). When the new grandmaster's time is within 1 ms of `D` (a Dante failover hands
+  the time over continuously), `D` is kept and the residual is retired along the pull reference
+  (τ 20 s, at most 50 ppm): no re-anchor, no new epoch, the fleet date stays. A grandmaster with
+  a time base of its own (> 1 ms off) still re-anchors, as before.
+- After every grandmaster change the new grandmaster's rate is measured by an open-loop fit and
+  the integrator re-seeded once (σ ≤ 0.3 ppm, from 5 s on; else at 60 s), then trimmed by the 60 s
+  refinement (#158). The ~100 s PI no longer pulls it in from the old word over minutes: an
+  8 ppm change is back within 50 µs in ≤ 50 s (20 seeds, 10 µs window jitter). A `D` move during
+  the fit (an absorb of the fleet D) is added back into it; a slew fold is no move (`fold_anchor`).
+
+### Added
+
+- `ClockModel::pull_ns` / `FollowerState::pull_ns`: the phase the follower still retires (#158).
+  `/status.ptp_phase_gm_continued`, `ptp_phase_gm_refit_ppm`, `ptp_phase_pull_us` (additive).
+
 ## [1.27.4] - 2026-11-05
 
 ### Fixed

@@ -1404,3 +1404,32 @@ start. What was learned:
   CI run 41383299716). So the heavy sims and that timing test take `controller::heavy_test_guard()`
   and never overlap; the bound is unchanged. A new heavy sim in the lib binary takes it too.
 
+
+## dsync#158 (v1.28) — a grandmaster change in the same time base is a slew, and a fit learns its rate
+
+dstack#1 (FOH reboot 5.11.2026): a Dante failover re-anchored `D` and stepped the published time
+by −88 µs (a lost block on every dstack device), then the ~100 s PI left `e` near 150-177 µs for
+minutes. dstack ruled continuity over exact GM time. What was learned:
+
+- **A rebase is two cases.** The new grandmaster's time within `GM_CONTINUITY_NS` (1 ms) of `D` =
+  the same time base: `GmContinued`, `D` kept, the residual seeded into the pull (τ 20 s ⇒ ≤ 50 ppm
+  at 1 ms). Beyond it, `Rebased` as before. The date layer gets no rebase, so the fleet D stays.
+- **The fit after a GM change is a KNOWN event**, so it needs none of the 1372 detector's
+  path-change defences: the boot-fit machinery (`BootFreqFit`) re-seeds once, then the 60 s
+  refinement. Only after a real re-seed (a refinement with nothing to learn fits the pull through
+  the plant's delay and moved `e` ~10 µs).
+- **Fleet coherence prices the σ gate.** Each box re-seeds on its OWN noise, so a loose fit spreads
+  the fleet even when every box tracks the GM better: two-clock bench relative phase 19 µs without
+  the fit, 24 µs at σ ≤ 0.3, ~55 µs at 0.5; a gate relative to the change (σ ≤ change/10) was worse
+  on both coherence and the 25 ppm frequency settle. Judge any per-box estimator by the bench's
+  RELATIVE phase, not only by one box's `e`.
+- **A `D` move is a level shift of `e` the open-loop phase cannot tell from a clock.** An absorb
+  right after a rebase put ~100 µs into the fit (re-seeds off by ppm, the bench's word comparison
+  4.8 ppm apart). The fit adds every `set_anchor` move back (`gm_fit_shift_us`); a resetting fit was
+  worse (absorb timing differs per run and per box). The #119 slew FOLD keeps `e` continuous by
+  construction, so it has its own `fold_anchor` that is no move — the split the 1372 section
+  anticipated.
+- Tests: `ptp_phase_lock` `…_158` (continuity, > 1 ms re-anchors, the rate in seconds over ±8/4/−25
+  ppm × 3 noise seeds), follower `a_dante_failover_keeps_the_published_time_continuous_158` (no
+  published jump > 1 µs, epoch 0) and `…pull_ns…`; the bench's 1372 new-GM case accepts either
+  mechanism.

@@ -563,6 +563,21 @@ pub struct SyncStatus {
     /// needed, and in a pre-1.23 blob.
     #[serde(default)]
     pub ptp_phase_boot_reseed_ppm: Option<f64>,
+
+    /// dsync#158: grandmaster changes taken in the SAME time base (within 1 ms of D: `D` kept,
+    /// the residual slewed out, no step) since start; 0 in a pre-1.28 blob.
+    #[serde(default)]
+    pub ptp_phase_gm_continued: u32,
+
+    /// dsync#158: the frequency (ppm) the integrator was last re-seeded on by the open-loop fit
+    /// after a grandmaster change; `null` when none, and in a pre-1.28 blob.
+    #[serde(default)]
+    pub ptp_phase_gm_refit_ppm: Option<f64>,
+
+    /// dsync#158: the phase (µs) the phase lock is still retiring along its pull reference
+    /// (after a grandmaster change, a frequency step, the boot hold); 0 when none.
+    #[serde(default)]
+    pub ptp_phase_pull_us: f64,
 }
 
 fn default_clock_alarm_interval_s() -> u64 {
@@ -690,6 +705,9 @@ impl Default for SyncStatus {
             // #146: no engagement yet
             ptp_phase_engaged_on_ppm: None,
             ptp_phase_boot_reseed_ppm: None,
+            ptp_phase_gm_continued: 0,
+            ptp_phase_gm_refit_ppm: None,
+            ptp_phase_pull_us: 0.0,
         }
     }
 }
