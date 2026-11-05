@@ -34,6 +34,7 @@ use crate::ptp::{PtpV1Control, PtpV1FollowUpBody, PtpV1Header, PtpV1SyncMessageB
 use crate::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
 use crate::ptp_rejoin::REJOIN_AFTER;
 use crate::rate_servo::{MonoNs, OffsetMeasurement, RateServo, ServoWord, WordDeviation};
+use crate::sync_port::{PortId, PortLock, PortVerdict};
 use log::{debug, info, warn};
 use std::collections::{HashMap, VecDeque};
 use std::net::Ipv4Addr;
@@ -91,7 +92,8 @@ pub enum PacketVerdict {
 struct PendingSync {
     mono_rx_ns: i64,
     wall_rx_ns: i64,
-    source_uuid: [u8; 6],
+    /// dsync#136: the port it came from; only that port's Follow_Up pairs with it.
+    source: PortId,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -106,7 +108,8 @@ struct Sample {
 pub struct FollowerCore {
     allowlist: GmAllowlist,
     pending: HashMap<u16, PendingSync>,
-    sync_source: Option<[u8; 6]>,
+    /// dsync#136: the grandmaster port followed (one clock may send from two ports).
+    port_lock: PortLock,
     gm_uuid: Option<[u8; 6]>,
     last_time_message_ns: i64,
     stale: bool,
@@ -144,7 +147,7 @@ impl FollowerCore {
         FollowerCore {
             allowlist,
             pending: HashMap::new(),
-            sync_source: None,
+            port_lock: PortLock::default(),
             gm_uuid: None,
             last_time_message_ns: started_ns,
             stale: false,
@@ -372,18 +375,29 @@ impl FollowerCore {
     }
 
     fn on_sync(&mut self, header: &PtpV1Header, p: RxPacket<'_>) {
-        let source = header.source_uuid;
-        match self.sync_source {
-            Some(current) if current != source => {
+        let source = PortId::of(header);
+        match self.port_lock.on_sync(source, p.mono_rx_ns) {
+            PortVerdict::First => info!(
+                "[FOLLOWER] sync source {:02x?} port {}",
+                source.uuid, source.port
+            ),
+            PortVerdict::Followed => {}
+            PortVerdict::OtherPort => return,
+            PortVerdict::OtherClock { from } => {
                 warn!(
                     "[FOLLOWER] sync source changed: {:02x?} -> {:02x?}",
-                    current, source
+                    from.uuid, source.uuid
                 );
-                self.sync_source = Some(source);
                 self.on_time_base_change();
             }
-            None => self.sync_source = Some(source),
-            _ => {}
+            PortVerdict::PortMoved { from } => {
+                // The same clock on its other port: no new time base, nothing pending kept.
+                warn!(
+                    "[FOLLOWER] grandmaster port {} silent, following port {}",
+                    from.port, source.port
+                );
+                self.pending.clear();
+            }
         }
         // A new grandmaster is a new time base: judged BEFORE this Sync is kept, so the change
         // never drops the new grandmaster's first Sync.
@@ -418,7 +432,7 @@ impl FollowerCore {
             PendingSync {
                 mono_rx_ns: p.mono_rx_ns,
                 wall_rx_ns: p.wall_rx_ns,
-                source_uuid: source,
+                source,
             },
         );
     }
@@ -427,12 +441,15 @@ impl FollowerCore {
         let Ok(body) = PtpV1FollowUpBody::parse(&data[PtpV1Header::SIZE..]) else {
             return;
         };
-        let Some(sync) = self.pending.remove(&body.associated_sequence_id) else {
-            return;
-        };
-        if sync.source_uuid != header.source_uuid {
+        // dsync#136: only the same port's Sync. Another port's Follow_Up of the same sequence id
+        // leaves the pending Sync for its own.
+        let seq = body.associated_sequence_id;
+        if self.pending.get(&seq).map(|s| s.source) != Some(PortId::of(header)) {
             return;
         }
+        let Some(sync) = self.pending.remove(&seq) else {
+            return;
+        };
         let t1 = body.precise_origin_timestamp.to_nanos();
         let t2 = self.clock.at(sync.mono_rx_ns);
         let add = self.prev_t1_ns == 0 || (t1 - self.prev_t1_ns).abs() >= MIN_SAMPLE_SPACING_NS;

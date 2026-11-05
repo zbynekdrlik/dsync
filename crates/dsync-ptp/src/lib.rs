@@ -35,6 +35,7 @@ pub mod ptp_tx;
 pub mod rate_servo;
 pub mod seqlock;
 pub mod spike_filter;
+pub mod sync_port;
 
 #[cfg(unix)]
 pub mod net_linux;

@@ -669,3 +669,65 @@ fn a_sync_pending_across_a_wall_step_is_dropped() {
     );
     assert!(core.window.is_empty(), "nothing paired");
 }
+
+/// dsync#136, dstack's capture on strih-snv (5.11.2026): the Dante grandmaster sends every Sync
+/// and Follow_Up from TWO ports under one clock id and one sequence id: the primary (port 1) and
+/// the secondary (port 2), whose stamps run ~476 µs later and whose Syncs arrive ~477 µs later.
+/// Each port alone is the same time within µs. A follower that pairs by sequence id alone takes
+/// the secondary's Sync (the last one kept) with the primary's Follow_Up: ~476 µs off the line.
+#[test]
+fn a_dual_port_grandmaster_is_followed_on_one_port_never_mixed_136() {
+    const PORT2_STAMP_NS: i64 = 475_600;
+    const PORT2_ARRIVAL_NS: i64 = 477_000;
+    let mut world = World::new(0x5eed_0136, 5_000.0);
+    let mut core = new_core(&world);
+    let mut worst_settled = 0;
+    for i in 0..(150 * 8) {
+        world.t += world.sync_period_ns;
+        world.seq = world.seq.wrapping_add(1);
+        let t1 = world.gm_time(world.t);
+        let rx = world.t + LATENCY_NS + (world.jitter_ns * world.noise.gauss()).abs() as i64;
+        let at = |w: &World, true_ns: i64| {
+            let mono = w.mono(true_ns);
+            (mono, mono + w.wall_minus_mono)
+        };
+        let seq = world.seq;
+        let packets = [
+            (ptp_tx::sync_on_port(&world.gm, 1, seq, t1), at(&world, rx)),
+            (
+                ptp_tx::sync_on_port(&world.gm, 2, seq, t1 + PORT2_STAMP_NS),
+                at(&world, rx + PORT2_ARRIVAL_NS),
+            ),
+            (
+                ptp_tx::follow_up_on_port(&world.gm, 1, seq, t1),
+                at(&world, rx + 1_000_000),
+            ),
+            (
+                ptp_tx::follow_up_on_port(&world.gm, 2, seq, t1 + PORT2_STAMP_NS),
+                at(&world, rx + 1_400_000),
+            ),
+        ];
+        for (data, (mono_rx_ns, wall_rx_ns)) in &packets {
+            core.on_packet(RxPacket {
+                data,
+                mono_rx_ns: *mono_rx_ns,
+                wall_rx_ns: *wall_rx_ns,
+                source_ip: Some(world.source_ip),
+            });
+        }
+        core.on_tick(world.mono(rx + 2_000_000));
+        if i >= 90 * 8 {
+            let e = world
+                .error_ns(&core)
+                .expect("anchored on the grandmaster")
+                .abs();
+            worst_settled = worst_settled.max(e);
+        }
+    }
+    assert!(core.model().locked, "locked on one port");
+    assert!(
+        worst_settled <= SETTLED_BOUND_NS,
+        "settled error {}ns: the Syncs and Follow_Ups of the two ports were mixed",
+        worst_settled
+    );
+}

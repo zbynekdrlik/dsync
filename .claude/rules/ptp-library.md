@@ -117,6 +117,15 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
   tiny steps and assert the trajectory never jumps (`the_boot_reseeds_are_continuous_…`); a
   random-noise model rarely lands on the edge. The rate servo's lock (the engagement window) is
   still a step, and two followers can engage a window apart.
+- **A Sync source is a PORT, not a clock id (#136, v1.27.4).** A Dante grandmaster sends every
+  Sync and Follow_Up from its primary AND secondary port with the same `sourceUuid` and sequence
+  id; only `sourcePortId` / the source IP differ, and the ports' stamps are ~470 µs apart. Pairing
+  by sequence id took one port's Sync with the other's Follow_Up (strih follower −0.48 ms off the
+  service). `sync_port::PortLock` is shared by the follower and the service: pair only within a
+  port, follow the first port, move after 2 s of silence. On Linux `create_multicast_socket` sets
+  `IP_MULTICAST_ALL = 0` (socket2 feature `all`), or a receiver also hears every interface any
+  other socket on the host joined. A follower-vs-service gap of ~0.5 ms on one PC = check the
+  ports (`tcpdump -e`, `sourcePortId`) before theorising about latency.
 - **On-rig diagnosis:** the probe prints `e_us` / `freq_ppm` per second, and
   `RUST_LOG=dsync_ptp::follower=debug` logs every window with the boot fit's slope and σ
   (stderr). Read those before theorising about jitter: the fit was right, it just never fired.

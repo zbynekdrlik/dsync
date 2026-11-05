@@ -383,6 +383,11 @@ pub fn create_multicast_socket(port: u16, interface_ip: Ipv4Addr) -> Result<UdpS
 
     let multi_addr: Ipv4Addr = "224.0.1.129".parse()?;
     socket.join_multicast_v4(&multi_addr, &interface_ip)?;
+    // dsync#136: only the interface joined. Linux's default IP_MULTICAST_ALL = 1 also delivers the
+    // group from every other interface some socket on the host joined (strih-snv: the service on
+    // enp7s0 and the followers on enp7s0.70 each heard both ports of a dual-port grandmaster).
+    #[cfg(target_os = "linux")]
+    socket.set_multicast_all_v4(false)?;
 
     socket.set_multicast_loop_v4(false)?;
     socket.set_nonblocking(true)?;
@@ -852,5 +857,47 @@ mod tests {
                 lower.contains("wireless") || lower.contains("wi-fi") || lower.contains("wlan");
             assert!(!is_wireless, "{} should NOT be detected as wireless", name);
         }
+    }
+
+    /// dsync#136 (strih-snv, 5.11.2026): every PTP receiver binds `INADDR_ANY` and joins the
+    /// group on ONE interface, but Linux's default `IP_MULTICAST_ALL = 1` also delivers the group
+    /// from every OTHER interface some socket on the host joined. On strih the service joined
+    /// `enp7s0` and the followers `enp7s0.70`, so each heard both ports of a dual-port
+    /// grandmaster. A receiver must hear only the interface it joined (the #131 pin, strict).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_receiver_hears_the_group_only_on_the_interface_it_joined_136() {
+        let (_, nic_ip) = get_default_interface().expect("a non-loopback IPv4 interface");
+        let port = UdpSocket::bind("0.0.0.0:0")
+            .and_then(|s| s.local_addr())
+            .expect("a free port")
+            .port();
+        let on_lo = create_multicast_socket(port, Ipv4Addr::LOCALHOST).expect("joined on lo");
+        let on_nic = create_multicast_socket(port, nic_ip).expect("joined on the NIC");
+        let group = Ipv4Addr::new(224, 0, 1, 129);
+        let send_out_of = |ip: Ipv4Addr, payload: &[u8]| {
+            let s = UdpSocket::bind(SocketAddrV4::new(ip, 0)).expect("sender");
+            s.set_multicast_loop_v4(true).expect("loop");
+            s.set_multicast_ttl_v4(0)
+                .expect("ttl 0: never leaves the host");
+            socket2::SockRef::from(&s)
+                .set_multicast_if_v4(&ip)
+                .expect("multicast if");
+            s.send_to(payload, SocketAddrV4::new(group, port))
+                .expect("send");
+        };
+        send_out_of(nic_ip, b"nic");
+        send_out_of(Ipv4Addr::LOCALHOST, b"lo");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let heard = |s: &UdpSocket| {
+            let mut got = Vec::new();
+            let mut buf = [0u8; 16];
+            while let Ok(n) = s.recv(&mut buf) {
+                got.push(String::from_utf8_lossy(&buf[..n]).into_owned());
+            }
+            got
+        };
+        assert_eq!(heard(&on_lo), ["lo"], "the receiver joined on lo");
+        assert_eq!(heard(&on_nic), ["nic"], "the receiver joined on the NIC");
     }
 }
