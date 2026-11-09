@@ -35,7 +35,7 @@ use crate::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
 use crate::ptp_rejoin::REJOIN_AFTER;
 use crate::rate_servo::{MonoNs, OffsetMeasurement, RateServo, ServoWord, WordDeviation};
 use crate::sync_port::{PortId, PortLock, PortVerdict};
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::net::Ipv4Addr;
 
@@ -453,6 +453,15 @@ impl FollowerCore {
         };
         let t1 = body.precise_origin_timestamp.to_nanos();
         let t2 = self.clock.at(sync.mono_rx_ns);
+        // dsync#160: every sample's raw stamp pair, for an offline delay study of a jittery NIC
+        // (`RUST_LOG=dsync_ptp::follower=trace`).
+        trace!(
+            "[FOLLOWER] sample seq {} t1 {} mono_rx {} t2-t1 {}",
+            seq,
+            t1,
+            sync.mono_rx_ns,
+            t2.wrapping_sub(t1)
+        );
         let add = self.prev_t1_ns == 0 || (t1 - self.prev_t1_ns).abs() >= MIN_SAMPLE_SPACING_NS;
         self.prev_t1_ns = t1;
         if !add {
