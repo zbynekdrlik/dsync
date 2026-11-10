@@ -90,6 +90,17 @@ fn wall_now_ns() -> i64 {
 /// The boot NTP offset (ms) above which `run_ntp_sync` steps the wall to UTC.
 const BOOT_STEP_THRESHOLD_MS: u128 = 50;
 
+/// dsync#160: an offset `t2 − t1` (ns) as the rate servo's display phase, the offset mod 1 s
+/// in ±0.5 s ([`PtpController::calculate_phase_offset`]'s quantity).
+fn wrap_display_phase(diff_ns: i64) -> i64 {
+    let p = diff_ns.rem_euclid(1_000_000_000);
+    if p > 500_000_000 {
+        p - 1_000_000_000
+    } else {
+        p
+    }
+}
+
 /// Format a 6-byte UUID/MAC as a readable string (e.g., "00:1D:C1:AB:CD:EF")
 fn format_mac(uuid: &[u8; 6]) -> String {
     format!(
@@ -2539,20 +2550,32 @@ where
 
         let median = sorted[sorted.len() / 2];
 
-        // UNIFIED: Use median for both platforms (robust against outliers)
-        let offset_ns = median;
+        self.date_sync.close_raw_window(master_time_ns); // #117: the phase lock's window
+
+        // dsync#160: under the phase lock the rate servo differentiates the same delay FLOOR
+        // the phase lock reads (as the in-process follower), not this window's median: on a
+        // one-sided receive delay (mbc's USB NIC) the median's rate swung ±30-40 µs/s, the rate
+        // servo never locked and the phase lock never engaged. Same quantity as the median: the
+        // display phase of the de-slewed, fold-continuous offset, calibration removed. Legacy
+        // keeps the median.
+        let offset_ns = match (self.date_sync.enabled, self.date_sync.pending_median_ns) {
+            (true, Some(floor_ns)) => {
+                wrap_display_phase(floor_ns.wrapping_sub(self.date_sync.rate_folded_ns))
+                    - self.calibration_offset_ns
+            }
+            _ => median,
+        };
         let offset_us = offset_ns as f64 / 1000.0;
 
         debug!(
-            "[Filter] min={:.1}us max={:.1}us median={:.1}us",
+            "[Filter] min={:.1}us max={:.1}us median={:.1}us rate offset={:.1}us",
             sorted.first().map(|&x| x as f64 / 1000.0).unwrap_or(0.0),
             sorted.last().map(|&x| x as f64 / 1000.0).unwrap_or(0.0),
+            median as f64 / 1000.0,
             offset_us
         );
 
         self.last_phase_offset_ns = offset_ns;
-
-        self.date_sync.close_raw_window(master_time_ns); // #117: the phase lock's window
 
         // Apply self-tuning servo. The window's span is measured in the grandmaster's time, the
         // time its offsets are in (1.25, #147 lane: not the wall time it is processed at).
