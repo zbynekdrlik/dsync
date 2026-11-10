@@ -51,16 +51,65 @@ pub struct FitSample {
     pub late: bool,
 }
 
+/// Sorts a few values (≤ 45, every window of every box) in place; `gt(a, b)` = `a` after `b`.
+/// The std sort's debug-build checks made it ~70 % of the two-clock bench's time (callgrind), and
+/// the bench runs in debug in CI.
+fn insertion_sort_by<T: Copy>(v: &mut [T], gt: impl Fn(&T, &T) -> bool) {
+    for i in 1..v.len() {
+        let x = v[i];
+        let mut j = i;
+        while j > 0 && gt(&v[j - 1], &x) {
+            v[j] = v[j - 1];
+            j -= 1;
+        }
+        v[j] = x;
+    }
+}
+
+/// The `k`-th smallest of `v` (finite values), with every smaller one moved before it
+/// (Hoare's quickselect, middle pivot): ~3 n comparisons where a sort of the 45 slopes took ~500.
+fn select_nth(v: &mut [f64], k: usize) -> f64 {
+    let (mut lo, mut hi) = (0, v.len() - 1);
+    while lo < hi {
+        let pivot = v[lo + (hi - lo) / 2];
+        let (mut i, mut j) = (lo, hi);
+        loop {
+            while v[i] < pivot {
+                i += 1;
+            }
+            while v[j] > pivot {
+                j -= 1;
+            }
+            if i >= j {
+                break;
+            }
+            v.swap(i, j);
+            i += 1;
+            j -= 1;
+        }
+        if k <= j {
+            hi = j;
+        } else {
+            lo = j + 1;
+        }
+    }
+    v[k]
+}
+
 /// The last [`FLOOR_RING_WINDOWS`] window minima of the raw `t2 − t1` (ns) with their `t1`.
 #[derive(Debug, Clone, Default)]
 pub struct DelayFloor {
     ring: VecDeque<(i64, i64)>,
+    /// The ring's Theil-Sen slope, recomputed once per ring change (it is read several times a
+    /// window: the reset check, the floor, the fit sample).
+    slope: f64,
 }
 
 impl DelayFloor {
     pub fn new() -> Self {
         DelayFloor {
             ring: VecDeque::with_capacity(FLOOR_RING_WINDOWS),
+            slope: 0.0,
         }
     }
 
@@ -79,6 +128,7 @@ impl DelayFloor {
             self.ring.pop_front();
         }
         self.ring.push_back((min_t1_ns, min_ns));
+        self.slope = self.theil_sen_slope();
         self.floor_at(read_t1_ns)
             .expect("the ring holds the window just pushed")
     }
@@ -86,58 +136,83 @@ impl DelayFloor {
     /// The robust slope of the ring (ns of offset per ns of grandmaster time), 0 below
     /// [`FLOOR_SLOPE_MIN_WINDOWS`].
     pub fn slope(&self) -> f64 {
+        self.slope
+    }
+
+    fn theil_sen_slope(&self) -> f64 {
         if self.ring.len() < FLOOR_SLOPE_MIN_WINDOWS {
             return 0.0;
         }
-        let mut slopes = Vec::with_capacity(self.ring.len() * (self.ring.len() - 1) / 2);
+        // Allocation-free, at most 45 pairs: it runs every window of every box.
+        let mut slopes = [0.0f64; FLOOR_RING_WINDOWS * (FLOOR_RING_WINDOWS - 1) / 2];
+        let mut n = 0;
         for (i, &(ti, yi)) in self.ring.iter().enumerate() {
             for &(tj, yj) in self.ring.iter().skip(i + 1) {
                 let dt = tj.wrapping_sub(ti);
                 if dt > 0 {
-                    slopes.push(yj.wrapping_sub(yi) as f64 / dt as f64);
+                    slopes[n] = yj.wrapping_sub(yi) as f64 / dt as f64;
+                    n += 1;
                 }
             }
         }
-        if slopes.is_empty() {
+        if n == 0 {
             return 0.0;
         }
-        slopes.sort_unstable_by(f64::total_cmp);
-        let n = slopes.len();
+        // The median by selection (the slopes are finite: dt > 0), not a full sort.
+        let slopes = &mut slopes[..n];
+        let upper = select_nth(slopes, n / 2);
         if n % 2 == 1 {
-            slopes[n / 2]
+            upper
         } else {
-            (slopes[n / 2 - 1] + slopes[n / 2]) / 2.0
+            // Below index n / 2 lie the lower half: its largest is the other middle value.
+            let lower = slopes[..n / 2]
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max);
+            (lower + upper) / 2.0
+        }
+    }
+
+    /// The ring's minima carried to `t1_ns` along the slope, sorted, and how many there are.
+    fn carried_sorted(&self, t1_ns: i64) -> ([i64; FLOOR_RING_WINDOWS], usize) {
+        let mut carried = [0i64; FLOOR_RING_WINDOWS];
+        let n = self.ring.len();
+        for (c, &(t, y)) in carried.iter_mut().zip(self.ring.iter()) {
+            *c = y.wrapping_add((self.slope * t1_ns.wrapping_sub(t) as f64).round() as i64);
+        }
+        insertion_sort_by(&mut carried[..n], |a, b| a > b);
+        (carried, n)
+    }
+
+    /// The floor of `carried[..n]` (sorted): the median, the least below
+    /// [`FLOOR_SLOPE_MIN_WINDOWS`].
+    fn floor_of(carried: &[i64]) -> i64 {
+        let n = carried.len();
+        if n < FLOOR_SLOPE_MIN_WINDOWS {
+            // Too few windows for a median to outvote a late one: the least of them.
+            return carried[0];
+        }
+        if n % 2 == 1 {
+            carried[n / 2]
+        } else {
+            carried[n / 2 - 1] + (carried[n / 2] - carried[n / 2 - 1]) / 2
         }
     }
 
     /// The floor at grandmaster time `t1_ns`: the median of the window minima carried to `t1_ns`
     /// along the ring's slope. `None` when empty.
     pub fn floor_at(&self, t1_ns: i64) -> Option<i64> {
-        let slope = self.slope();
-        let mut carried: Vec<i64> = self
-            .ring
-            .iter()
-            .map(|&(t, y)| y.wrapping_add((slope * t1_ns.wrapping_sub(t) as f64).round() as i64))
-            .collect();
-        if carried.is_empty() {
+        if self.ring.is_empty() {
             return None;
         }
-        carried.sort_unstable();
-        let n = carried.len();
-        if n < FLOOR_SLOPE_MIN_WINDOWS {
-            // Too few windows for a median to outvote a late one: the least of them.
-            return Some(carried[0]);
-        }
-        Some(if n % 2 == 1 {
-            carried[n / 2]
-        } else {
-            carried[n / 2 - 1] + (carried[n / 2] - carried[n / 2 - 1]) / 2
-        })
+        let (carried, n) = self.carried_sorted(t1_ns);
+        Some(Self::floor_of(&carried[..n]))
     }
 
     /// Every earlier window is invalid (a time-base change, an outage, a dropped measurement).
     pub fn clear(&mut self) {
         self.ring.clear();
+        self.slope = 0.0;
     }
 
     /// The offset's base moved by `delta_ns` (a slew folded into the date offset): every window
@@ -155,19 +230,14 @@ impl DelayFloor {
         if self.ring.len() < FLOOR_SLOPE_MIN_WINDOWS {
             return Some(FitSample { ns: y, late: false });
         }
-        let slope = self.slope();
-        let mut carried: Vec<i64> = self
-            .ring
-            .iter()
-            .map(|&(ti, yi)| yi.wrapping_add((slope * t.wrapping_sub(ti) as f64).round() as i64))
-            .collect();
-        let floor = self.floor_at(t).expect("the ring is not empty");
-        let mut dev: Vec<i64> = carried
-            .iter_mut()
-            .map(|c| c.wrapping_sub(floor).saturating_abs())
-            .collect();
-        dev.sort_unstable();
-        let mad = dev[dev.len() / 2] as f64;
+        let (carried, n) = self.carried_sorted(t);
+        let floor = Self::floor_of(&carried[..n]);
+        let mut dev = [0i64; FLOOR_RING_WINDOWS];
+        for (d, c) in dev.iter_mut().zip(&carried[..n]) {
+            *d = c.wrapping_sub(floor).saturating_abs();
+        }
+        insertion_sort_by(&mut dev[..n], |a, b| a > b);
+        let mad = dev[n / 2] as f64;
         let gate = ((FIT_LATE_SIGMAS * 1.4826 * mad).round() as i64).max(FIT_LATE_MIN_NS);
         Some(FitSample {
             ns: y,
@@ -189,6 +259,35 @@ mod tests {
     use super::*;
 
     const S: i64 = 1_000_000_000;
+
+    /// The selection gives the sorted order's k-th value with every smaller one before it, for
+    /// every k and length (duplicates included): the slope's median relies on both.
+    #[test]
+    fn select_nth_matches_a_sort_160() {
+        let mut x: u64 = 0x5eed_0160;
+        for n in 1..=45 {
+            for _ in 0..20 {
+                let v: Vec<f64> = (0..n)
+                    .map(|_| {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        (x % 7) as f64 - 3.0 + (x % 1_000) as f64 * 1e-3
+                    })
+                    .collect();
+                let mut sorted = v.clone();
+                sorted.sort_by(f64::total_cmp);
+                for k in 0..n {
+                    let mut w = v.clone();
+                    assert_eq!(select_nth(&mut w, k), sorted[k], "n {n} k {k}");
+                    assert!(w[..k].iter().all(|&y| y <= sorted[k]), "n {n} k {k}");
+                }
+            }
+        }
+        let mut few = [3i64, -1, 2, 2, 0];
+        insertion_sort_by(&mut few, |a, b| a > b);
+        assert_eq!(few, [-1, 0, 2, 2, 3]);
+    }
 
     #[test]
     fn the_floor_ignores_late_windows_and_ages_out_160() {
