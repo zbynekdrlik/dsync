@@ -372,28 +372,50 @@ fn usb_world(seed: u64) -> World {
 
 /// dsync#160 (dstack, mbc-snv 9-10.11.2026): neither the service nor the follower locked on the
 /// USB NIC — a window median of 4 follows the one-sided delay (window `e` ±300-961 µs, the boot
-/// fit σ 2.7-6.9 ppm). The delay FLOOR is steady (per-10 s minimum sd 7.6 µs), so the follower
-/// must lock and hold the floor's line within the lock bound.
+/// fit σ 2.7-6.9 ppm). The delay FLOOR is steady (per-10 s minimum sd 7.6 µs), so a cold
+/// follower must lock, never flap, and once its boot fits are done hold the floor's line within
+/// the settled bound. (Before the boot's re-seeds the lock may read up to ~50 µs + jitter, as
+/// every cold boot: `.claude/rules/ptp-library.md`.)
 #[test]
 fn a_follower_on_a_usb_nic_locks_on_the_delay_floor_and_holds_the_line_160() {
     for seed in SEEDS {
         let mut world = usb_world(seed);
         let mut core = new_core(&world);
         let locked_at = run_to_lock(&mut world, &mut core, 120);
-        let mut worst = 0;
-        for _ in 0..(300 * 4) {
+        let mut worst_settled = 0;
+        while world.t < 300 * 1_000_000_000 {
             world.tick(&mut [&mut core]);
             assert!(
                 core.model().locked,
                 "seed {seed:#x}: the lock flapped at {}s",
                 world.t as f64 / 1e9
             );
-            worst = worst.max(world.error_ns(&core).expect("anchored").abs());
+            if world.t >= 120 * 1_000_000_000 {
+                worst_settled = worst_settled.max(world.error_ns(&core).expect("anchored").abs());
+            }
         }
+        assert!(
+            worst_settled <= SETTLED_BOUND_NS,
+            "seed {seed:#x}: worst {worst_settled}ns after 120 s (locked at {locked_at}s)"
+        );
+        assert!(core.model().settled, "seed {seed:#x}: not settled");
+    }
+}
+
+/// dsync#160: the service starts from `drift.json` and the app hands the follower the service's
+/// word, so the production boot is seeded: from the lock on, the line holds within [41]'s bound.
+#[test]
+fn a_seeded_follower_on_a_usb_nic_holds_the_line_from_its_lock_on_160() {
+    let truth_ppm = -5.4;
+    for seed in SEEDS {
+        let mut world = usb_world(seed);
+        let mut core = new_core(&world).with_seed(truth_ppm + 0.3);
+        let (worst, locked_at) = worst_after_lock(&mut world, &mut core, 300);
         assert!(
             worst <= LOCK_BOUND_NS,
             "seed {seed:#x}: worst {worst}ns after the lock at {locked_at}s"
         );
+        assert!(core.model().settled, "seed {seed:#x}: not settled");
     }
 }
 
