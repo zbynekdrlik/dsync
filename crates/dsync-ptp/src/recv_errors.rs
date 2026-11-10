@@ -73,7 +73,17 @@ impl GateEvent {
 /// See the module documentation.
 #[derive(Debug, Default)]
 pub struct RecvErrorGate {
-    _private: (),
+    /// The first error of the current failing stretch; `None` while reads work.
+    failing_since: Option<Instant>,
+    /// Errors in the current stretch.
+    errors: u64,
+    /// When the last failure line was logged, and the errors since it.
+    last_line: Option<Instant>,
+    since_line: u64,
+    /// No read before this instant.
+    next_read: Option<Instant>,
+    /// The wait that follows the next error.
+    backoff: Duration,
 }
 
 impl RecvErrorGate {
@@ -82,20 +92,63 @@ impl RecvErrorGate {
     }
 
     /// May the capture be read at `now`?
-    pub fn ready(&self, _now: Instant) -> bool {
-        true
+    pub fn ready(&self, now: Instant) -> bool {
+        self.next_read.map_or(true, |t| now >= t)
+    }
+
+    /// Errors in the current failing stretch (0 while reads work).
+    pub fn errors(&self) -> u64 {
+        self.errors
+    }
+
+    /// The wait before the next read (zero while reads work).
+    pub fn backoff(&self, now: Instant) -> Duration {
+        self.next_read
+            .map_or(Duration::ZERO, |t| t.saturating_duration_since(now))
     }
 
     /// A read failed with `text`.
-    pub fn on_error(&mut self, _now: Instant, text: &str) -> Option<GateEvent> {
-        Some(GateEvent::Failing {
+    pub fn on_error(&mut self, now: Instant, text: &str) -> Option<GateEvent> {
+        self.errors += 1;
+        self.since_line += 1;
+        let wait = if self.backoff.is_zero() {
+            BACKOFF_FIRST
+        } else {
+            self.backoff
+        };
+        self.next_read = Some(now + wait);
+        self.backoff = (wait * 2).min(BACKOFF_MAX);
+        if self.failing_since.is_none() {
+            self.failing_since = Some(now);
+            self.last_line = Some(now);
+            self.since_line = 0;
+            return Some(GateEvent::Failing {
+                text: text.to_string(),
+            });
+        }
+        let last = self.last_line.unwrap_or(now);
+        let over = now.saturating_duration_since(last);
+        if over < SUMMARY_EVERY {
+            return None;
+        }
+        let errors = std::mem::take(&mut self.since_line);
+        self.last_line = Some(now);
+        Some(GateEvent::StillFailing {
+            errors,
+            over,
             text: text.to_string(),
         })
     }
 
     /// A read worked (a packet or a plain timeout).
-    pub fn on_ok(&mut self, _now: Instant) -> Option<GateEvent> {
-        None
+    pub fn on_ok(&mut self, now: Instant) -> Option<GateEvent> {
+        let since = self.failing_since.take()?;
+        let event = GateEvent::Recovered {
+            errors: self.errors,
+            outage: now.saturating_duration_since(since),
+        };
+        *self = Self::default();
+        Some(event)
     }
 }
 

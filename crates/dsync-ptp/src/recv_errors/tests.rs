@@ -90,7 +90,10 @@ fn a_25s_outage_logs_the_transition_a_count_per_interval_and_the_recovery_161() 
     assert_eq!(recovered.len(), 1, "one recovery line: {:?}", r.events);
     let (_, errors, outage) = recovered[0];
     let failed_reads = r.reads.iter().filter(|(_, ok)| !ok).count() as u64;
-    assert_eq!(errors, failed_reads, "the recovery counts every failed read");
+    assert_eq!(
+        errors, failed_reads,
+        "the recovery counts every failed read"
+    );
     assert!(
         (24.0..=26.0).contains(&outage.as_secs_f64()),
         "the outage measured from its first error: {outage:?}"
@@ -174,7 +177,10 @@ fn the_lines_name_the_error_and_the_count_161() {
         text: "The interface disappeared".into(),
     };
     let s = e.to_string();
-    assert!(s.contains("12 errors") && s.contains("The interface disappeared"), "{s}");
+    assert!(
+        s.contains("12 errors") && s.contains("The interface disappeared"),
+        "{s}"
+    );
     let r = GateEvent::Recovered {
         errors: 31,
         outage: Duration::from_millis(25_300),

@@ -7,6 +7,7 @@ paths:
   - "crates/dsync-ptp/src/net_linux.rs"
   - "src/net_pcap.rs"
   - "crates/dsync-ptp/src/net_pcap.rs"
+  - "crates/dsync-ptp/src/recv_errors.rs"
   - "src/net_winsock.rs"
   - "src/traits.rs"
 ---
@@ -91,6 +92,13 @@ offset `D` from its own NTP-stepped wall: 29.9.2026, −19.8 ms, every box stepp
   `net::PinnedInterfaceUnavailable` before closing anything when it is missing / has no IPv4;
   the controller names it in the alarm and retries every 5 s. The limits below apply only to an
   UNPINNED node — pinning is their fix (see `multi-homed-interface-selection.md`).
+- **A failing Npcap read is reported and retried by `recv_errors::RecvErrorGate` (#161,
+  v1.28.1).** A vanished adapter (iem-snv NIC driver swap) fails every read at once, and both
+  receive loops poll every 1 ms: 2881 WARN lines a minute before. Now one WARN on the transition,
+  a count every 10 s, an INFO on recovery; reads back off 10 ms doubling to 1 s (a returned
+  adapter is read within 1 s); a re-join installs a fresh gate. `recv_packet` returns `Ok(None)`
+  for a failed read, so the callers (`[FOLLOWER] receive failed`, the service's `Error in loop:`)
+  never repeat it. Any new capture backend reads through the same gate.
 - **Known limits on Linux (unpinned only), one root: the Linux backend does not know the
   trusted grandmaster.**
   - A DHCP move to a new address on a multi-interface box still falls back to the listing-ordered
