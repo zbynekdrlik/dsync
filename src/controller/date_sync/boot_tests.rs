@@ -675,3 +675,59 @@ fn the_end_of_the_wait_names_a_provisional_rejection_134() {
     first_windows(&mut c, fleet + INTERIM_GM_NS);
     assert!(c.date_sync.restart.provisional_rejection.is_some());
 }
+
+/// strih-pp, 9.11.2026 (dsync 1.28.0): a saved fleet date offset 27 h old was kept as a pending
+/// restore, so the boot step waited for the first PTP window and landed −2.2 s at 18 s, under an
+/// OBS started at 6 s. A record past the 1-day bound is refused at START: the boot step comes from
+/// the boot reading itself, with no PTP window needed, and the wall is placed at once.
+#[test]
+fn a_saved_state_older_than_a_day_is_refused_at_start_and_the_boot_reading_steps_at_once_164() {
+    let fleet = wall_now_ns() - PL_PTP_NOW_NS;
+    let (_dir, path) = with_saved(saved_at(fleet, 2, 27 * 3_600 * S));
+    let (mut c, tx) = booted(steps_once(-2_207_163_100), true, Some(&path));
+    assert!(
+        !c.boot_step_deferred(),
+        "a stale record is refused at start, not at the first PTP window"
+    );
+    assert!(c.wall_placement().is_err(), "the boot reading is still due");
+    tx.send(Ok(one_offset(2_207_163, -1))).expect("send");
+    c.service_boot_ntp();
+    assert_eq!(
+        c.wall_placement(),
+        Ok("boot date set"),
+        "placed by the boot step, before any PTP window"
+    );
+}
+
+/// dsync#164 — `READY=1` follows the placed wall on every path: pending while the boot reading
+/// is due, and on a master while a saved state waits for its first PTP window.
+#[test]
+fn the_wall_is_placed_only_once_the_boot_date_is_decided_164() {
+    // A follower: pending until its boot reading, placed once it is applied.
+    let (mut c, tx) = booted(steps_once(40 * MS), false, None);
+    assert!(c.wall_placement().is_err());
+    tx.send(Ok(one_offset(40_000, 1))).expect("send");
+    c.service_boot_ntp();
+    assert_eq!(c.wall_placement(), Ok("boot date set"));
+
+    // A failed reading: started on the current wall, placed (nothing else will come).
+    let (mut c, tx) = booted(MockSystemClock::new(), false, None);
+    tx.send(Err(BootNtpError::other("timeout"))).expect("send");
+    c.service_boot_ntp();
+    assert_eq!(c.wall_placement(), Ok("boot NTP failed: the current wall"));
+
+    // A master with a fresh saved state: the boot step is skipped, the wall is placed only at
+    // the restore (its first PTP windows).
+    let fleet = wall_now_ns() - PL_PTP_NOW_NS;
+    let (_dir, path) = with_saved(saved(fleet, 2));
+    let (mut c, tx) = booted(steps_once(RTC_BEHIND_MS * MS), true, Some(&path));
+    tx.send(Ok(one_offset(RTC_BEHIND_MS * 1_000, 1)))
+        .expect("send");
+    c.service_boot_ntp();
+    assert_eq!(
+        c.wall_placement(),
+        Err("a saved fleet date offset waits for its first PTP window")
+    );
+    first_windows(&mut c, fleet - RTC_BEHIND_MS * MS);
+    assert_eq!(c.wall_placement(), Ok("on the fleet date line"));
+}

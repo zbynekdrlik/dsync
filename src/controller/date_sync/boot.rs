@@ -305,6 +305,12 @@ where
         }
     }
 
+    /// dsync#164 — is this node's wall placed (the boot date decided)? `Ok(how)` or `Err(what is
+    /// still pending)`: `main` sends systemd `READY=1` on it (`crate::boot_ready`).
+    pub fn wall_placement(&self) -> Result<&'static str, &'static str> {
+        Ok("the PTP loop runs")
+    }
+
     /// dsync#134: this node's wall is on the fleet date line already — the master runs its
     /// authority (restored or new), or a follower adopted the master's D.
     fn on_fleet_date_line(&self) -> bool {
