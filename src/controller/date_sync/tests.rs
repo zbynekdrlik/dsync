@@ -827,14 +827,15 @@ fn samples_from_before_a_ptp_outage_never_mix_into_the_first_window_after_it_117
         let phase = c.calculate_phase_offset(t1, t2);
         c.process_settled_sync(t1, t2, phase);
     };
-    for _ in 0..4 {
+    // dsync#160: a locked anchor waits for the delay floor's 3 windows.
+    for _ in 0..(4 * dsync_ptp::delay_floor::FLOOR_SLOPE_MIN_WINDOWS) {
         t1 += 125_000_000;
         feed(&mut c, t1, d);
     }
     assert_eq!(
         c.date_sync.core.anchor_ns(),
         Some(d),
-        "anchored on the first window"
+        "anchored once the floor holds 3 windows"
     );
     for _ in 0..3 {
         t1 += 125_000_000;
@@ -850,14 +851,14 @@ fn samples_from_before_a_ptp_outage_never_mix_into_the_first_window_after_it_117
     c.check_ptp_status();
     assert!(!c.ptp_offline);
     t1 += 30_000_000_000;
-    for _ in 0..4 {
+    for _ in 0..(4 * dsync_ptp::delay_floor::FLOOR_SLOPE_MIN_WINDOWS) {
         t1 += 125_000_000;
         feed(&mut c, t1, d + 3_000_000);
     }
     assert_eq!(
         c.date_sync.core.anchor_ns(),
         Some(d + 3_000_000),
-        "re-aligned on a window of post-outage samples only"
+        "re-aligned on windows of post-outage samples only"
     );
 }
 
@@ -937,34 +938,49 @@ fn under_legacy_a_ptp_outage_keeps_every_measurement_and_touches_no_clock_117() 
     assert_eq!((c.prev_t1_ns, c.prev_t2_ns), (7, 9));
 }
 
-/// dsync#160: the service's phase window hands over the delay FLOOR of its last ~10 s of raw
-/// samples (the shared `delay_floor` ring), not the window median that follows a USB NIC's
-/// one-sided delay. One window of 4 with three late samples reads the early one, a later
-/// window's lucky sample still counts while it is in the ring, and it ages out after
-/// `FLOOR_RING_SAMPLES` samples.
+/// dsync#160: the service's phase window hands over the delay FLOOR of its last ~10 s (the shared
+/// `delay_floor` ring of window minima), not the window median that follows a USB NIC's
+/// one-sided delay. A window with three late samples reads its early one, a whole late window
+/// does not move the floor, and the ring's clears follow the window's.
 #[test]
 fn the_service_phase_window_hands_over_the_rings_delay_floor_160() {
+    const S: i64 = 1_000_000_000;
     let mut ds = DateSync::new(&phase_lock_config(), 4);
     assert!(ds.enabled, "the default discipline is ptp_phase_lock");
-    let window = |ds: &mut DateSync, raw: [i64; 4], t1: i64| {
-        for r in raw {
+    let window = |ds: &mut DateSync, raw: [i64; 4], k: i64| {
+        for (j, r) in raw.into_iter().enumerate() {
+            let t1 = k * S + j as i64 * 250_000_000;
             ds.push_raw_sample(t1, t1 + r);
         }
-        ds.close_raw_window(t1);
+        ds.close_raw_window(k * S + 750_000_000);
         ds.pending_median_ns
     };
+    // The median of this window is 800 µs; its early sample is the floor.
     assert_eq!(
-        window(&mut ds, [900_000, 1_000, 700_000, 800_000], 1),
+        window(&mut ds, [900_000, 1_000, 700_000, 800_000], 0),
         Some(1_000)
     );
+    // A whole window late by ~0.5 ms: the floor stays.
     assert_eq!(
-        window(&mut ds, [400_000, 600_000, 300_000, 500_000], 2),
+        window(&mut ds, [400_000, 600_000, 500_000, 550_000], 1),
         Some(1_000)
     );
-    // 40 samples later the lucky one has left the ring: the floor is the newer samples' minimum.
     let mut last = None;
-    for k in 0..10 {
-        last = window(&mut ds, [50_000 + k, 60_000, 70_000, 80_000], 3 + k);
+    for k in 2..12 {
+        let late = if k == 6 { 450_000 } else { 0 };
+        last = window(
+            &mut ds,
+            [9_000 + late, 1_000 + late, 7_000 + late, 8_000 + late],
+            k,
+        );
+        assert_eq!(last, Some(1_000), "window {k}");
     }
-    assert_eq!(last, Some(50_000));
+    assert_eq!(last, Some(1_000));
+    // A clock step voids every phase measurement: the ring starts again from the next window.
+    ds.drop_window();
+    assert!(ds.floor.is_empty() && ds.window.is_empty() && ds.window_t1.is_empty());
+    assert_eq!(
+        window(&mut ds, [3_000, 4_000, 5_000, 6_000], 12),
+        Some(3_000)
+    );
 }

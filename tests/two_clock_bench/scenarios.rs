@@ -290,11 +290,41 @@ fn two_clock_bench_rate_is_ptp_phase_agrees_and_every_date_step_is_coordinated_1
     // THE DECOUPLING STATEMENT, for the frequency LAW: the two runs share every PTP input and
     // differ ONLY in UTC (so in the number, size and timing of the date steps). The frequency
     // command of every box is bit-identical between them: NTP contributes nothing to the rate.
+    // #119 follow-up / dsync#160: when a grandmaster event finds a step pending in ONE run (a
+    // renamed step), a box that re-anchored first removes its re-anchor residual (≤ the absorb
+    // tolerance) inside that step instead of as an absorb — by construction dependent on the
+    // date's timing (the slew test below judges the same way). Then, and only then, the 10
+    // minutes after each grandmaster event may differ by the phase lock's pull-in of that
+    // residual (< 1 ppm) and every later word by its decaying tail in the integrator (< 0.001
+    // ppm, the slew test's numerical bound); without a renamed step every word is bit-identical.
+    let renamed = !plus.renamed_steps.is_empty() || !fast.renamed_steps.is_empty();
+    let after_gm_event = |k: usize| {
+        renamed
+            && [GM_CHANGE_AT_WINDOW, GM_REBOOT_AT_WINDOW]
+                .iter()
+                .any(|&e| (e..e + 1_200).contains(&(k as u64)))
+    };
     for i in 0..plus.words.len() {
-        assert_eq!(
-            plus.words[i], fast.words[i],
-            "box {i}: the frequency word depends on UTC — NTP leaked into the rate path"
-        );
+        assert_eq!(plus.words[i].len(), fast.words[i].len());
+        for (k, (a, b)) in plus.words[i].iter().zip(&fast.words[i]).enumerate() {
+            if after_gm_event(k) {
+                assert!(
+                    (a - b).abs() < 1.0,
+                    "box {i} window {k}: a re-anchor residual is at most the absorb tolerance"
+                );
+            } else if renamed {
+                assert!(
+                    (a - b).abs() < 0.001,
+                    "box {i} window {k}: beyond the residual's tail, NTP leaked into the rate path"
+                );
+            } else {
+                assert_eq!(
+                    a, b,
+                    "box {i} window {k}: the frequency word depends on UTC — NTP leaked into \
+                     the rate path"
+                );
+            }
+        }
     }
     // … while the date genuinely differed (the runs are not trivially identical).
     assert_ne!(plus.announced.len(), fast.announced.len());
