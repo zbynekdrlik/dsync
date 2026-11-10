@@ -423,15 +423,17 @@ fn a_dead_boot_thread_is_treated_as_a_failed_reading_134() {
 #[test]
 fn a_rejected_restore_reuses_the_boot_reading_taken_before_the_first_window_134() {
     // Review finding 5: the reading came first (skipped: a saved state waited), then the restore is
-    // rejected (a stale record): the deferred boot step uses that reading — no second, blocking
-    // measurement in the loop.
+    // rejected at the first locked window (another time base: an interim grandmaster's uptime):
+    // the deferred boot step uses that reading — no second, blocking measurement in the loop.
+    // (dsync#164: a STALE record no longer gets this far: it is refused at start.)
     let fleet = wall_now_ns() - PL_PTP_NOW_NS;
-    let (_dir, path) = with_saved(saved_at(fleet, 2, 2 * 86_400 * S));
+    let (_dir, path) = with_saved(saved(fleet + INTERIM_GM_NS, 2));
     let (mut c, tx) = booted(steps_once(250 * MS), true, Some(&path));
     tx.send(Ok(one_offset(250_000, 1))).expect("send");
     c.service_boot_ntp();
     assert!(c.boot_step_deferred(), "skipped for the saved state");
-    first_windows(&mut c, fleet);
+    window(&mut c, fleet, true);
+    c.service_date_offset();
     let st = status(&c);
     assert_eq!(st.date_authority, "master");
     assert!(!st.date_offset_restored);
@@ -704,7 +706,7 @@ fn a_saved_state_older_than_a_day_is_refused_at_start_and_the_boot_reading_steps
 #[test]
 fn the_wall_is_placed_only_once_the_boot_date_is_decided_164() {
     // A follower: pending until its boot reading, placed once it is applied (2 s: above the
-    // 1 s boot-step threshold, so it steps).
+    // 50 ms boot-step threshold, so it steps).
     let (mut c, tx) = booted(steps_once(2_000 * MS), false, None);
     assert!(c.wall_placement().is_err());
     tx.send(Ok(one_offset(2_000_000, 1))).expect("send");
