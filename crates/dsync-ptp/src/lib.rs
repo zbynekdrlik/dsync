@@ -16,6 +16,7 @@
 //! Consumers pin it by the service's release tag:
 //! `dsync-ptp = { git = "https://github.com/zbynekdrlik/dsync", tag = "v1.24.0" }`.
 
+pub mod delay_floor;
 pub mod follower;
 pub mod frame;
 pub mod freq_seed;

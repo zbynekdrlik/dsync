@@ -73,6 +73,7 @@ pub(super) fn follower_accepts(b: &Box_, p: &Published, master_wall_now: i64) ->
 pub(super) fn master_local_step(m: &mut Box_, _a: &mut DateAuthority, delta_ns: i64) {
     m.stepped += delta_ns;
     m.core.note_step(delta_ns);
+    m.floor.shift(delta_ns);
     m.fresh = false;
     m.follower.cancel_pending();
     let anchor = m.core.anchor_ns().expect("anchored");

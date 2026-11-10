@@ -82,8 +82,17 @@ pub(super) struct DateSync {
     /// Raw `t2 − t1` samples of the current window, filled beside the rate servo's `sample_window`
     /// under the same gate and cleared with it.
     pub(super) window: Vec<i64>,
+    /// dsync#160: each `window` sample's grandmaster time `t1`, pushed together with it.
+    pub(super) window_t1: Vec<i64>,
+    /// dsync#160: the window minima of the last ~10 s; their floor is handed to the servo in
+    /// place of the window median (a one-sided receive delay moves a median, never the floor).
+    pub(super) floor: dsync_ptp::delay_floor::DelayFloor,
     /// The window median handed from `process_sample_window` to the servo, and its GM time `t1`.
     pub(super) pending_median_ns: Option<i64>,
+    /// dsync#160: the pending window's floor came from fewer than 3 windows (no anchor on it),
+    /// and its own minimum for the phase lock's fits; both taken when the window closed.
+    pub(super) pending_provisional: bool,
+    pub(super) pending_fit: Option<dsync_ptp::delay_floor::FitSample>,
     pub(super) pending_t1_ns: i64,
     /// GM time of the last phase-lock update: the PI's `dt` is measured in the plant's own time
     /// base, immune to loop scheduling and to this daemon's own wall steps.
@@ -206,7 +215,11 @@ impl DateSync {
             enabled,
             core: PhaseLockCore::new(),
             window: Vec::with_capacity(window_size),
+            window_t1: Vec::with_capacity(window_size),
+            floor: dsync_ptp::delay_floor::DelayFloor::new(),
             pending_median_ns: None,
+            pending_provisional: false,
+            pending_fit: None,
             pending_t1_ns: 0,
             last_t1_ns: None,
             anchor_gm: None,
@@ -257,20 +270,51 @@ impl DateSync {
     pub(super) fn push_raw_sample(&mut self, t1_ns: i64, t2_ns: i64) {
         if self.enabled {
             self.window.push(t2_ns.wrapping_sub(t1_ns));
+            self.window_t1.push(t1_ns);
         }
     }
 
-    /// The sample window closed: hand its raw median and grandmaster time to the servo.
+    /// The sample window closed: hand the delay floor of the last ~10 s (dsync#160, the shared
+    /// `dsync_ptp::delay_floor`, as the in-process follower) and the grandmaster time to the
+    /// servo. The floor is read at the window's middle, where the median it replaces sat.
     pub(super) fn close_raw_window(&mut self, master_time_ns: i64) {
-        self.pending_median_ns = if self.window.is_empty() {
-            None
+        let t1_of = |i: usize| self.window_t1.get(i).copied().unwrap_or(master_time_ns);
+        self.pending_median_ns = self
+            .window
+            .iter()
+            .enumerate()
+            .min_by_key(|&(_, raw)| *raw)
+            .map(|(i, &raw)| {
+                let first = t1_of(0);
+                let mid = first.wrapping_add(master_time_ns.wrapping_sub(first) / 2);
+                self.floor.push_window(t1_of(i), raw, mid)
+            });
+        let pushed = self.pending_median_ns.is_some();
+        self.pending_provisional =
+            pushed && self.floor.len() < dsync_ptp::delay_floor::FLOOR_SLOPE_MIN_WINDOWS;
+        self.pending_fit = if pushed {
+            self.floor.fit_sample()
         } else {
-            let mut raw = self.window.clone();
-            raw.sort_unstable();
-            Some(raw[raw.len() / 2])
+            None
         };
         self.pending_t1_ns = master_time_ns;
         self.window.clear();
+        self.window_t1.clear();
+    }
+
+    /// Every PTP phase measurement so far is void (a time-base change, an outage, a step before
+    /// the anchor): the open window and the delay floor's ring.
+    pub(super) fn drop_window(&mut self) {
+        self.window.clear();
+        self.window_t1.clear();
+        self.floor.clear();
+    }
+
+    /// A clock step of `delta_ns` that `D` moves with: the phase lock's `D` and the delay floor's
+    /// ring move by exactly the same amount (dsync#160), so `e` sees no disturbance either way.
+    pub(super) fn note_step(&mut self, delta_ns: i64) {
+        self.core.note_step(delta_ns);
+        self.floor.shift(delta_ns);
     }
 
     /// #119 (1.11.1) — a clock step has moved the wall and `D` and is about to reset the
@@ -309,7 +353,7 @@ impl DateSync {
     /// reboot): drop the raw window and re-anchor `D` from the next one, so the wall stays
     /// continuous (never a wall step).
     pub(super) fn on_time_base_change(&mut self) {
-        self.window.clear();
+        self.drop_window();
         self.core.request_rebase();
     }
 }
@@ -354,6 +398,13 @@ where
         let reseeded_before = self.date_sync.core.boot_reseed().is_some();
         let gm_refit_before = self.date_sync.core.gm_refit();
         let locked = phase_window::engage_on(self.rate.is_locked, self.ptp_offline);
+        // dsync#160: no anchor on a floor read from fewer than 3 windows after a ring reset; the
+        // fits take the window's own minimum.
+        let provisional = std::mem::take(&mut self.date_sync.pending_provisional);
+        self.date_sync.core.set_provisional(provisional);
+        if let Some(s) = self.date_sync.pending_fit.take() {
+            self.date_sync.core.set_fit_sample(s.ns, s.late);
+        }
         let out = self
             .date_sync
             .core
@@ -457,7 +508,7 @@ where
     /// re-aligns its own wall to it once PTP is back (`realign_master_to_fleet`) — a single box's
     /// fault never reaches the fleet as a step.
     pub(super) fn note_local_date_step(&mut self, delta_ns: i64) {
-        self.date_sync.core.note_step(delta_ns);
+        self.date_sync.note_step(delta_ns);
         // Only the MASTER drops its own scheduled step (its local step already tracks UTC, and it
         // re-aligns to the fleet later). A follower keeps it: its NTP source is the master, whose
         // wall has not stepped yet, so its local step never covered the fleet's step.
@@ -514,8 +565,10 @@ where
             self.date_sync.master_outage_realign = true;
         }
         self.sample_window.clear();
-        self.date_sync.window.clear();
+        self.date_sync.drop_window();
         self.date_sync.pending_median_ns = None;
+        self.date_sync.pending_provisional = false;
+        self.date_sync.pending_fit = None;
         self.date_sync.last_t1_ns = None;
         self.date_sync.fresh_window = false;
         // #119 (1.11.1): no step measured across an outage.
@@ -1023,7 +1076,7 @@ where
             return;
         }
         self.date_sync.step_failed_at = None;
-        self.date_sync.core.note_step(delta_ns);
+        self.date_sync.note_step(delta_ns);
         // #68 on the master: after a COORDINATED step publish the UTC error that REMAINS, not the
         // one just stepped away (a re-alignment Join moves only this master onto the fleet line).
         if kind == StepKind::Coordinated && self.date_sync.authority.is_some() {

@@ -5,6 +5,7 @@ paths:
   - "src/ntp_server.rs"
   - "src/status.rs"
   - "crates/dsync-ptp/src/ptp_phase_lock.rs"
+  - "crates/dsync-ptp/src/delay_floor.rs"
   - "src/date_offset.rs"
   - "src/time_server.rs"
   - "src/sync_loop.rs"
@@ -1433,3 +1434,32 @@ minutes. dstack ruled continuity over exact GM time. What was learned:
   ppm × 3 noise seeds), follower `a_dante_failover_keeps_the_published_time_continuous_158` (no
   published jump > 1 µs, epoch 0) and `…pull_ns…`; the bench's 1372 new-GM case accepts either
   mechanism.
+
+## dsync#160 (v1.29) — the phase measurement is the delay FLOOR; the fits take a white sample
+
+mbc-snv's ASIX USB Dante NIC delays received Syncs one-sidedly (single samples +4.6 ms; the per-10 s
+median scattered sd 70 µs, the per-10 s minimum sd 7.6 µs). The core is now fed the Theil-Sen floor
+of the last 10 window minima (`crates/dsync-ptp/src/delay_floor.rs`), in the follower, the
+controller (`DateSync::close_raw_window`) and the bench glue alike. What was learned:
+
+- **A smoothed measurement must never feed a fit that judges σ from its own residuals.** The floor is
+  a line through ~10 windows, so its `e` is correlated from window to window. The #158 grandmaster
+  fit read σ ~√10 too small, ppm-off fits passed σ ≤ 0.3, every box re-seeded on its own error:
+  bench relative phase 60-68 µs (negative control: with the GM fit off the scenario passed). The open-loop fits and
+  the 1372 detector take the window's OWN minimum (`PhaseLockCore::set_fit_sample`), and a minimum
+  > 3 × 1.4826 MAD (≥ 5 µs) above the floor is held as late (`DelayFloor::fit_sample`); without that
+  gate the USB follower's ~20 % late minima moved the refinement.
+- **No anchor on a floor of < 3 windows** (`PhaseLockCore::set_provisional`): a locked first anchor,
+  a `Rebased`, a > 1 s discontinuity and a re-engagement `Realigned` wait (the word held); an
+  unlocked anchor keeps counting its confirmations and anchors on the confirming window; a
+  continued time base (#158) is taken at once (it keeps `D`). In the controller both flags are
+  captured WHEN the window closes (`pending_provisional` / `pending_fit`), never read from the ring
+  later.
+- **The bit-identity pair is exact only without a renamed step.** A grandmaster event that finds a
+  step pending in ONE run removes the re-anchor residual inside that step instead of as an absorb
+  (the documented #119 path); moving the anchors by two windows made that happen. The pair then
+  allows < 1 ppm in the 10 minutes after each GM event and < 0.001 ppm (the integrator's decaying
+  tail) elsewhere, the slew test's own bounds; with no renamed step every word stays bit-identical.
+- **Diagnose a bench envelope by WHEN it breaks.** A temporary per-window print of the relative
+  phase (> 45 µs) placed the excursion 50-150 windows after the GM change, the fit's timing,
+  not at the anchor: option (c) alone (provisional) measured worse, the fit was the cause.

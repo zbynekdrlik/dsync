@@ -68,6 +68,7 @@ impl Box_ {
         self.stepped += realized;
         self.last_landing = Some((t_ns, realized));
         self.core.note_step(delta_ns);
+        self.floor.shift(delta_ns);
         self.fresh = false;
         self.steps.push((seq, delta_ns, kind, t_ns));
         if grace {
