@@ -21,15 +21,20 @@ const SYNC_NS: i64 = 125_000_000;
 /// The oscillator against the grandmaster (mbc's learned word was about −4.5 ppm).
 const NATURAL_PPM: f64 = 4.5;
 
-/// mbc's ASIX one-sided receive delay: the per-10 s minimum sits on one line (sd 7.6 µs), while
-/// most samples arrive late by up to milliseconds. A sample is on time (only a few µs of jitter)
-/// one time in four; otherwise late by an exponential delay of mean 400 µs.
+/// mbc's measured receive delay above the floor (2365 samples, 10.11.2026; the in-process
+/// follower's `usb_extra_ns` model): a third of the Syncs on the floor, the rest exponential with
+/// a mean of 250 µs, 3 % of all 1-4 ms late; plus a few µs of jitter.
 fn usb_delay_us(noise: &mut Noise) -> f64 {
     let jitter = (5.0 * noise.gauss()).abs();
-    if noise.uniform() < 0.25 {
-        return jitter;
-    }
-    jitter - 400.0 * noise.uniform().max(1e-9).ln()
+    let u = noise.uniform();
+    jitter
+        + if u < 0.03 {
+            1_000.0 + 3_000.0 * noise.uniform()
+        } else if u < 0.36 {
+            0.0
+        } else {
+            -250.0 * noise.uniform().max(1e-9).ln()
+        }
 }
 
 fn usb_service() -> (Ctl, Arc<Mutex<f64>>) {
