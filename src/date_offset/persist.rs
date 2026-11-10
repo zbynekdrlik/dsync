@@ -97,6 +97,14 @@ pub enum RestoreRejected {
 }
 
 impl DateOffsetState {
+    /// dsync#164: the record's age by the wall `now_wall_ns` when it is past
+    /// [`MAX_RESTORE_AGE_NS`] (never restorable), else `None`. Judged at load too: the wall there
+    /// is the same un-stepped wall the first PTP window would judge it by.
+    pub fn stale_age(&self, now_wall_ns: i64) -> Option<i64> {
+        let age_ns = now_wall_ns.saturating_sub(self.written_wall_ns);
+        (age_ns > MAX_RESTORE_AGE_NS).then_some(age_ns)
+    }
+
     /// May the saved state be restored by a master whose phase lock anchored `anchor_ns` (the
     /// median `t2 − t1` of its first locked window) under the grandmaster `gm`? Yes when a
     /// grandmaster is known, the record is fresh, and the anchor is within `cap_ns` (the daily
@@ -118,8 +126,7 @@ impl DateOffsetState {
         cap_ns: i64,
     ) -> Result<i64, RestoreRejected> {
         gm.ok_or(RestoreRejected::NoGrandmaster)?;
-        let age_ns = now_wall_ns.saturating_sub(self.written_wall_ns);
-        if age_ns > MAX_RESTORE_AGE_NS {
+        if let Some(age_ns) = self.stale_age(now_wall_ns) {
             return Err(RestoreRejected::Stale { age_ns });
         }
         // "Now" in the saved time base, from the master's own anchor (it has nothing else yet).

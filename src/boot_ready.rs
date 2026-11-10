@@ -53,15 +53,18 @@ impl ReadyGate {
     /// Every loop iteration: `Ok(how)` = the wall is placed, `Err(what)` = still pending. Returns
     /// the reason exactly once, when READY is to be sent.
     pub fn poll(&mut self, now: Instant, placement: Result<&str, &str>) -> Option<ReadyReason> {
-        let _ = (now, &self.started);
         if self.sent {
             return None;
         }
-        self.sent = true;
-        Some(match placement {
+        let reason = match placement {
             Ok(how) => ReadyReason::Placed(how.to_string()),
-            Err(what) => ReadyReason::TimedOut(what.to_string()),
-        })
+            Err(what) if now.saturating_duration_since(self.started) >= READY_PLACEMENT_BOUND => {
+                ReadyReason::TimedOut(what.to_string())
+            }
+            Err(_) => return None,
+        };
+        self.sent = true;
+        Some(reason)
     }
 
     pub fn sent(&self) -> bool {

@@ -124,6 +124,11 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# dsync#164: READY=1 only once the boot date is placed (bounded at 30 s inside dsync), so a unit
+# ordered After=dsync.service starts on a placed wall.
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=120
 # Run as root for port 319, adjtimex, and RTC ioctl access
 User=root
 Group=root

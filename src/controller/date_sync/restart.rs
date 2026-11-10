@@ -86,6 +86,8 @@ pub(in crate::controller) struct RestartState {
     /// how many times it was asked again.
     pub(in crate::controller) boot_retry_at: Option<Instant>,
     pub(in crate::controller) boot_retries: usize,
+    /// dsync#164: how the boot reading decided the wall (`wall_placement`), once it did.
+    pub(in crate::controller) boot_outcome: Option<&'static str>,
     /// dsync#134 review: the (anchor, engaged) the saved state was last judged on — a
     /// provisional rejection is judged again only when one of them changes.
     pub(in crate::controller) restore_judged_on: Option<(Option<i64>, bool)>,
@@ -123,6 +125,7 @@ impl RestartState {
             boot_retry_at: None,
             wall_placed_once: false,
             boot_retries: 0,
+            boot_outcome: None,
             last_saved: None,
             last_saved_at: None,
             save_failed_at: None,
@@ -198,6 +201,18 @@ where
         let rs = &mut self.date_sync.restart;
         rs.loaded_at = Instant::now();
         match restart_file::read(&path) {
+            // dsync#164: a record past the restore bound is refused now, not at the first PTP
+            // window: the boot step then runs from the boot reading at start (strih-pp,
+            // 9.11.2026: a 27 h old record held it back 18 s, under a running OBS).
+            Ok(Some(state)) if state.stale_age(wall_now_ns()).is_some() => {
+                let age_ns = state.stale_age(wall_now_ns()).unwrap_or_default();
+                warn!(
+                    "[DATE] the saved fleet date offset at {} is NOT restored: {} — the boot step \
+                     runs at start from the boot NTP reading, and a new authority session starts",
+                    path.display(),
+                    describe_rejection(RestoreRejected::Stale { age_ns })
+                );
+            }
             Ok(Some(state)) => {
                 let age_s = wall_now_ns()
                     .saturating_sub(state.written_wall_ns)

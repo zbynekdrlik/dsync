@@ -83,6 +83,11 @@ pub(in crate::controller) struct BootNtpWait {
 /// boot step must never measure inside the loop).
 pub type BootNtpSpawner = Box<dyn FnMut() -> Receiver<BootNtpResult>>;
 
+/// dsync#164: the wall placed by the boot reading (stepped, or within the boot threshold).
+const BOOT_SET_PLACEMENT: &str = "boot date set";
+/// dsync#164: the boot reading failed: the node runs on its current wall.
+const BOOT_FAILED_PLACEMENT: &str = "boot NTP failed: the current wall";
+
 impl<C, N, S> PtpController<C, N, S>
 where
     C: SystemClock,
@@ -183,6 +188,7 @@ where
                     e
                 );
                 self.date_sync.restart.boot_step_due = false;
+                self.date_sync.restart.boot_outcome = Some(BOOT_FAILED_PLACEMENT);
                 self.update_shared_status();
                 return;
             }
@@ -229,6 +235,7 @@ where
             self.update_shared_status();
             return;
         }
+        self.date_sync.restart.boot_outcome = Some(BOOT_SET_PLACEMENT);
         if self.step_boot_offset(offset, sign) {
             // Review of PR 135: the samples taken before the step describe the old wall — dropped
             // whether or not the phase lock anchored yet (a window mixing both anchors D off the
@@ -308,7 +315,24 @@ where
     /// dsync#164 — is this node's wall placed (the boot date decided)? `Ok(how)` or `Err(what is
     /// still pending)`: `main` sends systemd `READY=1` on it (`crate::boot_ready`).
     pub fn wall_placement(&self) -> Result<&'static str, &'static str> {
-        Ok("the PTP loop runs")
+        let rs = &self.date_sync.restart;
+        let master = self.ntp_server_mode && self.date_sync.enabled;
+        if self.on_fleet_date_line() && (!master || self.master_wall_placed()) {
+            return Ok("on the fleet date line");
+        }
+        if self.boot_ntp_pending() {
+            return Err("the boot NTP reading is due");
+        }
+        if rs.pending_restore.is_some() {
+            return Err("a saved fleet date offset waits for its first PTP window");
+        }
+        if rs.boot_step_due {
+            return Err("a deferred boot step is due");
+        }
+        if master && !self.master_wall_placed() {
+            return Err("the master's wall is not on its session yet");
+        }
+        Ok(rs.boot_outcome.unwrap_or("no boot NTP reading"))
     }
 
     /// dsync#134: this node's wall is on the fleet date line already — the master runs its
