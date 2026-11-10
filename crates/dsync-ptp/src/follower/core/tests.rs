@@ -58,6 +58,8 @@ struct World {
     /// Extra receive delay of the Syncs whose sequence id is in the set (late windows).
     late: std::collections::HashSet<u16>,
     late_ns: i64,
+    /// dsync#160: mbc's USB NIC (ASIX AX88179) — a one-sided receive delay on top of `jitter_ns`.
+    usb_delay: bool,
 }
 
 impl World {
@@ -77,6 +79,7 @@ impl World {
             sync_period_ns: SYNC_PERIOD_NS,
             late: std::collections::HashSet::new(),
             late_ns: 0,
+            usb_delay: false,
         }
     }
 
@@ -102,8 +105,16 @@ impl World {
             } else {
                 0
             };
-            let rx =
-                self.t + LATENCY_NS + late + (self.jitter_ns * self.noise.gauss()).abs() as i64;
+            let usb = if self.usb_delay {
+                self.usb_extra_ns()
+            } else {
+                0
+            };
+            let rx = self.t
+                + LATENCY_NS
+                + late
+                + usb
+                + (self.jitter_ns * self.noise.gauss()).abs() as i64;
             let mono_rx = self.mono(rx);
             let wall_rx = mono_rx + self.wall_minus_mono;
             let packet = |data| RxPacket {
@@ -118,6 +129,20 @@ impl World {
                 PacketVerdict::TimeMessage
             );
             core.on_tick(mono_rx + 1_000_000);
+        }
+    }
+
+    /// dsync#160: mbc's measured receive delay above the floor (2365 samples, 10.11.2026): a
+    /// third of the Syncs on the floor, the rest exponential with a mean of 250 µs, 3 % of all
+    /// 1-4 ms late. A 4-sample median then moves by ~100-300 µs per window; the floor holds.
+    fn usb_extra_ns(&mut self) -> i64 {
+        let u = self.noise.uniform();
+        if u < 0.03 {
+            1_000_000 + (3_000_000.0 * self.noise.uniform()) as i64
+        } else if u < 0.36 {
+            0
+        } else {
+            (-250_000.0 * self.noise.uniform().ln()) as i64
         }
     }
 
@@ -334,6 +359,42 @@ fn mbc_world(seed: u64) -> World {
 /// The line the follower trails is the MEAN latency: |gauss| × 25 µs adds √(2/π) × 25 µs.
 fn mbc_mean_jitter_ns() -> i64 {
     (25_000.0 * (2.0 / std::f64::consts::PI).sqrt()) as i64
+}
+
+/// dsync#160: mbc-snv's USB Dante NIC at Interrupt Moderation Middle — mbc's world with the
+/// one-sided delay of [`World::usb_extra_ns`] and a 5 µs floor jitter.
+fn usb_world(seed: u64) -> World {
+    let mut world = mbc_world(seed);
+    world.jitter_ns = 5_000.0;
+    world.usb_delay = true;
+    world
+}
+
+/// dsync#160 (dstack, mbc-snv 9-10.11.2026): neither the service nor the follower locked on the
+/// USB NIC — a window median of 4 follows the one-sided delay (window `e` ±300-961 µs, the boot
+/// fit σ 2.7-6.9 ppm). The delay FLOOR is steady (per-10 s minimum sd 7.6 µs), so the follower
+/// must lock and hold the floor's line within the lock bound.
+#[test]
+fn a_follower_on_a_usb_nic_locks_on_the_delay_floor_and_holds_the_line_160() {
+    for seed in SEEDS {
+        let mut world = usb_world(seed);
+        let mut core = new_core(&world);
+        let locked_at = run_to_lock(&mut world, &mut core, 120);
+        let mut worst = 0;
+        for _ in 0..(300 * 4) {
+            world.tick(&mut [&mut core]);
+            assert!(
+                core.model().locked,
+                "seed {seed:#x}: the lock flapped at {}s",
+                world.t as f64 / 1e9
+            );
+            worst = worst.max(world.error_ns(&core).expect("anchored").abs());
+        }
+        assert!(
+            worst <= LOCK_BOUND_NS,
+            "seed {seed:#x}: worst {worst}ns after the lock at {locked_at}s"
+        );
+    }
 }
 
 /// The worst |error| (ns) over `secs` of `world` once `core` is locked, and when it locked (s).

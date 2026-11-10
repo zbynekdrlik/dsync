@@ -936,3 +936,35 @@ fn under_legacy_a_ptp_outage_keeps_every_measurement_and_touches_no_clock_117() 
     );
     assert_eq!((c.prev_t1_ns, c.prev_t2_ns), (7, 9));
 }
+
+/// dsync#160: the service's phase window hands over the delay FLOOR of its last ~10 s of raw
+/// samples (the shared `delay_floor` ring), not the window median that follows a USB NIC's
+/// one-sided delay. One window of 4 with three late samples reads the early one, a later
+/// window's lucky sample still counts while it is in the ring, and it ages out after
+/// `FLOOR_RING_SAMPLES` samples.
+#[test]
+fn the_service_phase_window_hands_over_the_rings_delay_floor_160() {
+    let mut ds = DateSync::new(&phase_lock_config(), 4);
+    assert!(ds.enabled, "the default discipline is ptp_phase_lock");
+    let window = |ds: &mut DateSync, raw: [i64; 4], t1: i64| {
+        for r in raw {
+            ds.push_raw_sample(t1, t1 + r);
+        }
+        ds.close_raw_window(t1);
+        ds.pending_median_ns
+    };
+    assert_eq!(
+        window(&mut ds, [900_000, 1_000, 700_000, 800_000], 1),
+        Some(1_000)
+    );
+    assert_eq!(
+        window(&mut ds, [400_000, 600_000, 300_000, 500_000], 2),
+        Some(1_000)
+    );
+    // 40 samples later the lucky one has left the ring: the floor is the newer samples' minimum.
+    let mut last = None;
+    for k in 0..10 {
+        last = window(&mut ds, [50_000 + k, 60_000, 70_000, 80_000], 3 + k);
+    }
+    assert_eq!(last, Some(50_000));
+}
