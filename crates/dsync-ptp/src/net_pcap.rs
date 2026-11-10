@@ -14,7 +14,7 @@ use crate::wpcap::{Capture, CaptureSettings, Device};
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
 use std::net::{Ipv4Addr, UdpSocket};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PTP_EVENT_PORT: u16 = 319;
 const PTP_GENERAL_PORT: u16 = 320;
@@ -391,6 +391,9 @@ pub struct NpcapPtpNetwork {
     /// dsync#131: the pinned interface; when set, the startup and every re-join use only its
     /// device (`select_pinned_device`).
     pinned: Option<String>,
+    /// dsync#161: a failing read (the adapter vanished) is reported and retried at a bounded
+    /// rate, not on every 1 ms poll.
+    recv_gate: crate::recv_errors::RecvErrorGate,
 }
 
 impl NpcapPtpNetwork {
@@ -429,6 +432,7 @@ impl NpcapPtpNetwork {
             last_join,
             home_ip: ip,
             pinned: pinned.map(|(name, _)| name),
+            recv_gate: crate::recv_errors::RecvErrorGate::new(),
         })
     }
 
@@ -445,7 +449,18 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
             return Ok(None);
         };
         let joined_ip = open.iface_ip;
-        match open.capture.next_packet() {
+        // dsync#161: a failing capture is read again only after its back-off.
+        let now = Instant::now();
+        if !self.recv_gate.ready(now) {
+            return Ok(None);
+        }
+        let received = open.capture.next_packet();
+        if received.is_ok() {
+            if let Some(event) = self.recv_gate.on_ok(now) {
+                event.log("[Npcap]");
+            }
+        }
+        match received {
             Ok(Some(packet)) => {
                 let data = packet.data;
 
@@ -503,8 +518,21 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
                 Ok(None)
             }
             Err(e) => {
-                warn!("Npcap recv error: {:#}", e);
-                Err(e)
+                // dsync#161: the gate is the one report of a failing capture (a transition
+                // WARN, a count every 10 s, the recovery); the callers see nothing to read, so
+                // neither the follower nor the service loop repeats it per poll. Liveness is
+                // judged by time messages and the re-join runs on staleness (dsync#112).
+                let text = format!("{e:#}");
+                if let Some(event) = self.recv_gate.on_error(now, &text) {
+                    event.log("[Npcap]");
+                }
+                debug!(
+                    "[Npcap] recv error {} of this stretch: {}; next read in {:?}",
+                    self.recv_gate.errors(),
+                    text,
+                    self.recv_gate.backoff(now)
+                );
+                Ok(None)
             }
         }
     }
@@ -561,6 +589,8 @@ impl NpcapPtpNetwork {
         let changed = self.last_join.0 != iface || self.last_join.1 != ip;
         self.last_join = (iface.clone(), ip);
         self.open = Some(open);
+        // dsync#161: a new handle is read at once.
+        self.recv_gate = crate::recv_errors::RecvErrorGate::new();
         Ok(crate::network::RejoinOutcome { iface, ip, changed })
     }
 }
