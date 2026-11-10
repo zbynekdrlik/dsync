@@ -7,6 +7,9 @@ paths:
   - "crates/dsync-ptp/src/ptp_phase_lock.rs"
   - "crates/dsync-ptp/src/delay_floor.rs"
   - "src/date_offset.rs"
+  - "src/boot_ready.rs"
+  - "src/controller/date_sync/restart.rs"
+  - "src/controller/date_sync/boot.rs"
   - "src/time_server.rs"
   - "src/sync_loop.rs"
   - "src/ntp_burst.rs"
@@ -1463,3 +1466,22 @@ controller (`DateSync::close_raw_window`) and the bench glue alike. What was lea
 - **Diagnose a bench envelope by WHEN it breaks.** A temporary per-window print of the relative
   phase (> 45 µs) placed the excursion 50-150 windows after the GM change, the fit's timing,
   not at the anchor: option (c) alone (provisional) measured worse, the fit was the cause.
+
+## dsync#164 (v1.30) — a stale saved date offset is refused at START; READY=1 = the wall is placed
+
+strih-pp, 9.11.2026: a 27 h old `date-offset.json` was held as a pending restore, so the boot step
+waited for the first PTP window (−2.2 s at 18 s, under an OBS started at 6 s). What was learned:
+
+- **Judge what the start can already judge.** `MAX_RESTORE_AGE_NS` uses the wall NOW, and that is
+  the same un-stepped wall at load as at the first window (`DateOffsetState::stale_age`, shared
+  with `validate_restore`). So `load_date_state` refuses a stale record at once and the boot reading
+  steps at start. The window's own `Stale` check stays: a record can age past the bound while it
+  waits for PTP.
+- **READY=1 means "the wall is placed"**, never "the loop started". `PtpController::wall_placement()`
+  is the one predicate on every role: on the fleet line, boot date set, or boot NTP failed (the
+  current wall), else what is pending. `boot_ready::ReadyGate` sends it once, bounded at 30 s with
+  a WARN, so a dead upstream never holds the units ordered after dsync. The installer units are
+  `Type=notify`; a site unit (camera-box's) needs the same or `After=` waits for nothing.
+- **A test that used a stale record as its VEHICLE** (to reach "rejected at the first window")
+  silently changes meaning when the start refuses it. Re-drive such a test by another rejection
+  (another time base at a LOCKED window: an unlocked rejection is only provisional, #134).
