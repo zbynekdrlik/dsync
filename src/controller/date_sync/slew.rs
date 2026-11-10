@@ -69,6 +69,7 @@ impl DateSync {
         for s in self.window.iter_mut() {
             *s = s.wrapping_add(fold);
         }
+        self.floor.shift(fold);
         if let Some(m) = self.pending_median_ns.as_mut() {
             *m = m.wrapping_add(fold);
         }

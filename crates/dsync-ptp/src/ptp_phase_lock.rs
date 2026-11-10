@@ -259,6 +259,15 @@ pub struct WindowOutcome {
 pub struct PhaseLockCore {
     anchor_ns: Option<i64>,
     rebase_pending: bool,
+    /// dsync#160: the measurement is not settled yet (the delay floor's ring was just reset):
+    /// no anchor is taken from it, the word is held.
+    provisional: bool,
+    /// dsync#160: this window's white per-window sample of `t2 − t1` for the open-loop fits and
+    /// the frequency-step detector (taken by `on_window`); `None` = the measurement itself.
+    fit_sample_ns: Option<(i64, bool)>,
+    /// The last fit sample's `e` (µs) taken, and the lone late ones held since.
+    fit_last_us: Option<f64>,
+    fit_late_held: usize,
     engaged: bool,
     /// Integrator = the learned frequency word (ppm), i.e. minus the oscillator's error vs the GM.
     i_ppm: f64,
@@ -493,6 +502,26 @@ impl PhaseLockCore {
         self.late_held = 0;
     }
 
+    /// dsync#160: the next windows' measurement is PROVISIONAL (the delay floor's ring holds too
+    /// few windows after a reset): a window that would anchor or re-anchor `D` on it is
+    /// held instead (no anchor, the word kept), so `D` is placed on a settled floor. Windows that
+    /// keep `D` (a continued time base included) are taken as usual.
+    pub fn set_provisional(&mut self, provisional: bool) {
+        self.provisional = provisional;
+    }
+
+    /// dsync#160: the next window's own sample for the open-loop fits (the boot fit, the
+    /// refinement, the grandmaster fit, the acquisition fit) and the frequency-step detector.
+    /// The measurement handed to [`Self::on_window`] may be a smoothed one (the delay floor, a
+    /// line through ~10 windows): its `e` is correlated from window to window, and a fit that
+    /// judges σ from its residuals as if each window were independent would trust a line that is
+    /// ppm off. A sample the caller judged `late` (a delayed window minimum) is held at the last
+    /// taken one, as is a lone sample more than [`LATE_WINDOW_JUMP_US`] off it (at most
+    /// [`LATE_WINDOW_MAX_HOLD`] in a row), as a late window is.
+    pub fn set_fit_sample(&mut self, sample_ns: i64, late: bool) {
+        self.fit_sample_ns = Some((sample_ns, late));
+    }
+
     /// The grandmaster (or the sync source) changed: re-anchor `D` from the next window, so the
     /// wall stays continuous in the new grandmaster's time base.
     pub fn request_rebase(&mut self) {
@@ -522,6 +551,28 @@ impl PhaseLockCore {
         dt_s: f64,
     ) -> WindowOutcome {
         let mut event = AnchorEvent::None;
+        let fit_sample_ns = self.fit_sample_ns.take();
+        if self.provisional {
+            // A continued time base (#158) keeps `D`: its residual is only retired along the pull.
+            // An unlocked anchor counts its confirming windows meanwhile (below).
+            let would_anchor = match self.anchor_ns {
+                None => ptp_locked,
+                Some(a) => {
+                    let off = median_diff_ns.wrapping_sub(a).abs();
+                    (self.rebase_pending && off > GM_CONTINUITY_NS)
+                        || off > DISCONTINUITY_NS
+                        || (ptp_locked && !self.engaged && off > REANCHOR_ON_ENGAGE_NS)
+                }
+            };
+            if would_anchor {
+                return WindowOutcome {
+                    freq_ppm: (ptp_locked && self.engaged).then_some(self.last_freq_ppm),
+                    error_ns: None,
+                    event,
+                    freq_step: None,
+                };
+            }
+        }
         // dsync#134: the first engagement after the early anchor holds it (within the hold).
         let first_engagement = ptp_locked && !self.engaged && !self.engaged_once;
         let anchor = match self.anchor_ns {
@@ -541,7 +592,8 @@ impl PhaseLockCore {
                             1
                         }
                     };
-                    if count < ANCHOR_CONFIRM_WINDOWS {
+                    // dsync#160: the confirming window anchors only on a settled floor.
+                    if count < ANCHOR_CONFIRM_WINDOWS || self.provisional {
                         return WindowOutcome {
                             freq_ppm: None,
                             error_ns: None,
@@ -632,6 +684,30 @@ impl PhaseLockCore {
             self.last_tracked_ns = None;
         }
         self.last_error_ns = Some(e_ns);
+        // dsync#160: the fits' own white sample, in the base `D` now holds (a lone late one
+        // held at the last taken, as a late window).
+        if event != AnchorEvent::None {
+            self.fit_last_us = None;
+            self.fit_late_held = 0;
+        }
+        let fit_e_us = fit_sample_ns.map(|(sample, judged_late)| {
+            let w = sample.wrapping_sub(self.anchor_ns.unwrap_or(anchor)) as f64 / 1_000.0;
+            match self.fit_last_us {
+                Some(prev) if judged_late => prev,
+                Some(prev)
+                    if (w - prev).abs() > LATE_WINDOW_JUMP_US
+                        && self.fit_late_held < LATE_WINDOW_MAX_HOLD =>
+                {
+                    self.fit_late_held += 1;
+                    prev
+                }
+                _ => {
+                    self.fit_late_held = 0;
+                    self.fit_last_us = Some(w);
+                    w
+                }
+            }
+        });
 
         // dsync#146: the acquisition's open-loop phase, for the first engagement's frequency.
         if !self.engaged_once && !ptp_locked {
@@ -642,7 +718,7 @@ impl PhaseLockCore {
             }
             // dsync#136: a late window enters the open-loop phase at the previous window's `e`
             // (it says nothing about the clock); the ∫ word dt stays exact.
-            let e_us = e_ns as f64 / 1_000.0;
+            let e_us = fit_e_us.unwrap_or(e_ns as f64 / 1_000.0);
             let e_fit = match self.boot_last_e_us {
                 Some(prev)
                     if (e_us - prev).abs() > LATE_WINDOW_JUMP_US
@@ -756,7 +832,7 @@ impl PhaseLockCore {
         // camera-box issue 1372: a confirmed grandmaster frequency step re-seeds the integrator.
         let freq_step = self
             .fstep
-            .observe(e_raw_us, dt_s, self.i_ppm)
+            .observe(fit_e_us.unwrap_or(e_raw_us), dt_s, self.i_ppm)
             .map(|est| self.follow_freq_step(est, e_raw_us));
         // dsync#136: a lone late window is held, not learned from (the escape valve takes a
         // jump that persists).
@@ -787,10 +863,10 @@ impl PhaseLockCore {
         let disturbed = event != AnchorEvent::None || freq_step.is_some();
         // A late window enters the boot fits' open-loop phase at the last taken `e` (it says
         // nothing about the clock); the ∫ word dt stays exact.
-        let e_fit = if late {
-            self.last_taken_e_us.unwrap_or(e_raw_us)
-        } else {
-            e_raw_us
+        let e_fit = match fit_e_us {
+            Some(w) => w,
+            None if late => self.last_taken_e_us.unwrap_or(e_raw_us),
+            None => e_raw_us,
         };
         if self.refine.is_some() {
             self.continue_refine(e_fit, dt_s, f, disturbed);

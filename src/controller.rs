@@ -1695,7 +1695,11 @@ where
         self.date_sync.arm_step_phase_probe();
         // Clear PTP sample windows to discard post-step transient samples
         self.sample_window.clear();
+        // dsync#160: the open window only. The delay floor's ring is NOT dropped: every step path
+        // moves it with `D` (`DateSync::note_step`), so its memory never depends on when a step
+        // landed (the two-clock bench's UTC-independence of the words).
         self.date_sync.window.clear();
+        self.date_sync.window_t1.clear();
         self.date_sync.pending_median_ns = None;
         self.date_sync.fresh_window = false;
         // Set grace period to skip PTP samples for 2s after step

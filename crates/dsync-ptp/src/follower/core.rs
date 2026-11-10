@@ -26,6 +26,7 @@
 //! base shift and would read as a ±500 ppm rate).
 
 use super::model::{ClockModel, VirtualClock};
+use crate::delay_floor::DelayFloor;
 use crate::freq_seed::{SeedJudge, SeedVerdict, SEED_JUDGE_WINDOWS};
 use crate::gm_filter::GmAllowlist;
 use crate::lock_gate::PhaseLockGate;
@@ -35,7 +36,7 @@ use crate::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
 use crate::ptp_rejoin::REJOIN_AFTER;
 use crate::rate_servo::{MonoNs, OffsetMeasurement, RateServo, ServoWord, WordDeviation};
 use crate::sync_port::{PortId, PortLock, PortVerdict};
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::net::Ipv4Addr;
 
@@ -98,6 +99,8 @@ struct PendingSync {
 
 #[derive(Clone, Copy, Debug)]
 struct Sample {
+    /// The grandmaster's send time.
+    t1_ns: i64,
     /// `t2 − t1` on the virtual clock.
     raw_ns: i64,
     /// `wall_rx − t2`: with `D_v` added, the wall's date offset.
@@ -115,6 +118,8 @@ pub struct FollowerCore {
     stale: bool,
     prev_t1_ns: i64,
     window: Vec<Sample>,
+    /// dsync#160: the window minima of the last ~10 s; their floor is the phase measurement.
+    floor: DelayFloor,
     last_window_t1_ns: Option<i64>,
     rate: RateServo<MonoNs>,
     core: PhaseLockCore,
@@ -153,6 +158,7 @@ impl FollowerCore {
             stale: false,
             prev_t1_ns: 0,
             window: Vec::with_capacity(WINDOW_SAMPLES),
+            floor: DelayFloor::new(),
             last_window_t1_ns: None,
             rate: RateServo::new(),
             core: PhaseLockCore::new(),
@@ -363,6 +369,7 @@ impl FollowerCore {
         self.recent_e.clear();
         self.pending.clear();
         self.window.clear();
+        self.floor.clear();
         self.prev_t1_ns = 0;
         self.last_window_t1_ns = None;
         self.rate.reset_measurement();
@@ -453,12 +460,22 @@ impl FollowerCore {
         };
         let t1 = body.precise_origin_timestamp.to_nanos();
         let t2 = self.clock.at(sync.mono_rx_ns);
+        // dsync#160: every sample's raw stamp pair, for an offline delay study of a jittery NIC
+        // (`RUST_LOG=dsync_ptp::follower=trace`).
+        trace!(
+            "[FOLLOWER] sample seq {} t1 {} mono_rx {} t2-t1 {}",
+            seq,
+            t1,
+            sync.mono_rx_ns,
+            t2.wrapping_sub(t1)
+        );
         let add = self.prev_t1_ns == 0 || (t1 - self.prev_t1_ns).abs() >= MIN_SAMPLE_SPACING_NS;
         self.prev_t1_ns = t1;
         if !add {
             return;
         }
         self.window.push(Sample {
+            t1_ns: t1,
             raw_ns: t2.wrapping_sub(t1),
             wall_minus_v_ns: sync.wall_rx_ns.wrapping_sub(t2),
         });
@@ -468,12 +485,20 @@ impl FollowerCore {
     }
 
     fn close_window(&mut self, t1_ns: i64, mono_ns: i64) {
-        let mut raw: Vec<i64> = self.window.iter().map(|s| s.raw_ns).collect();
+        let least = *self
+            .window
+            .iter()
+            .min_by_key(|s| s.raw_ns)
+            .expect("a window closes full");
+        let mid_t1 = self.window[0].t1_ns + (t1_ns - self.window[0].t1_ns) / 2;
         let mut wall: Vec<i64> = self.window.iter().map(|s| s.wall_minus_v_ns).collect();
         self.window.clear();
-        raw.sort_unstable();
         wall.sort_unstable();
-        let median = raw[raw.len() / 2];
+        // dsync#160: the delay floor of the last ~10 s, not this window's median — a one-sided
+        // receive delay (a USB NIC) moves a median, never the floor. Named `median` below for
+        // the service's shared window glue it feeds.
+        // The floor is read at the window's middle, where the median it replaces sat.
+        let median = self.floor.push_window(least.t1_ns, least.raw_ns, mid_t1);
         let wall_minus_v = wall[wall.len() / 2];
         self.windows += 1;
 
@@ -517,6 +542,11 @@ impl FollowerCore {
         let refine_before = self.core.boot_refine();
         let gm_refit_before = self.core.gm_refit();
         let locked = phase_window::engage_on(self.rate.is_locked, self.stale);
+        self.core
+            .set_provisional(self.floor.len() < crate::delay_floor::FLOOR_SLOPE_MIN_WINDOWS);
+        if let Some(s) = self.floor.fit_sample() {
+            self.core.set_fit_sample(s.ns, s.late);
+        }
         let out = self.core.on_window(median, locked, word_ppm, dt);
         if let (Some(f), None) = (self.core.boot_refine(), refine_before) {
             info!(

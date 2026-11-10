@@ -371,7 +371,7 @@ where
             // D moves with the wall, exactly: the phase lock sees no disturbance.
             let sign = if measurement.sign > 0 { 1 } else { -1 };
             let delta_ns = (measurement.offset.as_nanos() as i64).saturating_mul(sign);
-            self.date_sync.core.note_step(delta_ns);
+            self.date_sync.note_step(delta_ns);
             self.reset_ptp_measurement_after_step();
             self.ntp_offset_samples.clear();
             self.ntp_pending_step = None;

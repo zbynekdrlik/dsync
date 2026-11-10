@@ -237,7 +237,10 @@ where
             if self.date_sync.core.anchor_ns().is_some() {
                 let delta_ns =
                     (offset.as_nanos() as i64).saturating_mul(if sign > 0 { 1 } else { -1 });
-                self.date_sync.core.note_step(delta_ns);
+                self.date_sync.note_step(delta_ns);
+            } else {
+                // No D to move with: the floor's samples are on the old wall.
+                self.date_sync.drop_window();
             }
             self.reset_ptp_measurement_after_step();
             self.ntp_offset_samples.clear();

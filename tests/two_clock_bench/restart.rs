@@ -152,6 +152,7 @@ impl Bench<'_> {
             self.snapshot = None;
             let m = &mut self.boxes[0];
             m.core = PhaseLockCore::new();
+            m.floor = dsync_ptp::delay_floor::DelayFloor::new();
             m.follower = DateFollower::new();
             m.fresh = false;
             m.realign_after_outage = false;
@@ -214,6 +215,7 @@ impl Bench<'_> {
             {
                 b.stepped += err;
                 b.core.note_step(err);
+                b.floor.shift(err);
                 b.fresh = false;
                 b.local_steps.push((w, err));
                 if grace {

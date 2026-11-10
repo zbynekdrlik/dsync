@@ -65,6 +65,7 @@ use dsync::date_offset::{
     DEFAULT_STEP_BOUND_NS, MIN_STEP_LEAD_NS,
 };
 use dsync::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
+use dsync_ptp::delay_floor::DelayFloor;
 
 const NS: i64 = 1;
 const US: i64 = 1_000 * NS;
@@ -262,6 +263,8 @@ struct Box_ {
     slew_frac: f64,
     word_ppm: f64,
     core: PhaseLockCore,
+    /// dsync#160: the controller's delay-floor ring of window minima (`DateSync::floor`).
+    floor: DelayFloor,
     follower: DateFollower,
     /// The grandmaster the phase-lock anchor belongs to (the controller keeps `current_gm_uuid`).
     core_gm: u8,
@@ -461,6 +464,7 @@ impl<'s> Bench<'s> {
                 // The rate servo hands over a word that is 0.4 ppm off the truth.
                 word_ppm: -oscs[i] + 0.4,
                 core: PhaseLockCore::new(),
+                floor: DelayFloor::new(),
                 follower: DateFollower::new(),
                 core_gm: 1,
                 lag: (change_lags[i], reboot_lags[i]),
@@ -605,6 +609,8 @@ impl<'s> Bench<'s> {
             if let Some(anchor) = b.core.anchor_ns() {
                 if let Some(fold) = b.follower.take_completed_slew(anchor, b.wall_ns()) {
                     b.core.fold_anchor(anchor + fold);
+                    // The controller shifts the ring with the open window (`fold_completed_slew`).
+                    b.floor.shift(fold);
                 }
             }
         }
@@ -665,17 +671,23 @@ impl<'s> Bench<'s> {
                     b.wall_ns() - gm.ns + (b.delay_ns + noise).round() as i64 - deslew - capture
                 })
                 .collect();
-            samples.sort();
-            let median = samples[SAMPLES_PER_WINDOW / 2];
+            // dsync#160: the controller hands the servo the delay floor of its window minima
+            // (`DateSync::close_raw_window`); every sample here is taken at the window's end.
+            let window_min = *samples.iter().min().expect("a full window");
             if gm_id != b.core_gm {
                 // The controller's GRANDMASTER UUID CHANGED path. (A reboot under the same UUID
                 // is caught by the core's own time-base discontinuity check.)
+                b.floor.clear();
                 b.core.request_rebase();
                 b.core_gm = gm_id;
             }
             // #126: a restarting master has no PTP window either (its process is down or acquiring).
             let master_offline = i == 0 && (self.sc.master_offline_at(w) || master_down);
             if w < b.grace_until || master_offline {
+                if master_offline {
+                    // The offline edge voids the ring (`DateSync::drop_window`).
+                    b.floor.clear();
+                }
                 if master_offline && b.core.engaged() {
                     // No PTP, no phase lock: the controller's `on_ptp_offline_edge` holds the
                     // learned frequency through the free-run.
@@ -687,6 +699,12 @@ impl<'s> Bench<'s> {
                 b.words.push(b.word_ppm);
                 b.audit_rate(gm_ppm, judged);
                 continue;
+            }
+            let median = b.floor.push_window(gm.ns, window_min, gm.ns);
+            b.core
+                .set_provisional(b.floor.len() < dsync_ptp::delay_floor::FLOOR_SLOPE_MIN_WINDOWS);
+            if let Some(s) = b.floor.fit_sample() {
+                b.core.set_fit_sample(s.ns, s.late);
             }
             let out = b.core.on_window(median, true, b.word_ppm, WINDOW_S);
             b.fresh = true;
@@ -703,7 +721,11 @@ impl<'s> Bench<'s> {
             if let Some(fs) = out.freq_step {
                 b.freq_steps.push((w, fs.step_ppm));
             }
-            b.word_ppm = out.freq_ppm.expect("locked from the start: always engaged");
+            // dsync#160: a window held before the first anchor (a provisional floor) keeps the
+            // word, as the controller keeps the rate servo's.
+            if let Some(f) = out.freq_ppm {
+                b.word_ppm = f;
+            }
             b.words.push(b.word_ppm);
             b.audit_rate(gm_ppm, judged);
         }
@@ -717,7 +739,12 @@ impl<'s> Bench<'s> {
             return;
         }
         if self.authority.is_none() {
-            // The first window (and #126: the first lock after a restart).
+            // The first anchored window (and #126: the first lock after a restart); dsync#160:
+            // the core anchors once the delay floor holds 3 windows, as the controller's
+            // authority waits for `Anchored`.
+            if self.boxes[0].core.anchor_ns().is_none() {
+                return;
+            }
             self.master_builds_authority();
         }
         let grace = self.sc.grace;
