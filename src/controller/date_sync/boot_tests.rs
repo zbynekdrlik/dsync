@@ -684,7 +684,7 @@ fn the_end_of_the_wait_names_a_provisional_rejection_134() {
 fn a_saved_state_older_than_a_day_is_refused_at_start_and_the_boot_reading_steps_at_once_164() {
     let fleet = wall_now_ns() - PL_PTP_NOW_NS;
     let (_dir, path) = with_saved(saved_at(fleet, 2, 27 * 3_600 * S));
-    let (mut c, tx) = booted(steps_once(-2_207_163_100), true, Some(&path));
+    let (mut c, tx) = booted(steps_once(-2_207_163_000), true, Some(&path));
     assert!(
         !c.boot_step_deferred(),
         "a stale record is refused at start, not at the first PTP window"
@@ -703,10 +703,11 @@ fn a_saved_state_older_than_a_day_is_refused_at_start_and_the_boot_reading_steps
 /// is due, and on a master while a saved state waits for its first PTP window.
 #[test]
 fn the_wall_is_placed_only_once_the_boot_date_is_decided_164() {
-    // A follower: pending until its boot reading, placed once it is applied.
-    let (mut c, tx) = booted(steps_once(40 * MS), false, None);
+    // A follower: pending until its boot reading, placed once it is applied (2 s: above the
+    // 1 s boot-step threshold, so it steps).
+    let (mut c, tx) = booted(steps_once(2_000 * MS), false, None);
     assert!(c.wall_placement().is_err());
-    tx.send(Ok(one_offset(40_000, 1))).expect("send");
+    tx.send(Ok(one_offset(2_000_000, 1))).expect("send");
     c.service_boot_ntp();
     assert_eq!(c.wall_placement(), Ok("boot date set"));
 
