@@ -32,6 +32,7 @@ pub mod ptp_rejoin;
 /// sends.
 #[cfg(any(test, feature = "sim"))]
 pub mod ptp_tx;
+pub mod recv_errors;
 pub mod rate_servo;
 pub mod seqlock;
 pub mod spike_filter;
