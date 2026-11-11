@@ -704,7 +704,7 @@ impl<'s> Bench<'s> {
             b.core
                 .set_provisional(b.floor.len() < dsync_ptp::delay_floor::FLOOR_SLOPE_MIN_WINDOWS);
             if let Some(s) = b.floor.fit_sample() {
-                b.core.set_fit_sample(s.ns, s.late);
+                b.core.set_fit_sample(s.ns);
             }
             let out = b.core.on_window(median, true, b.word_ppm, WINDOW_S);
             b.fresh = true;

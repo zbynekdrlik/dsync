@@ -60,6 +60,9 @@ struct World {
     late_ns: i64,
     /// dsync#160: mbc's USB NIC (ASIX AX88179) — a one-sided receive delay on top of `jitter_ns`.
     usb_delay: bool,
+    /// dsync#160 (the v1.30.0 release run): every core gets the SAME receive instant (one kernel
+    /// stamp per datagram on one PC), core `i > 0` plus a few ns of conversion residue.
+    shared_rx: bool,
 }
 
 impl World {
@@ -80,6 +83,7 @@ impl World {
             late: std::collections::HashSet::new(),
             late_ns: 0,
             usb_delay: false,
+            shared_rx: false,
         }
     }
 
@@ -99,7 +103,8 @@ impl World {
         let t1 = self.gm_time(self.t);
         let sync = ptp_tx::sync(&self.gm, self.seq, t1);
         let follow_up = ptp_tx::follow_up(&self.gm, self.seq, t1);
-        for core in cores.iter_mut() {
+        let mut shared = None;
+        for (i, core) in cores.iter_mut().enumerate() {
             let late = if self.late.contains(&self.seq) {
                 self.late_ns
             } else {
@@ -110,11 +115,16 @@ impl World {
             } else {
                 0
             };
-            let rx = self.t
+            let mut rx = self.t
                 + LATENCY_NS
                 + late
                 + usb
                 + (self.jitter_ns * self.noise.gauss()).abs() as i64;
+            if self.shared_rx {
+                let first = *shared.get_or_insert(rx);
+                let k = (self.seq as i64).wrapping_mul(7_919) + i as i64 * 104_729;
+                rx = first + if i == 0 { 0 } else { k.rem_euclid(7) - 3 };
+            }
             let mono_rx = self.mono(rx);
             let wall_rx = mono_rx + self.wall_minus_mono;
             let packet = |data| RxPacket {
@@ -368,6 +378,30 @@ fn usb_world(seed: u64) -> World {
     world.jitter_ns = 5_000.0;
     world.usb_delay = true;
     world
+}
+
+/// dsync#160 (the v1.30.0 release run, `library_acceptance`: followers 3.3 µs apart): two
+/// followers on ONE PC read the same kernel stamp up to a few ns of conversion residue, so every
+/// decision they take must be continuous in its input. A late gate on the window minimum that
+/// HOLDS a sample turned a ns residue at its edge into a different fit, and the two drifted apart.
+#[test]
+fn two_followers_on_one_usb_pc_agree_within_a_microsecond_160() {
+    for seed in SEEDS {
+        let mut world = usb_world(seed);
+        world.shared_rx = true;
+        let mut a = new_core(&world);
+        let mut b = new_core(&world);
+        let mut worst = 0_i64;
+        while world.t < 300 * 1_000_000_000 {
+            world.tick(&mut [&mut a, &mut b]);
+            if world.t >= 60 * 1_000_000_000 {
+                if let (Some(ea), Some(eb)) = (world.error_ns(&a), world.error_ns(&b)) {
+                    worst = worst.max((ea - eb).abs());
+                }
+            }
+        }
+        assert!(worst <= 1_000, "seed {seed:#x}: followers {worst} ns apart");
+    }
 }
 
 /// dsync#160 (dstack, mbc-snv 9-10.11.2026): neither the service nor the follower locked on the

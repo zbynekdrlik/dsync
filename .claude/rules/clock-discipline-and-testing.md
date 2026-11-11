@@ -1449,9 +1449,18 @@ controller (`DateSync::close_raw_window`) and the bench glue alike. What was lea
   a line through ~10 windows, so its `e` is correlated from window to window. The #158 grandmaster
   fit read σ ~√10 too small, ppm-off fits passed σ ≤ 0.3, every box re-seeded on its own error:
   bench relative phase 60-68 µs (negative control: with the GM fit off the scenario passed). The open-loop fits and
-  the 1372 detector take the window's OWN minimum (`PhaseLockCore::set_fit_sample`), and a minimum
-  > 3 × 1.4826 MAD (≥ 5 µs) above the floor is held as late (`DelayFloor::fit_sample`); without that
-  gate the USB follower's ~20 % late minima moved the refinement.
+  the 1372 detector take the window's OWN minimum (`PhaseLockCore::set_fit_sample`), CLIPPED at
+  3 × 1.4826 MAD (≥ 5 µs) above the floor (`DelayFloor::fit_sample`); without that gate the USB
+  follower's ~20 % late minima moved the refinement. A CLIP, never a hold: the first version HELD a
+  late sample, a yes/no at the gate's edge, and two followers on one PC (the same stamp ± ns of
+  residue) took different fits: the v1.30.0 release run, `library_acceptance` 3.3 µs apart, after
+  the PR runs passed. Pinned by `two_followers_on_one_usb_pc_agree_within_a_microsecond_160` (the
+  follower world's `shared_rx`).
+- **The service's rate servo must read the floor too** (`process_sample_window`: `wrap1s(floor −
+  rate_folded) − calibration` under the phase lock). 1.29.0 gave it only to the phase lock: on
+  mbc's USB NIC the rate servo differentiated the median (±30-40 µs/s), never locked, and the
+  phase lock never engaged (e ~+500 µs open-loop). Follower tests cannot see a service-only path:
+  `usb_rate_tests.rs` drives the service through `process_settled_sync`.
 - **No anchor on a floor of < 3 windows** (`PhaseLockCore::set_provisional`): a locked first anchor,
   a `Rebased`, a > 1 s discontinuity and a re-engagement `Realigned` wait (the word held); an
   unlocked anchor keeps counting its confirmations and anchors on the confirming window; a

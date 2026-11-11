@@ -403,7 +403,7 @@ where
         let provisional = std::mem::take(&mut self.date_sync.pending_provisional);
         self.date_sync.core.set_provisional(provisional);
         if let Some(s) = self.date_sync.pending_fit.take() {
-            self.date_sync.core.set_fit_sample(s.ns, s.late);
+            self.date_sync.core.set_fit_sample(s.ns);
         }
         let out = self
             .date_sync
