@@ -160,6 +160,35 @@ fn a_boot_reports_lock_only_within_the_bound_and_never_flaps_146() {
 }
 
 /// A nightly date step (and a backward one) after the lock never moves [41].
+/// dsync#170: a seeded boot engages at `BOOT_SEEDED_ENGAGE_S` of acquisition ring, on the rate
+/// servo's word, which still carries its ACQ P term on a noisy per-window rate. At 30 µs jitter
+/// these boots (noise seed, seed offset in ppm) flapped [41] with the engagement at 6 s (and the
+/// first at 7 s); the 3-seed sweep above passed there by luck. None may flap at the constant.
+fn a_seeded_boot_waits_for_the_seeded_ring_170() {
+    const FLAPPED_AT_6_S: [(u64, f64); 8] = [
+        (0x5EED_0170_000C_0000, 0.0),
+        (0x5EED_0170_0012_0000, 0.0),
+        (0x5EED_0170_000C_0000, 4.0),
+        (0x5EED_0170_000C_0000, -4.0),
+        (0x5EED_0170_000C_0000, 7.0),
+        (0x5EED_0170_0002_0000, -7.0),
+        (0x5EED_0170_0001_0000, 15.0),
+        (0x5EED_0170_0000_0000, -15.0),
+    ];
+    for (noise, off) in FLAPPED_AT_6_S {
+        let label = format!("seeded {off:+} ppm off boot, 30 us jitter, noise {noise:x}");
+        let mut s = Sim::new(NATURAL_PPM, Some(LEARNED_PPM + off), noise, 30.0);
+        s.run_past_lock(400, 240);
+        assert_contract(&label, &s);
+        assert!(s.first_lock().is_some(), "{label}: never locked");
+        assert!(
+            s.transitions_after_first_lock().is_empty(),
+            "{label}: [41] flapped: {:?}",
+            s.transitions_after_first_lock()
+        );
+    }
+}
+
 fn a_date_step_never_moves_the_lock_146() {
     for jitter in JITTERS_US {
         for delta_ns in [800_000_000_i64, -600_000_000] {
@@ -275,6 +304,7 @@ fn a_phase_jump_while_engaged_is_re_aligned_in_seconds_146() {
 fn closed_loop_simulation_of_the_reported_lock_146() {
     let _heavy = crate::controller::heavy_test_guard();
     a_boot_reports_lock_only_within_the_bound_and_never_flaps_146();
+    a_seeded_boot_waits_for_the_seeded_ring_170();
     a_date_step_never_moves_the_lock_146();
     a_grandmaster_frequency_step_drops_the_lock_at_most_once_146();
     a_phase_jump_while_engaged_is_re_aligned_in_seconds_146();

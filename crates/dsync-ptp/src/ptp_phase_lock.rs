@@ -73,12 +73,15 @@
 //! Pure (explicit inputs, no I/O, no logging) so the controller and the bench run the same code.
 
 pub mod boot_fit;
+pub mod first_engagement;
 pub mod freq_step;
 
 pub use boot_fit::{
     BootFit, BootFreqFit, BOOT_FIT_MAX_SIGMA_PPM, BOOT_FIT_WINDOW_S, BOOT_REFINE_MIN_PPM,
     BOOT_REFINE_WINDOW_S, BOOT_RESEED_MIN_PPM,
 };
+
+pub use first_engagement::{FirstEngagement, BOOT_SEEDED_ENGAGE_S, FIRST_ENGAGEMENT_OVERDUE_S};
 
 pub use freq_step::{
     fit_line, fit_ring, split_test, FreqStepDetector, FreqStepEstimate, LineFit, RingFit,
@@ -365,6 +368,9 @@ pub struct PhaseLockCore {
     /// dsync#166: PTP seconds since the last time-base change while its gain boost runs
     /// ([`boosted_gains`]); `None` = the normal gains.
     boost_s: Option<f64>,
+    /// dsync#170: grandmaster seconds anchored and never engaged, counted outside the
+    /// acquisition ring (its restarts do not clear it): the first engagement's escape valve.
+    acquire_s: f64,
 }
 
 impl PhaseLockCore {
@@ -436,6 +442,26 @@ impl PhaseLockCore {
     /// (`None`: it started on the rate servo's word).
     pub fn engaged_on_fit(&self) -> Option<BootFit> {
         self.engaged_on_fit
+    }
+
+    /// dsync#134: the core has engaged at least once since start.
+    pub fn engaged_once(&self) -> bool {
+        self.engaged_once
+    }
+
+    /// dsync#170: may the FIRST engagement start now ([`first_engagement::readiness`]): the
+    /// acquisition ring alone, in grandmaster time, so two followers on one PC agree on the
+    /// window where the rate servo's lock split them by its own edge. `seed_accepted` = the
+    /// consumer's seed judge accepted a frequency seed. Asked only once anchored, before the
+    /// first engagement.
+    pub fn first_engagement_readiness(&self, seed_accepted: bool) -> FirstEngagement {
+        debug_assert!(self.anchor_ns.is_some() && !self.engaged_once);
+        first_engagement::readiness(
+            &self.boot_fit,
+            seed_accepted,
+            self.acquire_s,
+            self.rebase_pending,
+        )
     }
 
     /// dsync#146: the first engagement's integrator re-seeded once its ring was full.
@@ -768,6 +794,9 @@ impl PhaseLockCore {
 
         // dsync#146: the acquisition's open-loop phase, for the first engagement's frequency.
         if !self.engaged_once && !ptp_locked {
+            if dt_s.is_finite() {
+                self.acquire_s += dt_s.clamp(DT_MIN_S, DT_MAX_S);
+            }
             if event != AnchorEvent::None {
                 self.boot_fit.reset();
                 self.boot_last_e_us = None;

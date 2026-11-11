@@ -455,6 +455,20 @@ impl<T: ServoTime> RateServo<T> {
         }
     }
 
+    /// dsync#170: the phase lock engaged (on the acquisition fit or a seeded ring, possibly before
+    /// this servo counted its own lock): the servo takes the lock as its own, so the next
+    /// window's `word(.., hold_lock)` keeps it and the engagement is not handed straight back.
+    pub fn adopt_lock(&mut self) {
+        self.lock_stable_count = self.lock_stable_count.max(LOCK_STABLE_COUNT);
+        if !self.is_locked {
+            self.is_locked = true;
+            info!(
+                "[PTP] === LOCKED === (adopted at the phase lock's engagement) Adj:{:+.1}ppm",
+                self.drift_baseline_ppm
+            );
+        }
+    }
+
     /// dsync#142 / dsync#136: a seed the judge rejected. Put the servo where a cold start would
     /// be — the integrator and the lock count at 0, the smoothed rate rebased from the seeded
     /// word (`word_ppm`, the word in force over the judged window) to a word of 0, the spike

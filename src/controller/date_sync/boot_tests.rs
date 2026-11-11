@@ -83,13 +83,31 @@ fn booted_with(
 
 /// One PTP window whose median `t2 − t1` is `median`, then one loop iteration. `locked` is the
 /// rate servo's verdict (before it, the box is acquiring). Outside the 2 s grace of a step.
+/// dsync#170: grandmaster time between two hand-driven windows (see [`window`]).
+const GM_WINDOW_NS: i64 = 5_000_000_000;
+const _: () = assert!(
+    2.0 * GM_WINDOW_NS as f64 / 1e9 >= dsync_ptp::ptp_phase_lock::BOOT_SEEDED_ENGAGE_S
+        && GM_WINDOW_NS as f64 / 1e9 <= dsync_ptp::ptp_phase_lock::DT_MAX_S
+);
+
 fn window(c: &mut Ctl, median: i64, locked: bool) {
     c.current_gm_uuid = Some(PL_GM);
     c.last_ntp_step = None;
     c.rate.is_locked = locked;
     c.rate.lock_stable_count = if locked { LOCK_STABLE_COUNT } else { 0 };
+    // dsync#170: the FIRST engagement after an early anchor is no longer the rate lock but the
+    // acquisition ring's readiness, in grandmaster time. A `locked` window here is the one that
+    // engages: a seeded boot (an accepted seed) whose ring has run `BOOT_SEEDED_ENGAGE_S`. The
+    // windows are `GM_WINDOW_NS` of grandmaster time apart (the most the ring takes, `DT_MAX_S`).
+    // Readiness is judged on the windows BEFORE the engaging one, so the ring start (the anchor,
+    // or the first window after a step or an outage) plus two more windows let the next one
+    // engage; every test's unlocked run stays short of the 20 s fit.
+    c.freq_seed.accepted = locked;
     c.date_sync.pending_median_ns = Some(median);
-    c.date_sync.pending_t1_ns = wall_now_ns() - median;
+    c.date_sync.pending_t1_ns = c
+        .date_sync
+        .last_t1_ns
+        .map_or(wall_now_ns() - median, |t| t + GM_WINDOW_NS);
     c.servo_window_after(0.0, 0.5);
     assert_eq!(
         c.rate.is_locked, locked,
@@ -186,6 +204,36 @@ fn master_placed_at_the_first_windows(
     (c, tx, dir)
 }
 
+/// dsync#170 (review): the service's own glue. An anchored core whose rate servo is locked, with
+/// no accepted seed and a short acquisition ring, does NOT engage (the rate lock was the first
+/// engagement before #170); the same windows with the seed accepted engage at
+/// `BOOT_SEEDED_ENGAGE_S` of ring.
+#[test]
+fn a_bare_rate_lock_no_longer_makes_the_first_engagement_170() {
+    let (mut c, _tx) = booted(MockSystemClock::new(), false, None);
+    let d0 = wall_now_ns() - PL_PTP_NOW_NS;
+    first_windows(&mut c, d0);
+    let rate_locked_window = |c: &mut Ctl, seed_accepted: bool| {
+        c.current_gm_uuid = Some(PL_GM);
+        c.rate.is_locked = true;
+        c.rate.lock_stable_count = LOCK_STABLE_COUNT;
+        c.freq_seed.accepted = seed_accepted;
+        c.date_sync.pending_median_ns = Some(d0);
+        c.date_sync.pending_t1_ns = c.date_sync.last_t1_ns.expect("windows ran") + GM_WINDOW_NS;
+        c.servo_window_after(0.0, 0.5);
+    };
+    rate_locked_window(&mut c, false);
+    rate_locked_window(&mut c, false);
+    rate_locked_window(&mut c, false);
+    assert!(
+        !c.date_sync.core.engaged(),
+        "rate-locked, no seed, the ring short of the 20 s fit: not yet"
+    );
+    rate_locked_window(&mut c, true);
+    assert!(c.date_sync.core.engaged(), "the seeded ring is ready");
+    assert!(c.rate.is_locked);
+}
+
 #[test]
 fn a_master_with_a_saved_state_places_the_date_at_the_first_windows_with_one_step_134() {
     let fleet = wall_now_ns() - PL_PTP_NOW_NS;
@@ -259,7 +307,9 @@ fn a_master_without_a_saved_state_takes_its_boot_step_from_the_late_reading_then
     assert!(!st.date_offset_restored);
     assert_eq!(st.date_offset_ns, Some(d0 + 250 * MS));
     assert_eq!(st.date_offset_seq, Some(1));
-    // The lock 0.6 ms later: no second step.
+    // The lock 0.6 ms later: no second step. (dsync#170: the step restarted the window `dt`; the
+    // engagement waits for `BOOT_SEEDED_ENGAGE_S` of ring, one more acquisition window.)
+    window(&mut c, d0 + 250 * MS + 600 * 1_000, false);
     window(&mut c, d0 + 250 * MS + 600 * 1_000, false);
     window(&mut c, d0 + 250 * MS + 600 * 1_000, true);
     assert!(c.date_sync.core.engaged());
@@ -340,8 +390,10 @@ fn a_follower_joins_the_fleet_line_at_its_first_windows_and_never_steps_again_13
     // Its boot reading (the master's NTP server) comes after it: report-only.
     tx.send(Ok(one_offset(900, 1))).expect("send");
     c.service_boot_ntp();
-    // Acquisition drift, then the lock 1.3 ms off: held, no second step.
+    // Acquisition drift, then the lock 1.3 ms off: held, no second step. (dsync#170: the
+    // engagement waits for `BOOT_SEEDED_ENGAGE_S` of ring, one more acquisition window.)
     window(&mut c, fleet + 500 * 1_000, false);
+    window(&mut c, fleet + 900 * 1_000, false);
     window(&mut c, fleet + 1_300 * 1_000, true);
     assert!(c.date_sync.core.engaged());
     assert_eq!(c.date_sync.core.anchor_ns(), Some(fleet));
@@ -371,7 +423,11 @@ fn a_grandmaster_lost_before_the_lock_keeps_the_restored_date_and_takes_no_step_
     assert_eq!(c.date_sync.core.anchor_ns(), Some(fleet));
     // PTP back, the same time base: the free-run (60 µs) is absorbed, nothing stepped.
     c.ptp_offline = false;
+    // (dsync#170: the outage restarted the ring; the engagement waits for
+    // `BOOT_SEEDED_ENGAGE_S` of it, two more acquisition windows.)
     window(&mut c, fleet + 60 * 1_000, false);
+    window(&mut c, fleet + 63 * 1_000, false);
+    window(&mut c, fleet + 66 * 1_000, false);
     window(&mut c, fleet + 70 * 1_000, true);
     assert!(c.date_sync.core.engaged());
     assert_eq!(status(&c).date_offset_ns, Some(fleet));
@@ -506,7 +562,14 @@ fn a_restore_still_off_at_the_lock_is_rejected_then_and_the_boot_step_runs_134()
     c.service_boot_ntp();
     first_windows(&mut c, fleet + INTERIM_GM_NS);
     assert!(c.date_sync.authority.is_none());
-    // The lock on the same (other) time base: the rejection is final now.
+    // The lock on the same (other) time base: the rejection is final now. (dsync#170: the
+    // engagement needs `BOOT_SEEDED_ENGAGE_S` of ring after the anchor: two more windows.)
+    window(&mut c, fleet + INTERIM_GM_NS, false);
+    window(&mut c, fleet + INTERIM_GM_NS, false);
+    assert!(
+        c.date_sync.authority.is_none(),
+        "still provisional before the lock"
+    );
     window(&mut c, fleet + INTERIM_GM_NS, true);
     c.service_date_offset();
     let st = status(&c);

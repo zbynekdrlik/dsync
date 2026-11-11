@@ -279,16 +279,17 @@ impl DateSync {
     /// servo. The floor is read at the window's middle, where the median it replaces sat.
     pub(super) fn close_raw_window(&mut self, master_time_ns: i64) {
         let t1_of = |i: usize| self.window_t1.get(i).copied().unwrap_or(master_time_ns);
-        self.pending_median_ns = self
+        // dsync#170: the window's least sample carried along the floor's slope to the window's
+        // middle (`DelayFloor::push_samples`, as the follower): continuous in the stamps, where
+        // the argmin's own `t1` moved the point by the slope x a Sync period.
+        let first = t1_of(0);
+        let mid = first.wrapping_add(master_time_ns.wrapping_sub(first) / 2);
+        let samples = self
             .window
             .iter()
             .enumerate()
-            .min_by_key(|&(_, raw)| *raw)
-            .map(|(i, &raw)| {
-                let first = t1_of(0);
-                let mid = first.wrapping_add(master_time_ns.wrapping_sub(first) / 2);
-                self.floor.push_window(t1_of(i), raw, mid)
-            });
+            .map(|(i, &raw)| (t1_of(i), raw));
+        self.pending_median_ns = self.floor.push_samples(samples, mid);
         let pushed = self.pending_median_ns.is_some();
         self.pending_provisional =
             pushed && self.floor.len() < dsync_ptp::delay_floor::FLOOR_SLOPE_MIN_WINDOWS;
@@ -397,7 +398,12 @@ where
         let was_engaged = self.date_sync.core.engaged();
         let reseeded_before = self.date_sync.core.boot_reseed().is_some();
         let gm_refit_before = self.date_sync.core.gm_refit();
-        let locked = phase_window::engage_on(self.rate.is_locked, self.ptp_offline);
+        let locked = phase_window::engage_on(
+            &self.date_sync.core,
+            self.rate.is_locked,
+            self.freq_seed.accepted,
+            self.ptp_offline,
+        );
         // dsync#160: no anchor on a floor read from fewer than 3 windows after a ring reset; the
         // fits take the window's own minimum.
         let provisional = std::mem::take(&mut self.date_sync.pending_provisional);
@@ -451,6 +457,10 @@ where
         // bumpless.
         if let Some(baseline) = close.baseline_ppm {
             self.rate.drift_baseline_ppm = baseline;
+        }
+        // dsync#170: an engagement on the fit can come before the rate servo's own lock.
+        if close.adopt_rate_lock {
+            self.rate.adopt_lock();
         }
         match out.freq_ppm {
             Some(word) => {

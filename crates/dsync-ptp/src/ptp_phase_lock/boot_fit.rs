@@ -107,6 +107,12 @@ impl BootFreqFit {
         }
     }
 
+    /// Seconds of grandmaster time since the ring started (a sum of window `dt`s): the same in
+    /// every follower on one PC, whatever their few-ns stamp residue (dsync#170).
+    pub fn clock_s(&self) -> f64 {
+        self.clock_s
+    }
+
     /// The fit has run for the whole fit window. Judged on the time since the ring started, not
     /// on the ring's span: trimmed to the window, the ring spans it exactly only when the window
     /// spacing divides it — the Dante grandmaster's ~1.016 s windows left 20 windows over 19.3 s
