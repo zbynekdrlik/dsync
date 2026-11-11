@@ -242,16 +242,22 @@ impl SpikeFilter {
                 raw_rate // Accept the value
             } else {
                 self.rejected_spikes += 1;
-                debug!(
-                    "[Spike] Rejected: {:+.1}us/s (median={:+.1}, MAD={:.2}, k={:.1}, threshold={:.1})",
-                    raw_rate, median, mad, k, threshold
-                );
                 // dsync#170: the rejection TAPERS from the raw value at the threshold to the
                 // median at twice it, so the kept value is continuous in the raw rate. Two
                 // followers on one PC read the same rate ± a few ns of stamp residue; an
                 // all-or-nothing reject at the threshold kept it in one and replaced it in the
-                // other (0.85 µs/s apart in the smoothed rate, the rate lock windows apart).
+                // other (0.85 µs/s apart in the smoothed rate, the rate lock windows apart). The
+                // consecutive count (the step-change escape) stays a count past the threshold.
                 let keep = (2.0 - deviation / threshold).clamp(0.0, 1.0);
+                debug!(
+                    "[Spike] Rejected: {:+.1}us/s, {:.0}% kept (median={:+.1}, MAD={:.2}, k={:.1}, threshold={:.1})",
+                    raw_rate,
+                    keep * 100.0,
+                    median,
+                    mad,
+                    k,
+                    threshold
+                );
                 median + keep * (raw_rate - median)
             }
         } else {
@@ -484,6 +490,56 @@ mod tests {
     // ========================================================================
     // BASIC FUNCTIONALITY TESTS
     // ========================================================================
+
+    /// dsync#170: a filter past its warmup on a steady rate (median 0).
+    fn steady() -> SpikeFilter {
+        let mut f = SpikeFilter::new();
+        for i in 0..20 {
+            f.filter(if i % 2 == 0 { 0.5 } else { -0.5 }, FilterMode::Lock);
+        }
+        f
+    }
+
+    /// dsync#170: the kept value is continuous in the raw rate: the raw value up to the
+    /// threshold, tapered to the median at twice it. Two followers on one PC read the same rate
+    /// a few ns of stamp residue apart; an all-or-nothing reject kept it in one and replaced it
+    /// in the other.
+    #[test]
+    fn the_kept_rate_is_continuous_across_the_spike_threshold_170() {
+        let thr = {
+            let mut f = steady();
+            f.filter(1_000.0, FilterMode::Lock);
+            f.last_threshold
+        };
+        assert!(thr > 0.0);
+        let kept = |raw: f64| steady().filter(raw, FilterMode::Lock).value;
+        let step = thr / 1_000.0;
+        let mut prev = kept(0.0);
+        let mut raw = step;
+        while raw < 3.0 * thr {
+            let v = kept(raw);
+            assert!(
+                (v - prev).abs() <= 3.0 * step,
+                "a jump at {raw}: {prev} -> {v} (threshold {thr})"
+            );
+            prev = v;
+            raw += step;
+        }
+        // The ends: raw just past the threshold, the median past twice it.
+        let f = |raw: f64| {
+            let mut f = steady();
+            let r = f.filter(raw, FilterMode::Lock);
+            (r.value, f.last_median, f.last_threshold)
+        };
+        let (v, median, t) = f(1.01 * thr);
+        let raw = 1.01 * thr;
+        assert!(
+            (v - raw).abs() <= 0.05 * (raw - median).abs(),
+            "{v} vs raw {raw} (median {median}, threshold {t})"
+        );
+        let (v, median, _) = f(2.5 * thr);
+        assert!((v - median).abs() < 1e-9, "{v} vs median {median}");
+    }
 
     #[test]
     fn test_new_filter_defaults() {

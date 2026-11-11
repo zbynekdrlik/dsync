@@ -282,15 +282,14 @@ impl DateSync {
         // dsync#170: the window's least sample carried along the floor's slope to the window's
         // middle (`DelayFloor::push_samples`, as the follower): continuous in the stamps, where
         // the argmin's own `t1` moved the point by the slope x a Sync period.
-        let samples: Vec<(i64, i64)> = self
+        let first = t1_of(0);
+        let mid = first.wrapping_add(master_time_ns.wrapping_sub(first) / 2);
+        let samples = self
             .window
             .iter()
             .enumerate()
-            .map(|(i, &raw)| (t1_of(i), raw))
-            .collect();
-        let first = t1_of(0);
-        let mid = first.wrapping_add(master_time_ns.wrapping_sub(first) / 2);
-        self.pending_median_ns = self.floor.push_samples(&samples, mid);
+            .map(|(i, &raw)| (t1_of(i), raw));
+        self.pending_median_ns = self.floor.push_samples(samples, mid);
         let pushed = self.pending_median_ns.is_some();
         self.pending_provisional =
             pushed && self.floor.len() < dsync_ptp::delay_floor::FLOOR_SLOPE_MIN_WINDOWS;

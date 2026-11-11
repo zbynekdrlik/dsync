@@ -121,8 +121,9 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
   ns assumed above): they engaged a window apart, ~1.25 µs at the [41] lock whatever the start
   error, `library_acceptance` 1.7-4.9 µs in ~1 run of 10. Now `phase_window::engage_on` asks the
   acquisition ring (`first_engagement_readiness`: full by `clock_s` and σ ≤ 1 ppm, or an accepted
-  seed and `BOOT_SEEDED_ENGAGE_S` = 8 s of ring); the rate lock decides only a refused fit, before
-  the anchor and every re-engagement, and is ADOPTED at the engagement. The window minimum
+  seed and `BOOT_SEEDED_ENGAGE_S` = 8 s of ring, `ptp_phase_lock/first_engagement.rs`); the rate
+  lock decides only a refused fit, a ring that kept restarting for 60 s, before the anchor and
+  every re-engagement, and is ADOPTED at the engagement. The window minimum
   (`DelayFloor::push_samples`) and the spike filter (tapered) are continuous too. The lesson, again:
   list EVERY all-or-nothing decision between the stamps and the published time (an argmin, a
   filter's reject, a lock count) and make each continuous or move it onto grandmaster time; a

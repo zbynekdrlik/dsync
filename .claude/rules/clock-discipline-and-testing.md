@@ -1403,13 +1403,28 @@ start. What was learned:
   all-or-nothing decisions on the residue became continuous: the window minimum
   (`DelayFloor::push_samples`, every sample carried along the floor slope to the window middle,
   in the follower AND the service) and the spike filter (tapered from the raw rate at the
-  threshold to the median at 2×). Two-core model, 24 seeds, ±40 ns: 6 of 24 > 1 µs once locked
-  before, worst 423 ns after, the same engagement window in 24 of 24.
+  threshold to the median at 2×; its consecutive-spike COUNT, the step-change escape, is still a
+  count past the threshold, and the legacy discipline's words are no longer bit-identical to
+  pre-1.31). Two-core model, 24 seeds, ±40 ns: 6 of 24 > 1 µs once locked before; after, one
+  measured run (not asserted beyond the 1 µs): worst 423 ns, the same engagement window in 24 of
+  24. The readiness lives in `ptp_phase_lock/first_engagement.rs`.
+  - **Two guards from the review.** `NotYet` while a re-anchor is pending (its window restarts
+    the ring and would drop the fit). And an escape valve: the ring restarts on every anchor
+    event, a window gap beyond `DT_MAX_S` and every outage, so after
+    `FIRST_ENGAGEMENT_OVERDUE_S` (60 s) anchored and never engaged, counted OUTSIDE the ring
+    (`acquire_s`), the rate lock decides again (`Overdue`). A gate that can wait for ever needs
+    one (the #76 lesson).
+  - **The adopted rate lock moves the readers of `is_locked` earlier** (the #146 question: does
+    it mean "the rate servo acquired" or "the clock is good"?): `ntp_discipline_due`, the
+    server-mode step threshold and agreement tolerance, `ever_locked` (the alarm's acquisition
+    grace), the "PROD" status name and `ptp_liveness`. All read "acquired", and a σ ≤ 1 ppm fit
+    is at least that. The drift-file save reads [41] (`reported_lock`), untouched.
   - **`BOOT_SEEDED_ENGAGE_S` is 8 s, not the 2 s first designed.** The phase lock starts on the
     rate servo's word, which carries its ACQ P term on a per-window rate: at 30 µs jitter it is
     still ppm off a few seconds after the anchor. 20 noise seeds × 7 seed offsets × 3 jitters:
     [41] flapped in 1-15 of 20 at 2 / 4 / 6 s (7 s: 1), none at 8 s, none over 40 fresh noise
-    seeds; the rate-lock law: none. Starting on the servo's baseline (no P term) instead cured
+    seeds; the rate-lock law: none. `lock_sim_tests`' `a_seeded_boot_waits_for_the_seeded_ring_170`
+    replays the 8 boots that flapped at 6 s (fails at 7 s). Starting on the servo's baseline (no P term) instead cured
     the near seeds and broke the 15 ppm-off ones (the baseline lags). Judge a fixed-time trigger
     by a flap COUNT over many noise seeds: the committed 3-seed sim passed at 4 and 6 s and failed
     at 3 and 5 s, a lottery.

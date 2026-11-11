@@ -204,6 +204,36 @@ fn master_placed_at_the_first_windows(
     (c, tx, dir)
 }
 
+/// dsync#170 (review): the service's own glue. An anchored core whose rate servo is locked, with
+/// no accepted seed and a short acquisition ring, does NOT engage (the rate lock was the first
+/// engagement before #170); the same windows with the seed accepted engage at
+/// `BOOT_SEEDED_ENGAGE_S` of ring.
+#[test]
+fn a_bare_rate_lock_no_longer_makes_the_first_engagement_170() {
+    let (mut c, _tx) = booted(MockSystemClock::new(), false, None);
+    let d0 = wall_now_ns() - PL_PTP_NOW_NS;
+    first_windows(&mut c, d0);
+    let rate_locked_window = |c: &mut Ctl, seed_accepted: bool| {
+        c.current_gm_uuid = Some(PL_GM);
+        c.rate.is_locked = true;
+        c.rate.lock_stable_count = LOCK_STABLE_COUNT;
+        c.freq_seed.accepted = seed_accepted;
+        c.date_sync.pending_median_ns = Some(d0);
+        c.date_sync.pending_t1_ns = c.date_sync.last_t1_ns.expect("windows ran") + GM_WINDOW_NS;
+        c.servo_window_after(0.0, 0.5);
+    };
+    rate_locked_window(&mut c, false);
+    rate_locked_window(&mut c, false);
+    rate_locked_window(&mut c, false);
+    assert!(
+        !c.date_sync.core.engaged(),
+        "rate-locked, no seed, the ring short of the 20 s fit: not yet"
+    );
+    rate_locked_window(&mut c, true);
+    assert!(c.date_sync.core.engaged(), "the seeded ring is ready");
+    assert!(c.rate.is_locked);
+}
+
 #[test]
 fn a_master_with_a_saved_state_places_the_date_at_the_first_windows_with_one_step_134() {
     let fleet = wall_now_ns() - PL_PTP_NOW_NS;

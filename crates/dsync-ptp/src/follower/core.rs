@@ -491,9 +491,7 @@ impl FollowerCore {
 
     fn close_window(&mut self, t1_ns: i64, mono_ns: i64) {
         let mid_t1 = self.window[0].t1_ns + (t1_ns - self.window[0].t1_ns) / 2;
-        let samples: Vec<(i64, i64)> = self.window.iter().map(|s| (s.t1_ns, s.raw_ns)).collect();
         let mut wall: Vec<i64> = self.window.iter().map(|s| s.wall_minus_v_ns).collect();
-        self.window.clear();
         wall.sort_unstable();
         // dsync#160: the delay floor of the last ~10 s, not this window's median — a one-sided
         // receive delay (a USB NIC) moves a median, never the floor. Named `median` below for
@@ -502,8 +500,9 @@ impl FollowerCore {
         // dsync#170: the window's least sample carried to its middle (continuous in the stamps).
         let median = self
             .floor
-            .push_samples(&samples, mid_t1)
+            .push_samples(self.window.iter().map(|s| (s.t1_ns, s.raw_ns)), mid_t1)
             .expect("a window closes full");
+        self.window.clear();
         let wall_minus_v = wall[wall.len() / 2];
         self.windows += 1;
 

@@ -27,7 +27,8 @@ pub fn window_dt(last_t1_ns: &mut Option<i64>, t1_ns: i64, fallback_s: f64) -> f
 /// ([`PhaseLockCore::first_engagement_readiness`]), not the rate servo's lock: two followers on
 /// one PC read the rate a few ns of stamp residue apart, its lock count split them by a window,
 /// and one window of engagement split leaves ~1.25 µs between them at the gate's lock. A fit the
-/// ring refuses (a noisy box) falls back to the rate lock. Before the anchor (a locked window
+/// ring refuses (a noisy box), or a ring that keeps restarting for
+/// `FIRST_ENGAGEMENT_OVERDUE_S`, falls back to the rate lock. Before the anchor (a locked window
 /// anchors at once, #134) and for every re-engagement after it (an outage, a lock loss) the rate
 /// lock decides, as before.
 pub fn engage_on(
@@ -44,7 +45,7 @@ pub fn engage_on(
     }
     match core.first_engagement_readiness(seed_accepted) {
         FirstEngagement::Fit | FirstEngagement::Seeded => true,
-        FirstEngagement::Refused => rate_locked,
+        FirstEngagement::Refused | FirstEngagement::Overdue => rate_locked,
         FirstEngagement::NotYet => false,
     }
 }
@@ -234,6 +235,37 @@ mod tests {
         );
         assert!(engage_on(&noisy, true, false, false));
         assert!(!engage_on(&noisy, false, false, false));
+    }
+
+    /// dsync#170 (review): a ring that keeps restarting (here a window gap beyond `DT_MAX_S`
+    /// every 10 s) never becomes ready; after `FIRST_ENGAGEMENT_OVERDUE_S` anchored the rate lock
+    /// decides the first engagement again, as before #170.
+    #[test]
+    fn a_ring_that_keeps_restarting_hands_the_first_engagement_back_to_the_rate_lock_170() {
+        let mut core = acquiring(crate::ptp_phase_lock::ANCHOR_CONFIRM_WINDOWS, 1.0);
+        let mut acquired_s = 0.0;
+        while acquired_s < crate::ptp_phase_lock::FIRST_ENGAGEMENT_OVERDUE_S - 10.0 {
+            assert!(!engage_on(&core, true, false, false), "at {acquired_s}s");
+            for _ in 0..10 {
+                core.on_window(5_000_000, false, 0.0, 0.5);
+            }
+            core.on_window(5_000_000, false, 0.0, 6.0);
+            acquired_s += 10.0;
+        }
+        assert_eq!(
+            core.first_engagement_readiness(false),
+            FirstEngagement::NotYet
+        );
+        for _ in 0..30 {
+            core.on_window(5_000_000, false, 0.0, 0.5);
+            core.on_window(5_000_000, false, 0.0, 6.0);
+        }
+        assert_eq!(
+            core.first_engagement_readiness(false),
+            FirstEngagement::Overdue
+        );
+        assert!(engage_on(&core, true, false, false));
+        assert!(!engage_on(&core, false, false, false));
     }
 
     /// dsync#170: once engaged, every later engagement (after an outage or a lock loss) is the
