@@ -34,6 +34,9 @@ pub(super) struct FreqSeed {
     pub(super) source: String,
     /// Judging the seed (`Some` from the seed until the verdict).
     pub(super) judge: Option<SeedJudge>,
+    /// dsync#170: the judge accepted the seed (the first engagement then waits only
+    /// `BOOT_SEEDED_ENGAGE_S` of acquisition ring, not the 20 s fit).
+    pub(super) accepted: bool,
     /// The next save while LOCKED; `None` while not locked (set at the lock).
     pub(super) next_save: Option<Instant>,
     /// The servo's word (`applied_freq_ppm`) written at the end of the last window, and the one
@@ -123,6 +126,7 @@ where
         self.freq_seed.judge = None;
         match verdict {
             SeedVerdict::Accepted { mean_rate_ppm } => {
+                self.freq_seed.accepted = true;
                 info!(
                     "[FREQ-SEED] accepted {:+.3}ppm: over the first {} measured windows the \
                      oscillator runs {:+.1}us/s off it",

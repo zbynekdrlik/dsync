@@ -116,6 +116,31 @@ impl DelayFloor {
         }
     }
 
+    /// dsync#170: a window closed with these samples `(t1, raw t2 − t1)`: its least-delayed
+    /// sample, every sample first carried along the floor's slope to `read_t1_ns`, enters the
+    /// ring AT `read_t1_ns`. Returns the floor there ([`Self::push_window`]), `None` for no
+    /// sample.
+    ///
+    /// The point is continuous in every stamp. Taking the least raw sample at ITS own `t1` was
+    /// not: two samples a few ns apart are 125 ms apart in `t1`, so which one is "least" moved
+    /// the point by the slope × 125 ms (~0.5 µs while the rate servo acquires), and two
+    /// followers on one PC (the same stamps ± ns of conversion residue) took different points.
+    /// Carried along the slope, near-equal samples give near-equal points at one fixed time.
+    pub fn push_samples(
+        &mut self,
+        samples: impl IntoIterator<Item = (i64, i64)>,
+        read_t1_ns: i64,
+    ) -> Option<i64> {
+        let slope = self.slope;
+        let least = samples
+            .into_iter()
+            .map(|(t1, raw)| {
+                raw.wrapping_add((slope * read_t1_ns.wrapping_sub(t1) as f64).round() as i64)
+            })
+            .min()?;
+        Some(self.push_window(read_t1_ns, least, read_t1_ns))
+    }
+
     /// A window closed: its least-delayed sample `min_ns`, taken at grandmaster time `min_t1_ns`.
     /// Returns the floor at `read_t1_ns` (this window included) — the window's middle, where the
     /// median it replaces sat (the boot fit and the #142 judge integrate the word to there).
@@ -263,6 +288,67 @@ mod tests {
     use super::*;
 
     const S: i64 = 1_000_000_000;
+
+    /// dsync#170: a floor whose ring holds a ramp of `slope` ns/ns (window minima 1 s apart).
+    fn ramped(slope: f64) -> DelayFloor {
+        let mut f = DelayFloor::default();
+        for k in 0..12_i64 {
+            let y = 7_000 + (slope * (k * S) as f64).round() as i64;
+            f.push_window(k * S, y, k * S);
+        }
+        assert!((f.slope() - slope).abs() < 1e-9, "slope {}", f.slope());
+        f
+    }
+
+    /// dsync#170: the window's point is continuous in its samples. Two near-equal raw samples
+    /// 125 ms apart (the slope is 20 ppm: 2.5 µs over them): whichever is "least" by a ns, the
+    /// point the window adds to the ring, carried along the slope to the window's middle, moves
+    /// by about that ns. The argmin at its own `t1` (`push_window`) put the point 125 ms apart
+    /// on the time axis: 2.5 µs apart along the slope.
+    #[test]
+    fn the_window_point_is_continuous_in_the_samples_170() {
+        let slope = 20e-6;
+        let read = 12 * S + 250_000_000;
+        let raw = 7_000 + (slope * (12 * S) as f64).round() as i64;
+        let (t_a, t_b) = (12 * S + 125_000_000, 12 * S + 250_000_000);
+        let at_read = |f: &DelayFloor| {
+            let &(t, y) = f.ring.back().expect("pushed");
+            y + (slope * (read - t) as f64).round() as i64
+        };
+        let (mut a, mut b) = (ramped(slope), ramped(slope));
+        a.push_samples([(t_a, raw + 1), (t_b, raw)], read);
+        b.push_samples([(t_a, raw), (t_b, raw + 1)], read);
+        assert!(
+            (at_read(&a) - at_read(&b)).abs() <= 2,
+            "points {} vs {}",
+            at_read(&a),
+            at_read(&b)
+        );
+        let (mut c, mut d) = (ramped(slope), ramped(slope));
+        c.push_window(t_b, raw, read);
+        d.push_window(t_a, raw, read);
+        assert!(
+            (at_read(&c) - at_read(&d)).abs() >= 2_000,
+            "the argmin's point moved {} ns",
+            at_read(&c) - at_read(&d)
+        );
+    }
+
+    /// dsync#170: one sample is carried along the slope to the read time; none is no point.
+    #[test]
+    fn one_sample_is_carried_to_the_read_time_and_none_is_no_point_170() {
+        let slope = 20e-6;
+        let mut f = ramped(slope);
+        let t1 = 12 * S;
+        let read = t1 + 500_000_000;
+        let raw = 7_000 + (slope * t1 as f64).round() as i64;
+        let mut g = f.clone();
+        assert_eq!(
+            f.push_samples([(t1, raw)], read),
+            Some(g.push_window(read, raw + 10_000, read))
+        );
+        assert_eq!(f.push_samples([], read), None);
+    }
 
     /// The selection gives the sorted order's k-th value with every smaller one before it, for
     /// every k and length (duplicates included): the slope's median relies on both.

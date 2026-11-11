@@ -63,6 +63,8 @@ struct World {
     /// dsync#160 (the v1.30.0 release run): every core gets the SAME receive instant (one kernel
     /// stamp per datagram on one PC), core `i > 0` plus a few ns of conversion residue.
     shared_rx: bool,
+    /// dsync#170: the half-width (ns) of that residue: core `i > 0` gets −r…+r ns.
+    rx_residue_ns: i64,
     /// dsync#166: the grandmaster's rate MOVING — an extra rate (ppm) on top of `gm_ppm`, a
     /// function of the seconds since `gm_profile_t0`, accumulated per tick into `gm_extra_ns`.
     gm_profile: Option<fn(f64) -> f64>,
@@ -89,6 +91,7 @@ impl World {
             late_ns: 0,
             usb_delay: false,
             shared_rx: false,
+            rx_residue_ns: 3,
             gm_profile: None,
             gm_profile_t0: 0,
             gm_extra_ns: 0.0,
@@ -141,7 +144,13 @@ impl World {
             if self.shared_rx {
                 let first = *shared.get_or_insert(rx);
                 let k = (self.seq as i64).wrapping_mul(7_919) + i as i64 * 104_729;
-                rx = first + if i == 0 { 0 } else { k.rem_euclid(7) - 3 };
+                let r = self.rx_residue_ns;
+                rx = first
+                    + if i == 0 {
+                        0
+                    } else {
+                        k.rem_euclid(2 * r + 1) - r
+                    };
             }
             let mono_rx = self.mono(rx);
             let wall_rx = mono_rx + self.wall_minus_mono;
@@ -324,6 +333,79 @@ fn a_follower_whose_windows_do_not_divide_the_fit_window_locks_and_holds_136() {
     }
 }
 
+/// dsync#170: since the cold first engagement waits for the full 20 s fit, the cold twin above
+/// engages on a full ring and no longer reaches the short-ring path this incident was about. A
+/// SEEDED boot still engages on a short ring (`BOOT_SEEDED_ENGAGE_S`) on the rate servo's word,
+/// here the probe's ~2.4 ppm off; with 254 ms Syncs the ring never spans 20 s exactly, and the
+/// continued fit must still re-seed once it has RUN 20 s (`clock_s`), or the PI walks `e` off.
+#[test]
+fn a_seeded_follower_whose_windows_do_not_divide_the_fit_window_re_seeds_and_holds_170() {
+    for seed in SEEDS {
+        let mut world = World::new(seed, 35_000.0);
+        world.sync_period_ns = 254_000_000;
+        world.gm_ppm = 0.0;
+        world.pc_ppm = 5.4;
+        let mut core = new_core(&world).with_seed(-5.4 + 2.4);
+        let locked_at = run_to_lock(&mut world, &mut core, 120);
+        assert!(
+            core.core.engaged_on_fit().is_none(),
+            "seed {seed:#x}: a seeded boot engages on the short ring"
+        );
+        let mut worst = 0;
+        for i in 0..(240 * 4) {
+            world.tick(&mut [&mut core]);
+            assert!(
+                core.model().locked,
+                "seed {seed:#x}: locked at {locked_at}s, lost at {}s (e {:?})",
+                world.t as f64 / 1e9,
+                core.model().offset_ns
+            );
+            if i >= 120 * 4 {
+                worst = worst.max(world.error_ns(&core).expect("anchored").abs());
+            }
+        }
+        let reseed = core
+            .core
+            .boot_reseed()
+            .unwrap_or_else(|| panic!("seed {seed:#x}: the continued fit never re-seeded"));
+        assert!(
+            (reseed.freq_ppm + 5.4).abs() < 1.0,
+            "seed {seed:#x}: re-seeded on {}",
+            reseed.freq_ppm
+        );
+        let mean_jitter_ns = (35_000.0 * (2.0 / std::f64::consts::PI).sqrt()) as i64;
+        assert!(
+            worst <= LOCK_BOUND_NS + mean_jitter_ns,
+            "seed {seed:#x}: settled error {worst}ns"
+        );
+    }
+}
+
+/// dsync#170, a risk the design named: a USB NIC's acquisition fit is noisier (σ ~0.1-2 ppm
+/// against the 1 ppm gate), and a refused fit falls back to the rate lock. The model's USB world
+/// engages on the fit.
+#[test]
+fn a_cold_follower_on_a_usb_nic_engages_on_the_acquisition_fit_170() {
+    for seed in SEEDS {
+        let mut world = usb_world(seed);
+        let mut core = new_core(&world);
+        while !core.engaged() {
+            assert!(
+                world.t < 120 * 1_000_000_000,
+                "seed {seed:#x}: never engaged"
+            );
+            world.tick(&mut [&mut core]);
+        }
+        // Reached `Fit`, not `Refused` (its accuracy, ~1 ppm here, is the refinement's job:
+        // `a_follower_on_a_usb_nic_locks_on_the_delay_floor_and_holds_the_line_160`).
+        assert!(
+            core.core.engaged_on_fit().is_some(),
+            "seed {seed:#x}: the fit was refused (the boot fit {:?})",
+            core.core.boot_fit_line()
+        );
+    }
+}
+
 /// dsync#136, the mbc-snv probe: the Dante NIC there is a USB adapter, and now and then 3 of a
 /// window's 4 Syncs arrive ~0.5 ms late. That window's median `e` reads +455…+504 µs, and the PI's
 /// proportional term turned each into an 8-10 µs move of the follower's line (the probe's
@@ -420,6 +502,50 @@ fn two_followers_on_one_usb_pc_agree_within_a_microsecond_160() {
         }
         assert!(worst <= 1_000, "seed {seed:#x}: followers {worst} ns apart");
     }
+}
+
+/// dsync#170 (`library_acceptance`, ~1 run in 12 on dev1 and master: followers 1.7-4.9 µs apart):
+/// on dev1 the two followers' samples differ by up to ~50 ns (the stamp conversion's residue on
+/// a host whose wall slews), not 3. Every decision on that residue must be continuous: the
+/// window minimum's grandmaster TIME (the argmin of two near-equal samples, 125 ms apart, moved
+/// the floor by slope × 125 ms ≈ 0.5 µs) and the rate servo's spike filter (a rate at its
+/// threshold kept by one follower, replaced by the median in the other) each moved one follower's
+/// rate lock — the phase lock's engagement — one or more windows, and the boot pulls then ran
+/// µs apart for a minute. Even with both continuous, the rate lock itself (|rate| < 5 µs/s
+/// counted to `LOCK_STABLE_COUNT`) is a step on that residue: one window of engagement split
+/// leaves ≈ 50 µs × dt/τ ≈ 1.25 µs at the gate's lock, whatever the start error. So the first
+/// engagement is keyed on the acquisition fit (a decision in grandmaster time), not the rate lock.
+#[test]
+fn two_followers_with_the_measured_conversion_residue_agree_within_a_microsecond_170() {
+    let mut fails = Vec::new();
+    for seed in 0..24_u64 {
+        let mut world = World::new(0x5eed_1660 ^ (seed << 8), 4_000.0);
+        world.gm_ppm = 20.0;
+        world.pc_ppm = 0.0;
+        world.shared_rx = true;
+        world.rx_residue_ns = 40;
+        let mut a = new_core(&world);
+        let mut b = new_core(&world);
+        let mut worst = 0_i64;
+        while world.t < 150 * 1_000_000_000 {
+            world.tick(&mut [&mut a, &mut b]);
+            let m = world.mono(world.t);
+            if let (Some(pa), Some(pb)) = (a.model().ptp_at(m), b.model().ptp_at(m)) {
+                // As `library_acceptance` compares: once both report [41] (the published lock).
+                if a.model().locked && b.model().locked {
+                    worst = worst.max((pa - pb).abs());
+                }
+            }
+        }
+        assert!(a.model().locked && b.model().locked, "seed {seed}: no lock");
+        if worst > 1_000 {
+            fails.push((seed, worst));
+        }
+    }
+    assert!(
+        fails.is_empty(),
+        "followers > 1 µs apart (seed, ns): {fails:?}"
+    );
 }
 
 /// dsync#160 (dstack, mbc-snv 9-10.11.2026): neither the service nor the follower locked on the
