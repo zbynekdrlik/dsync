@@ -264,7 +264,7 @@ pub struct PhaseLockCore {
     provisional: bool,
     /// dsync#160: this window's white per-window sample of `t2 − t1` for the open-loop fits and
     /// the frequency-step detector (taken by `on_window`); `None` = the measurement itself.
-    fit_sample_ns: Option<(i64, bool)>,
+    fit_sample_ns: Option<i64>,
     /// The last fit sample's `e` (µs) taken, and the lone late ones held since.
     fit_last_us: Option<f64>,
     fit_late_held: usize,
@@ -515,11 +515,11 @@ impl PhaseLockCore {
     /// The measurement handed to [`Self::on_window`] may be a smoothed one (the delay floor, a
     /// line through ~10 windows): its `e` is correlated from window to window, and a fit that
     /// judges σ from its residuals as if each window were independent would trust a line that is
-    /// ppm off. A sample the caller judged `late` (a delayed window minimum) is held at the last
-    /// taken one, as is a lone sample more than [`LATE_WINDOW_JUMP_US`] off it (at most
+    /// ppm off. The caller clips a delayed sample (`DelayFloor::fit_sample`); a lone sample more
+    /// than [`LATE_WINDOW_JUMP_US`] off the last taken one is held (at most
     /// [`LATE_WINDOW_MAX_HOLD`] in a row), as a late window is.
-    pub fn set_fit_sample(&mut self, sample_ns: i64, late: bool) {
-        self.fit_sample_ns = Some((sample_ns, late));
+    pub fn set_fit_sample(&mut self, sample_ns: i64) {
+        self.fit_sample_ns = Some(sample_ns);
     }
 
     /// The grandmaster (or the sync source) changed: re-anchor `D` from the next window, so the
@@ -690,10 +690,9 @@ impl PhaseLockCore {
             self.fit_last_us = None;
             self.fit_late_held = 0;
         }
-        let fit_e_us = fit_sample_ns.map(|(sample, judged_late)| {
+        let fit_e_us = fit_sample_ns.map(|sample| {
             let w = sample.wrapping_sub(self.anchor_ns.unwrap_or(anchor)) as f64 / 1_000.0;
             match self.fit_last_us {
-                Some(prev) if judged_late => prev,
                 Some(prev)
                     if (w - prev).abs() > LATE_WINDOW_JUMP_US
                         && self.fit_late_held < LATE_WINDOW_MAX_HOLD =>

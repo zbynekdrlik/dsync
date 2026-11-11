@@ -35,16 +35,19 @@ pub const FLOOR_SLOPE_MIN_WINDOWS: usize = 3;
 /// base's level for ~5 windows and hide the jump the core re-anchors on.
 pub const FLOOR_RESET_NS: i64 = crate::ptp_phase_lock::DISCONTINUITY_NS;
 
-/// A window minimum this many robust standard deviations (1.4826 MAD of the ring around its
-/// line) above the floor is a LATE one for the phase lock's fits: a USB NIC still delays ~20 % of
-/// window minima, by tens of µs to ms. Never below [`FIT_LATE_MIN_NS`].
+/// A window minimum is CLIPPED to this many robust standard deviations (1.4826 MAD of the ring
+/// around its line) above the floor for the phase lock's fits: a USB NIC still delays ~20 % of
+/// window minima, by tens of µs to ms. Never below [`FIT_LATE_MIN_NS`]. A clip, never a hold:
+/// two followers on one PC read the same stamp up to ns of residue, and a yes/no decision at the
+/// gate's edge gave them different fits (the v1.30.0 release run, 3.3 µs apart).
 pub const FIT_LATE_SIGMAS: f64 = 3.0;
 /// The late gate's floor (a noiseless ring has a MAD of 0).
 pub const FIT_LATE_MIN_NS: i64 = 5_000;
 
 /// The newest window's own minimum, for the phase lock's open-loop fits (dsync#160): unlike the
 /// floor (a line through ~10 windows, correlated from window to window) it is white, which the
-/// fits' σ assumes. `late` when it sits beyond the late gate above the floor.
+/// fits' σ assumes. `ns` is clipped at the late gate above the floor (continuous in the input);
+/// `late` says it was (for logs and tests only, never for a decision).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FitSample {
     pub ns: i64,
@@ -239,9 +242,10 @@ impl DelayFloor {
         insertion_sort_by(&mut dev[..n], |a, b| a > b);
         let mad = dev[n / 2] as f64;
         let gate = ((FIT_LATE_SIGMAS * 1.4826 * mad).round() as i64).max(FIT_LATE_MIN_NS);
+        let cap = floor.saturating_add(gate);
         Some(FitSample {
-            ns: y,
-            late: y.wrapping_sub(floor) > gate,
+            ns: y.min(cap),
+            late: y > cap,
         })
     }
 

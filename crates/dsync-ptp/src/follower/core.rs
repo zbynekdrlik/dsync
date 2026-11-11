@@ -545,7 +545,7 @@ impl FollowerCore {
         self.core
             .set_provisional(self.floor.len() < crate::delay_floor::FLOOR_SLOPE_MIN_WINDOWS);
         if let Some(s) = self.floor.fit_sample() {
-            self.core.set_fit_sample(s.ns, s.late);
+            self.core.set_fit_sample(s.ns);
         }
         let out = self.core.on_window(median, locked, word_ppm, dt);
         if let (Some(f), None) = (self.core.boot_refine(), refine_before) {
