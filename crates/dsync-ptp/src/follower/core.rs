@@ -136,6 +136,9 @@ pub struct FollowerCore {
     /// words in force over the last two windows (a window's median sits mid-window).
     seed_ppm: Option<f64>,
     seed_judge: Option<SeedJudge>,
+    /// dsync#170: the judge accepted the seed (the first engagement then waits only
+    /// `BOOT_SEEDED_ENGAGE_S` of acquisition ring, not the 20 s fit).
+    seed_accepted: bool,
     word_last: f64,
     word_before: f64,
     /// dsync#136: |e| (ns) of the last engaged windows the PI took, for `settled`.
@@ -173,6 +176,7 @@ impl FollowerCore {
             straddled: 0,
             seed_ppm: None,
             seed_judge: None,
+            seed_accepted: false,
             word_last: 0.0,
             word_before: 0.0,
             recent_e: VecDeque::with_capacity(SETTLED_WINDOWS),
@@ -219,6 +223,7 @@ impl FollowerCore {
         self.seed_judge = None;
         match verdict {
             SeedVerdict::Accepted { mean_rate_ppm } => {
+                self.seed_accepted = true;
                 info!(
                     "[FOLLOWER] seed {:+.3}ppm accepted: the oscillator runs {:+.1}us/s off it",
                     seed, mean_rate_ppm
@@ -485,12 +490,8 @@ impl FollowerCore {
     }
 
     fn close_window(&mut self, t1_ns: i64, mono_ns: i64) {
-        let least = *self
-            .window
-            .iter()
-            .min_by_key(|s| s.raw_ns)
-            .expect("a window closes full");
         let mid_t1 = self.window[0].t1_ns + (t1_ns - self.window[0].t1_ns) / 2;
+        let samples: Vec<(i64, i64)> = self.window.iter().map(|s| (s.t1_ns, s.raw_ns)).collect();
         let mut wall: Vec<i64> = self.window.iter().map(|s| s.wall_minus_v_ns).collect();
         self.window.clear();
         wall.sort_unstable();
@@ -498,7 +499,11 @@ impl FollowerCore {
         // receive delay (a USB NIC) moves a median, never the floor. Named `median` below for
         // the service's shared window glue it feeds.
         // The floor is read at the window's middle, where the median it replaces sat.
-        let median = self.floor.push_window(least.t1_ns, least.raw_ns, mid_t1);
+        // dsync#170: the window's least sample carried to its middle (continuous in the stamps).
+        let median = self
+            .floor
+            .push_samples(&samples, mid_t1)
+            .expect("a window closes full");
         let wall_minus_v = wall[wall.len() / 2];
         self.windows += 1;
 
@@ -541,7 +546,12 @@ impl FollowerCore {
         let late_before = self.core.late_windows();
         let refine_before = self.core.boot_refine();
         let gm_refit_before = self.core.gm_refit();
-        let locked = phase_window::engage_on(self.rate.is_locked, self.stale);
+        let locked = phase_window::engage_on(
+            &self.core,
+            self.rate.is_locked,
+            self.seed_accepted,
+            self.stale,
+        );
         self.core
             .set_provisional(self.floor.len() < crate::delay_floor::FLOOR_SLOPE_MIN_WINDOWS);
         if let Some(s) = self.floor.fit_sample() {
@@ -655,6 +665,9 @@ impl FollowerCore {
         }
         if let Some(baseline) = close.baseline_ppm {
             self.rate.drift_baseline_ppm = baseline;
+        }
+        if close.adopt_rate_lock {
+            self.rate.adopt_lock();
         }
         let applied = close.word_ppm;
         self.clock.set_rate(mono_ns, applied);

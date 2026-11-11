@@ -116,6 +116,27 @@ impl DelayFloor {
         }
     }
 
+    /// dsync#170: a window closed with these samples `(t1, raw t2 − t1)`: its least-delayed
+    /// sample, every sample first carried along the floor's slope to `read_t1_ns`, enters the
+    /// ring AT `read_t1_ns`. Returns the floor there ([`Self::push_window`]), `None` for no
+    /// sample.
+    ///
+    /// The point is continuous in every stamp. Taking the least raw sample at ITS own `t1` was
+    /// not: two samples a few ns apart are 125 ms apart in `t1`, so which one is "least" moved
+    /// the point by the slope × 125 ms (~0.5 µs while the rate servo acquires), and two
+    /// followers on one PC (the same stamps ± ns of conversion residue) took different points.
+    /// Carried along the slope, near-equal samples give near-equal points at one fixed time.
+    pub fn push_samples(&mut self, samples: &[(i64, i64)], read_t1_ns: i64) -> Option<i64> {
+        let slope = self.slope;
+        let least = samples
+            .iter()
+            .map(|&(t1, raw)| {
+                raw.wrapping_add((slope * read_t1_ns.wrapping_sub(t1) as f64).round() as i64)
+            })
+            .min()?;
+        Some(self.push_window(read_t1_ns, least, read_t1_ns))
+    }
+
     /// A window closed: its least-delayed sample `min_ns`, taken at grandmaster time `min_t1_ns`.
     /// Returns the floor at `read_t1_ns` (this window included) — the window's middle, where the
     /// median it replaces sat (the boot fit and the #142 judge integrate the word to there).

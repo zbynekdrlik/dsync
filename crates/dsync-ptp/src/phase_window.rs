@@ -6,7 +6,7 @@
 //! once.
 
 use crate::lock_gate::{GateEvent, PhaseLockGate};
-use crate::ptp_phase_lock::{PhaseLockCore, WindowOutcome};
+use crate::ptp_phase_lock::{FirstEngagement, PhaseLockCore, WindowOutcome};
 use crate::rate_servo::WordDeviation;
 
 /// The window's `dt` in GRANDMASTER time (`t1`), so loop scheduling and the clock's own steps
@@ -20,9 +20,33 @@ pub fn window_dt(last_t1_ns: &mut Option<i64>, t1_ns: i64, fallback_s: f64) -> f
     dt
 }
 
-/// The phase lock engages on the rate servo's lock, never while PTP is stale.
-pub fn engage_on(rate_locked: bool, ptp_offline: bool) -> bool {
-    rate_locked && !ptp_offline
+/// When the phase lock may own the word this window (`on_window`'s `ptp_locked`), never while
+/// PTP is stale.
+///
+/// dsync#170: the FIRST engagement is a grandmaster-time decision on the acquisition fit
+/// ([`PhaseLockCore::first_engagement_readiness`]), not the rate servo's lock: two followers on
+/// one PC read the rate a few ns of stamp residue apart, its lock count split them by a window,
+/// and one window of engagement split leaves ~1.25 µs between them at the gate's lock. A fit the
+/// ring refuses (a noisy box) falls back to the rate lock. Before the anchor (a locked window
+/// anchors at once, #134) and for every re-engagement after it (an outage, a lock loss) the rate
+/// lock decides, as before.
+pub fn engage_on(
+    core: &PhaseLockCore,
+    rate_locked: bool,
+    seed_accepted: bool,
+    ptp_offline: bool,
+) -> bool {
+    if ptp_offline {
+        return false;
+    }
+    if core.engaged_once() || core.anchor_ns().is_none() {
+        return rate_locked;
+    }
+    match core.first_engagement_readiness(seed_accepted) {
+        FirstEngagement::Fit | FirstEngagement::Seeded => true,
+        FirstEngagement::Refused => rate_locked,
+        FirstEngagement::NotYet => false,
+    }
 }
 
 /// One window's [41] verdict: the gate on `e`, engaged = the phase lock owns the word after it.
@@ -44,6 +68,11 @@ pub struct WindowClose {
     /// The rate servo's new drift baseline: the learned frequency while engaged and on the
     /// window that disengaged (a bumpless hand-back); `None` = unchanged.
     pub baseline_ppm: Option<f64>,
+    /// dsync#170: this window engaged the phase lock, so the rate servo ADOPTS the lock
+    /// (`RateServo::adopt_lock`). An engagement on the fit can come before the rate servo's own
+    /// lock; without the adoption the next window's `engage_on` (the rate lock, for a core that
+    /// engaged once) would disengage it at once.
+    pub adopt_rate_lock: bool,
 }
 
 /// Close a window after the consumer handled its anchor event: the gate's verdict on `e`, the
@@ -68,6 +97,7 @@ pub fn close_window(
         gate_event,
         word_ppm,
         baseline_ppm,
+        adopt_rate_lock: !was_engaged && core.engaged(),
     }
 }
 
@@ -126,9 +156,11 @@ mod tests {
 
     #[test]
     fn the_phase_lock_engages_only_on_a_rate_lock_with_ptp_live() {
-        assert!(engage_on(true, false));
-        assert!(!engage_on(true, true));
-        assert!(!engage_on(false, false));
+        // Before the anchor the rate lock decides (dsync#170 keeps that law there).
+        let core = PhaseLockCore::new();
+        assert!(engage_on(&core, true, false, false));
+        assert!(!engage_on(&core, true, false, true));
+        assert!(!engage_on(&core, false, false, false));
     }
 
     /// An engaged core: anchored on a locked window at 0.

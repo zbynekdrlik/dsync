@@ -212,6 +212,37 @@ pub const GM_BOOST_HOLD_S: f64 = 120.0;
 /// the normal gains again 7 minutes after the change.
 pub const GM_BOOST_RAMP_S: f64 = 300.0;
 
+/// dsync#170 — a seeded boot (an accepted frequency seed: the service's `drift.json`, a
+/// follower's `with_frequency_seed`) engages once its acquisition ring has run this long in
+/// grandmaster time. Its 20 s fit is not needed (the seed is the frequency, the short ring keeps
+/// fitting and re-seeds once at 20 s); the rate lock it used to wait for is a count on a rate
+/// that two followers on one PC read a few ns apart, so it engaged them a window apart.
+///
+/// The phase lock starts on the rate servo's word, and that word carries its ACQ P term on a
+/// per-window rate: at 30 µs per-sample jitter, a few seconds after the anchor it is still ppm
+/// off, and the boot pull then walked `e` past the [41] unlock bound (the whole-controller
+/// `lock_sim`, 20 noise seeds × 7 seeds × 3 jitters: flaps in 1-15 of 20 at 2 / 4 / 6 s, none at
+/// 8 s, none again over 40 fresh noise seeds; the rate-lock law before: none). A seeded quiet
+/// box sets [41] at ~11 s instead of ~4 s; a seed 15 ppm off at ~19 s instead of ~33 s.
+pub const BOOT_SEEDED_ENGAGE_S: f64 = 8.0;
+
+/// dsync#170 — whether the FIRST engagement may start now, judged in grandmaster time only, so
+/// two followers on one PC (the same stamps ± a few ns of conversion residue) decide the same
+/// window ([`PhaseLockCore::first_engagement_readiness`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstEngagement {
+    /// The acquisition ring ran the whole fit window and its fit holds (σ ≤
+    /// [`BOOT_FIT_MAX_SIGMA_PPM`]): engage on it.
+    Fit,
+    /// The ring ran the whole fit window and the fit is refused (a noisy box): engage on the rate
+    /// servo's lock, as before #170.
+    Refused,
+    /// An accepted seed and [`BOOT_SEEDED_ENGAGE_S`] of ring: engage.
+    Seeded,
+    /// None of these yet: do not engage.
+    NotYet,
+}
+
 /// dsync#166 — the PI gains (`K_P`, `K_I`) at `boost_s` PTP seconds after the last time-base
 /// change (`None` = no boost running: the normal gains, bit for bit). A pure function of the
 /// grandmaster time since the event, so two followers on one PC fed the same windows apply the
@@ -436,6 +467,33 @@ impl PhaseLockCore {
     /// (`None`: it started on the rate servo's word).
     pub fn engaged_on_fit(&self) -> Option<BootFit> {
         self.engaged_on_fit
+    }
+
+    /// dsync#134: the core has engaged at least once since start.
+    pub fn engaged_once(&self) -> bool {
+        self.engaged_once
+    }
+
+    /// dsync#170: may the FIRST engagement start now? Decided on the acquisition ring alone: its
+    /// age is a sum of grandmaster `dt`s and its σ reads 0.03-0.06 ppm against a 1 ppm gate, so
+    /// two followers on one PC agree on the window, where the rate servo's lock (a count of
+    /// |rate| < 5 µs/s) split them by its own edge. `seed_accepted` = the consumer's seed judge
+    /// accepted a frequency seed. Only meaningful before the first engagement, once anchored.
+    pub fn first_engagement_readiness(&self, seed_accepted: bool) -> FirstEngagement {
+        if self.boot_fit.full() {
+            if self.boot_fit.estimate().is_some() {
+                FirstEngagement::Fit
+            } else {
+                FirstEngagement::Refused
+            }
+        } else if seed_accepted
+            && self.boot_fit.points() > 0
+            && self.boot_fit.clock_s() >= BOOT_SEEDED_ENGAGE_S - 1e-6
+        {
+            FirstEngagement::Seeded
+        } else {
+            FirstEngagement::NotYet
+        }
     }
 
     /// dsync#146: the first engagement's integrator re-seeded once its ring was full.

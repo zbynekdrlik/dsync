@@ -246,7 +246,13 @@ impl SpikeFilter {
                     "[Spike] Rejected: {:+.1}us/s (median={:+.1}, MAD={:.2}, k={:.1}, threshold={:.1})",
                     raw_rate, median, mad, k, threshold
                 );
-                median // Replace with median
+                // dsync#170: the rejection TAPERS from the raw value at the threshold to the
+                // median at twice it, so the kept value is continuous in the raw rate. Two
+                // followers on one PC read the same rate ± a few ns of stamp residue; an
+                // all-or-nothing reject at the threshold kept it in one and replaced it in the
+                // other (0.85 µs/s apart in the smoothed rate, the rate lock windows apart).
+                let keep = (2.0 - deviation / threshold).clamp(0.0, 1.0);
+                median + keep * (raw_rate - median)
             }
         } else {
             // Good sample, reset consecutive counter
