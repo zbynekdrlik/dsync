@@ -1494,3 +1494,39 @@ waited for the first PTP window (−2.2 s at 18 s, under an OBS started at 6 s).
 - **A test that used a stale record as its VEHICLE** (to reach "rejected at the first window")
   silently changes meaning when the start refuses it. Re-drive such a test by another rejection
   (another time base at a LOCKED window: an unlocked rejection is only provisional, #134).
+
+## dsync#166 (v1.31) — after a grandmaster change the PI tracks the new rate, so it runs boosted
+
+iemmixer, 6.11.2026 (v1.28.0): ~2 min after a continuous handover to a stable secondary the
+follower read −155.1 µs for 4 windows and stayed NotLocked 3-5 minutes. The one-shot GM re-seed
+(~11 s) was right for its seconds; the new grandmaster's rate MOVED after it (a promoted secondary
+settling, a card warming after its reset), by ~4 ppm — under the 6 ppm frequency-step minimum,
+so only the ~100 s PI followed it (36.8 µs per ppm at 100 s; a ramp ρ leaves ρ / K_I). What was
+learned:
+
+- **Post-re-seed rate tracking is the PI's job, not another fit's.** More re-fits lag a ramp and
+  spread the fleet (each box re-seeds on its own noise, #158); a lower step minimum brings back
+  the path-change false re-seeds (#1372). So after every time-base change (`GmContinued`,
+  `Rebased`, or one taken unlocked and learned at the engagement) `boosted_gains` runs the PI at
+  `K_P × 4`, `K_I × 16` (still ζ = 1, τ 25 s) for `GM_BOOST_HOLD_S` (120 s), then returns
+  geometrically over `GM_BOOST_RAMP_S` (300 s). 9.2 µs per ppm instead of 36.8.
+- **The schedule is a pure function of the engaged windows' grandmaster `dt` since the event**
+  (late windows included): two followers on one PC apply the same gains. No boost running = the
+  normal constants bit for bit (`without_a_confirmed_step_…_bit_for_bit_1372` still holds).
+- **Gain changes keep the word continuous without a bumpless-transfer term:** the boost starts on
+  the event's window, where the tracked error is ~0 (`Rebased`: e = 0 at the re-anchor;
+  `GmContinued`: the residual is in the pull, the PI tracks `e − r`), and the ramp moves the
+  gains by < 0.5 % per window.
+- **Measured (core, 600 s, ±4.5 ppm step 20 s after the change and ±4 ppm warm-up τ 60 s, jitter
+  0/10 µs × 3 seeds):** peak 164 µs with 25 windows > 150 µs before, ≤ 57 µs after; 52-83 µs at
+  90 s before, ≤ 20 µs after. Follower world (+4.5 ppm step): 167 µs, lock lost at 83 s before;
+  45 µs, never lost, after. The bench got BETTER (wall disagreement 69 → 46 µs, relative phase
+  43 → 27 µs): the faster loop also retires the re-anchor residuals sooner.
+- **A bench bound derived from the PI's pull-in rate scales with the boost.** The bit-identity
+  pair's "≤ 1 ppm in the 10 min after a GM event" was ≈ 100 µs / 100 s; the boosted loop pulls
+  the same residual in 4× faster, so the bound is `GM_BOOST_GAIN` ppm (measured 0.59 → 2.39).
+  Re-derive any such bound when the loop's gains change, never widen it blindly.
+- Tests: `the_new_grandmasters_rate_moving_after_the_re_seed_never_unlocks_166` (core,
+  `gm_change_with` takes a per-window rate profile; `e` judged against the anchor in force) and
+  `a_secondary_grandmaster_whose_rate_moves_after_the_handover_keeps_the_lock_166` (follower,
+  `World::gm_profile` accumulates the moving rate's phase per tick).

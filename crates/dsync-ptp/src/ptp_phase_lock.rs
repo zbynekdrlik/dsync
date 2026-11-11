@@ -190,6 +190,45 @@ pub const GM_FIT_WINDOW_S: f64 = BOOT_REFINE_WINDOW_S;
 pub const GM_FIT_MIN_SPAN_S: f64 = 5.0;
 pub const GM_FIT_EARLY_SIGMA_PPM: f64 = 0.3;
 
+/// dsync#166 — after every time-base change (`GmContinued`, `Rebased`) the PI runs at
+/// `K_P × GM_BOOST_GAIN` and `K_I × GM_BOOST_GAIN²`: still critically damped (ζ = 1), its time
+/// constant 100 s / 4 = 25 s. The one-shot re-seed after the change (the GM fit, ~5-11 s) is
+/// right for its seconds, but a promoted secondary settling its own servo or a card warming
+/// after its reset MOVES its rate afterwards, by up to ~4-5 ppm (iemmixer, 6.11.2026), under the
+/// 6 ppm frequency-step minimum: the plain ~100 s PI leaves 36.8 µs per ppm at 100 s and a
+/// ramp `ρ` a standing `ρ / K_I`, so 4.2 ppm unlocked [41] for 3-5 minutes. ×4 gives 9.2 µs per
+/// ppm and `ρ / (16 K_I)`. Not more: every µs of window noise passes as `K_P` ppm of word
+/// jitter, 0.08 ppm here, and an ×8 loop (τ 12.5 s) would let the fit's noise through too.
+pub const GM_BOOST_GAIN: f64 = 4.0;
+
+/// dsync#166 — PTP seconds after the change the boost is held at full strength. The rate moves
+/// over the first minutes (a warm-up with a ~60 s time constant is 86 % done at 120 s), and
+/// the boosted loop takes ~5 τ to settle what moved in that time.
+pub const GM_BOOST_HOLD_S: f64 = 120.0;
+
+/// dsync#166 — PTP seconds over which the boost then returns to the normal gains, geometrically
+/// (`GM_BOOST_GAIN^(1 − t/ramp)`, smooth per window). Slow against the boosted loop (12 τ), so
+/// what is still moving is handed over to the normal PI gradually and the word never steps;
+/// the normal gains again 7 minutes after the change.
+pub const GM_BOOST_RAMP_S: f64 = 300.0;
+
+/// dsync#166 — the PI gains (`K_P`, `K_I`) at `boost_s` PTP seconds after the last time-base
+/// change (`None` = no boost running: the normal gains, bit for bit). A pure function of the
+/// grandmaster time since the event, so two followers on one PC fed the same windows apply the
+/// same gains.
+pub fn boosted_gains(boost_s: Option<f64>) -> (f64, f64) {
+    let Some(t) = boost_s else {
+        return (K_P_PER_S, K_I_PER_S2);
+    };
+    let g = if t < GM_BOOST_HOLD_S {
+        GM_BOOST_GAIN
+    } else {
+        let left = (1.0 - (t - GM_BOOST_HOLD_S) / GM_BOOST_RAMP_S).clamp(0.0, 1.0);
+        GM_BOOST_GAIN.powf(left)
+    };
+    (K_P_PER_S * g, K_I_PER_S2 * g * g)
+}
+
 /// What happened to the anchor `D` in one window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnchorEvent {
@@ -321,6 +360,9 @@ pub struct PhaseLockCore {
     /// dsync#158 (review of PR #159): a grandmaster change (or its fit) that no engaged window
     /// took yet: the next engagement retires `e` along the pull and opens the fit.
     gm_change_unengaged: bool,
+    /// dsync#166: PTP seconds since the last time-base change while its gain boost runs
+    /// ([`boosted_gains`]); `None` = the normal gains.
+    boost_s: Option<f64>,
 }
 
 impl PhaseLockCore {
@@ -800,6 +842,8 @@ impl PhaseLockCore {
             self.gm_fit = Some(BootFreqFit::with_window(GM_FIT_WINDOW_S));
             self.gm_fit_shift_us = 0.0;
             self.gm_change_unengaged = false;
+            // dsync#166: the new grandmaster's rate may still move after the fit's re-seed.
+            self.boost_s = Some(0.0);
         } else if gm_at_engagement {
             // The change came on an unlocked window: what it left (the residual plus the
             // free-run since) is retired along the pull, and the new rate fitted from here.
@@ -811,6 +855,7 @@ impl PhaseLockCore {
             }
             self.gm_fit = Some(BootFreqFit::with_window(GM_FIT_WINDOW_S));
             self.gm_fit_shift_us = 0.0;
+            self.boost_s = Some(0.0);
         }
         if first_engagement && event == AnchorEvent::None {
             // dsync#134: the boot hold — the acquisition drift off the early anchor is retired
@@ -852,11 +897,17 @@ impl PhaseLockCore {
             self.late_held = 0;
             self.last_taken_e_us = Some(e_raw_us);
             let e_us = e_raw_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+            let (k_p, k_i) = boosted_gains(self.boost_s);
             // offset = local − master: a fast local clock GROWS e, so the correction is negative.
-            self.i_ppm =
-                (self.i_ppm - K_I_PER_S2 * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
-            (self.i_ppm - K_P_PER_S * e_us).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM)
+            self.i_ppm = (self.i_ppm - k_i * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+            (self.i_ppm - k_p * e_us).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM)
         };
+        // dsync#166: the boost's clock is the engaged windows' grandmaster time (late ones
+        // included), so it is the same on every box that took the same windows.
+        if let Some(t) = self.boost_s {
+            let t = t + dt;
+            self.boost_s = (t < GM_BOOST_HOLD_S + GM_BOOST_RAMP_S).then_some(t);
+        }
         self.fstep.note_word(f);
         self.last_freq_ppm = f;
         let disturbed = event != AnchorEvent::None || freq_step.is_some();
@@ -1017,8 +1068,9 @@ impl PhaseLockCore {
     fn pulled_word(&mut self, e_raw_us: f64, dt: f64) -> f64 {
         let e_us = (e_raw_us - self.pull_us).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
         let pull_rate = -self.pull_us / FSTEP_PULL_TAU_S;
-        self.i_ppm = (self.i_ppm - K_I_PER_S2 * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
-        let f = (self.i_ppm - K_P_PER_S * e_us + pull_rate).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+        let (k_p, k_i) = boosted_gains(self.boost_s);
+        self.i_ppm = (self.i_ppm - k_i * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+        let f = (self.i_ppm - k_p * e_us + pull_rate).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
         self.pull_us *= (-dt / FSTEP_PULL_TAU_S).exp();
         if self.pull_us.abs() < FSTEP_PULL_DONE_US {
             self.pull_us = 0.0;
