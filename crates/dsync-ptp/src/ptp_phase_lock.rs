@@ -2124,6 +2124,42 @@ mod tests {
     }
 
     #[test]
+    fn a_lock_loss_ends_the_gain_boost_of_a_grandmaster_change_166() {
+        // Review of #166: the boost belongs to the engagement that took the change. A lock loss
+        // after the change was learned (the fit closed), then a re-engagement 500 µs off (not
+        // re-aligned, no pull), must run the plain PI, not a boost frozen mid-hold.
+        let (mut c, mut p) = settled_core();
+        c.request_rebase();
+        p.e_ns -= 20_000.0;
+        for _ in 0..60 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, 12.0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        assert!(!c.gm_fitting(), "the change was learned");
+        let held = c.integrator_ppm();
+        for _ in 0..4 {
+            c.on_window(D + p.e_ns.round() as i64, false, held, DT);
+            p.advance(held, DT);
+        }
+        p.e_ns = 500_000.0;
+        let mut i_ref = held;
+        let mut q_e = p.e_ns;
+        let mut q = Plant::new(p.osc_ppm, 1, held);
+        q.e_ns = q_e;
+        for n in 0..200 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, held, DT);
+            assert_eq!(out.event, AnchorEvent::None, "window {n}");
+            assert_eq!(c.pull_us(), 0.0, "window {n}: no pull");
+            let w = out.freq_ppm.expect("engaged");
+            let w_ref = plain_pi(&mut i_ref, q_e.round() as i64, DT);
+            assert_eq!(w.to_bits(), w_ref.to_bits(), "window {n}: {w} vs {w_ref}");
+            p.advance(w, DT);
+            q.advance(w_ref, DT);
+            q_e = q.e_ns;
+        }
+    }
+
+    #[test]
     fn a_ptp_outage_closes_the_fit_after_a_grandmaster_change_158() {
         // Review of #158: after an outage the controller's dt is a fallback and the free-run moved
         // `e`: the open-loop phase across it is wrong, as for the boot fit.
