@@ -458,7 +458,8 @@ fn two_followers_with_the_measured_conversion_residue_agree_within_a_microsecond
             world.tick(&mut [&mut a, &mut b]);
             let m = world.mono(world.t);
             if let (Some(pa), Some(pb)) = (a.model().ptp_at(m), b.model().ptp_at(m)) {
-                if a.engaged() || b.engaged() {
+                // As `library_acceptance` compares: once both report [41] (the published lock).
+                if a.model().locked && b.model().locked {
                     worst = worst.max((pa - pb).abs());
                 }
             }
