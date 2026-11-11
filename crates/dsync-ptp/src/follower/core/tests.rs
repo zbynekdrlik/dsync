@@ -1014,7 +1014,10 @@ fn a_secondary_grandmaster_whose_rate_moves_after_the_handover_keeps_the_lock_16
         }
         eprintln!("{name}: worst |e| {worst_e} ns, lock lost at {lost_at:?} s");
         assert_eq!(core.model().gm_uuid, Some(GM_B.grandmaster_uuid));
-        assert_eq!(lost_at, None, "{name}: the lock was lost (worst |e| {worst_e} ns)");
+        assert_eq!(
+            lost_at, None,
+            "{name}: the lock was lost (worst |e| {worst_e} ns)"
+        );
         assert!(
             worst_e <= 150_000,
             "{name}: {worst_e} ns off B's line after the handover"

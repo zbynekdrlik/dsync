@@ -2053,8 +2053,7 @@ mod tests {
                     (10.0, 0x5eed_0167),
                     (10.0, 0x5eed_0168),
                 ] {
-                    let (_, _, trace) =
-                        gm_change_with(shift, 3.0, profile, jitter_us, seed, 1_200);
+                    let (_, _, trace) = gm_change_with(shift, 3.0, profile, jitter_us, seed, 1_200);
                     let peak = trace.iter().map(|&(e, _)| e.abs()).fold(0.0, f64::max);
                     let late = trace[180..]
                         .iter()
@@ -2065,11 +2064,7 @@ mod tests {
                         "{name}, shift {shift} ns, jitter {jitter_us} µs, seed {seed:#x}: \
                          peak {peak:.1} µs, after 90 s {late:.1} µs, {run} windows > 150 µs"
                     ));
-                    assert!(
-                        run < 4 && late <= 50.0,
-                        "{}",
-                        report.last().unwrap()
-                    );
+                    assert!(run < 4 && late <= 50.0, "{}", report.last().unwrap());
                 }
             }
         }
