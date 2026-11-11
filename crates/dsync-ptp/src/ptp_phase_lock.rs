@@ -1826,6 +1826,20 @@ mod tests {
         seed: u64,
         windows: usize,
     ) -> (PhaseLockCore, WindowOutcome, Vec<(f64, f64)>) {
+        gm_change_with(shift_ns, gm_ppm, |_| 0.0, jitter_us, seed, windows)
+    }
+
+    /// [`gm_change`] with the new grandmaster's rate MOVING after the change (dsync#166): its
+    /// extra rate `profile(t)` (ppm, `t` = s since the change, faster = positive) on top of
+    /// `gm_ppm`, applied per window.
+    fn gm_change_with(
+        shift_ns: f64,
+        gm_ppm: f64,
+        profile: impl Fn(f64) -> f64,
+        jitter_us: f64,
+        seed: u64,
+        windows: usize,
+    ) -> (PhaseLockCore, WindowOutcome, Vec<(f64, f64)>) {
         let mut noise = seed;
         let mut jitter = move || {
             noise ^= noise << 13;
@@ -1847,15 +1861,19 @@ mod tests {
         p.e_ns -= shift_ns;
         p.osc_ppm -= gm_ppm;
         let first = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
-        let mut trace = vec![(
-            p.e_ns / 1_000.0,
-            first.freq_ppm.expect("engaged") + p.osc_ppm,
-        )];
+        // `e` against the anchor in force (a `Rebased` change moves it).
+        let e_us = |c: &PhaseLockCore, p: &Plant| {
+            (p.e_ns - (c.anchor_ns().expect("anchored") - D) as f64) / 1_000.0
+        };
+        let mut trace = vec![(e_us(&c, &p), first.freq_ppm.expect("engaged") + p.osc_ppm)];
+        let osc_after = p.osc_ppm;
+        p.osc_ppm = osc_after - profile(0.0);
         p.advance(first.freq_ppm.expect("engaged"), DT);
-        for _ in 1..windows {
+        for n in 1..windows {
+            p.osc_ppm = osc_after - profile(n as f64 * DT);
             let out = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
             let f = out.freq_ppm.expect("engaged");
-            trace.push((p.e_ns / 1_000.0, f + p.osc_ppm));
+            trace.push((e_us(&c, &p), f + p.osc_ppm));
             p.advance(f, DT);
         }
         (c, first, trace)
@@ -1995,6 +2013,67 @@ mod tests {
             .map(|&(e, _)| e.abs())
             .fold(0.0, f64::max);
         assert!(worst_after <= 50.0, "|e| {worst_after:.1} µs after 50 s");
+    }
+
+    /// dsync#166: the longest run of consecutive windows with |e| beyond `bound_us`.
+    fn longest_run_beyond(trace: &[(f64, f64)], bound_us: f64) -> usize {
+        let (mut run, mut longest) = (0usize, 0usize);
+        for &(e, _) in trace {
+            run = if e.abs() > bound_us { run + 1 } else { 0 };
+            longest = longest.max(run);
+        }
+        longest
+    }
+
+    #[test]
+    fn the_new_grandmasters_rate_moving_after_the_re_seed_never_unlocks_166() {
+        // dstack, iemmixer 6.11.2026 (v1.28.0): ~2 min after a continuous handover to a stable
+        // secondary grandmaster `e` passed 150 µs for 4 windows (−155.1 / +153.8 µs) and the lock
+        // stayed lost for 3-5 minutes. The one-shot re-seed (~11 s) was right; the new
+        // grandmaster's rate MOVED after it (a promoted secondary settling, a card warming), and
+        // only the ~100 s PI followed: 36.8 µs per ppm left at 100 s. A step of 4.5 ppm 20 s
+        // after the change, and a 4 ppm warm-up with a 60 s time constant, both under the 6 ppm
+        // frequency-step minimum: never 4 windows beyond the [41] unlock bound (150 µs) over
+        // 600 s, and within the lock bound (50 µs) from 90 s after the change on.
+        let step = |sign: f64| move |t: f64| if t >= 20.0 { sign * 4.5 } else { 0.0 };
+        let warm = |sign: f64| move |t: f64| sign * 4.0 * (1.0 - (-t / 60.0).exp());
+        let profiles: [(&str, Box<dyn Fn(f64) -> f64>); 4] = [
+            ("+4.5 ppm step at 20 s", Box::new(step(1.0))),
+            ("-4.5 ppm step at 20 s", Box::new(step(-1.0))),
+            ("+4 ppm warm-up", Box::new(warm(1.0))),
+            ("-4 ppm warm-up", Box::new(warm(-1.0))),
+        ];
+        let mut report = Vec::new();
+        for (name, profile) in &profiles {
+            // A continued time base (dstack's case) and a new one (`Rebased`).
+            for shift in [20_000.0, 1_500_000.0] {
+                for (jitter_us, seed) in [
+                    (0.0, 1),
+                    (10.0, 0x5eed_0166),
+                    (10.0, 0x5eed_0167),
+                    (10.0, 0x5eed_0168),
+                ] {
+                    let (_, _, trace) =
+                        gm_change_with(shift, 3.0, profile, jitter_us, seed, 1_200);
+                    let peak = trace.iter().map(|&(e, _)| e.abs()).fold(0.0, f64::max);
+                    let late = trace[180..]
+                        .iter()
+                        .map(|&(e, _)| e.abs())
+                        .fold(0.0, f64::max);
+                    let run = longest_run_beyond(&trace, 150.0);
+                    report.push(format!(
+                        "{name}, shift {shift} ns, jitter {jitter_us} µs, seed {seed:#x}: \
+                         peak {peak:.1} µs, after 90 s {late:.1} µs, {run} windows > 150 µs"
+                    ));
+                    assert!(
+                        run < 4 && late <= 50.0,
+                        "{}",
+                        report.last().unwrap()
+                    );
+                }
+            }
+        }
+        eprintln!("{}", report.join("\n"));
     }
 
     #[test]
