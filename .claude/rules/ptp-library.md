@@ -115,8 +115,22 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
   when a fit lands at the edge (16.4 µs apart in `library_acceptance`). `PhaseLockCore::reseed`
   ramps the move in from half the threshold. A threshold test of this kind: sweep the input in
   tiny steps and assert the trajectory never jumps (`the_boot_reseeds_are_continuous_…`); a
-  random-noise model rarely lands on the edge. The rate servo's lock (the engagement window) is
-  still a step, and two followers can engage a window apart.
+  random-noise model rarely lands on the edge.
+- **The first engagement is a grandmaster-time decision (#170, v1.31).** The rate servo's lock was
+  the engagement, a count on a rate the followers read ~40 ns apart (dev1's residue, not the few
+  ns assumed above): they engaged a window apart, ~1.25 µs at the [41] lock whatever the start
+  error, `library_acceptance` 1.7-4.9 µs in ~1 run of 10. Now `phase_window::engage_on` asks the
+  acquisition ring (`first_engagement_readiness`: full by `clock_s` and σ ≤ 1 ppm, or an accepted
+  seed and `BOOT_SEEDED_ENGAGE_S` = 8 s of ring); the rate lock decides only a refused fit, before
+  the anchor and every re-engagement, and is ADOPTED at the engagement. The window minimum
+  (`DelayFloor::push_samples`) and the spike filter (tapered) are continuous too. The lesson, again:
+  list EVERY all-or-nothing decision between the stamps and the published time (an argmin, a
+  filter's reject, a lock count) and make each continuous or move it onto grandmaster time; a
+  pair test needs the residue the rig measures (`World::rx_residue_ns` = 40), and it compares
+  once both report [41], as `library_acceptance` does (before the engagement each follower runs
+  its own rate servo and they walk ~1.5 µs apart, retired by the pulls). A cold follower now engages
+  ~22-24 s after the first Sync (it was 6-28 s on mbc's 5.4 ppm, earlier on a rate lock that came
+  soon), a seeded one at ~12 s (was ~6 s).
 - **A Sync source is a PORT, not a clock id (#136, v1.27.4).** A Dante grandmaster sends every
   Sync and Follow_Up from its primary AND secondary port with the same `sourceUuid` and sequence
   id; only `sourcePortId` / the source IP differ, and the ports' stamps are ~470 µs apart. Pairing

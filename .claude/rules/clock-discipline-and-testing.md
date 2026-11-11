@@ -1382,12 +1382,44 @@ start. What was learned:
   a cold boot pays τ·ln(|e0| / 50 µs) of pull before [41]: 31-43 s after the engagement in the
   model (e0 ≈ 275 µs), ~53 s for gen3's 0.7 ms.
 - **Sim (`controller/date_sync/lock_sim*.rs`, the whole controller closed loop, 4 Syncs per 0.5 s
-  window, seeded jitter):** cold gen3 [41] at 58-77.5 s after "Sync established" (engaged at
-  27-36 s, |e| at [41] 31-48 µs); a good seed 4-8.5 s at 1/10 µs jitter, 10-27 s at a pessimistic
-  30 µs (the rate servo's integrator walks a few ppm under that noise; the re-seed and the PI trim
-  it); seeds 7-15 ppm off 4-68 s; no flap after the first lock in any boot, a ±date step, or
+  window, seeded jitter):** cold gen3 [41] at 51-61 s after "Sync established" (engaged at
+  22 s, on the full 20 s acquisition fit since #170; it was 58-77.5 s, engaged at 27-36 s on the
+  rate lock; |e| at [41] ≤ 48 µs); a good seed 11 s at every jitter (engaged at
+  `BOOT_SEEDED_ENGAGE_S` = 8 s of ring; it was 4-8.5 s at 1/10 µs, 10-27 s at a pessimistic 30 µs,
+  where the rate servo's integrator walks a few ppm, the re-seed and the PI trim it); seeds 7-15
+  ppm off 11-45 s (was 4-68 s); no flap after the first lock in any boot, a ±date step, or
   noise; GM steps −25 ppm (and +10 at 1/10 µs) drop [41] once and return; +4 ppm (under
   `FSTEP_MIN_PPM`, not re-seeded) at 30 µs drops it for ~4 min while the PI takes it out.
+- **dsync#170 (v1.31): the FIRST engagement is a grandmaster-time decision, not the rate lock.**
+  Two followers on one PC read the same stamps ± ~40 ns of conversion residue (dev1), and the rate
+  lock is a COUNT on a rate at its 5 µs/s edge: they engaged a window apart, and one window of
+  engagement split leaves ≈ 50 µs × dt/τ ≈ 1.25 µs between them when [41] sets, whatever the
+  start error (`library_acceptance`, 1 run in ~10). `phase_window::engage_on(core, rate_locked,
+  seed_accepted, offline)` asks `PhaseLockCore::first_engagement_readiness`: `Fit` (the boot ring
+  full by `clock_s`, σ ≤ 1 ppm) engages, `Refused` falls back to the rate lock, `Seeded` (an
+  accepted seed) engages at `BOOT_SEEDED_ENGAGE_S` of ring, `NotYet` waits; before the anchor and
+  for every re-engagement the rate lock decides. At the engagement the rate servo ADOPTS the lock
+  (`RateServo::adopt_lock`), or the next window hands the word straight back. Two more
+  all-or-nothing decisions on the residue became continuous: the window minimum
+  (`DelayFloor::push_samples`, every sample carried along the floor slope to the window middle,
+  in the follower AND the service) and the spike filter (tapered from the raw rate at the
+  threshold to the median at 2×). Two-core model, 24 seeds, ±40 ns: 6 of 24 > 1 µs once locked
+  before, worst 423 ns after, the same engagement window in 24 of 24.
+  - **`BOOT_SEEDED_ENGAGE_S` is 8 s, not the 2 s first designed.** The phase lock starts on the
+    rate servo's word, which carries its ACQ P term on a per-window rate: at 30 µs jitter it is
+    still ppm off a few seconds after the anchor. 20 noise seeds × 7 seed offsets × 3 jitters:
+    [41] flapped in 1-15 of 20 at 2 / 4 / 6 s (7 s: 1), none at 8 s, none over 40 fresh noise
+    seeds; the rate-lock law: none. Starting on the servo's baseline (no P term) instead cured
+    the near seeds and broke the 15 ppm-off ones (the baseline lags). Judge a fixed-time trigger
+    by a flap COUNT over many noise seeds: the committed 3-seed sim passed at 4 and 6 s and failed
+    at 3 and 5 s, a lottery.
+  - **Hand-driven controller tests name the engaging window by the rate lock.** Under the new law
+    a bare rate lock no longer engages an anchored core; `boot_tests.rs`'s `window()` models the
+    engaging window as a seeded boot with windows 5 s of grandmaster time apart (their `t1` came
+    from the wall, so the ring reset every window). Readiness is judged on the windows BEFORE the
+    engaging one.
+  - **A USB NIC's fit sits nearer the gate** (σ median 0.4, 5 of 36 model seeds refused at
+    1.0-2.2 ppm): a refused fit engages on the rate lock, by then normally locked too.
 - **A sim that feeds the rate servo a constant offset never sees this.** The 1372 controller test
   calls `apply_self_tuning_servo(0.0)`, so the rate servo never saw the phase lock's slew; feed
   BOTH the rate servo's median (µs) and the phase lock's raw `t2 − t1` (ns) from one world.
