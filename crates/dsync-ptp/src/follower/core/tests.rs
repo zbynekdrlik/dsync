@@ -333,6 +333,79 @@ fn a_follower_whose_windows_do_not_divide_the_fit_window_locks_and_holds_136() {
     }
 }
 
+/// dsync#170: since the cold first engagement waits for the full 20 s fit, the cold twin above
+/// engages on a full ring and no longer reaches the short-ring path this incident was about. A
+/// SEEDED boot still engages on a short ring (`BOOT_SEEDED_ENGAGE_S`) on the rate servo's word,
+/// here the probe's ~2.4 ppm off; with 254 ms Syncs the ring never spans 20 s exactly, and the
+/// continued fit must still re-seed once it has RUN 20 s (`clock_s`), or the PI walks `e` off.
+#[test]
+fn a_seeded_follower_whose_windows_do_not_divide_the_fit_window_re_seeds_and_holds_170() {
+    for seed in SEEDS {
+        let mut world = World::new(seed, 35_000.0);
+        world.sync_period_ns = 254_000_000;
+        world.gm_ppm = 0.0;
+        world.pc_ppm = 5.4;
+        let mut core = new_core(&world).with_seed(-5.4 + 2.4);
+        let locked_at = run_to_lock(&mut world, &mut core, 120);
+        assert!(
+            core.core.engaged_on_fit().is_none(),
+            "seed {seed:#x}: a seeded boot engages on the short ring"
+        );
+        let mut worst = 0;
+        for i in 0..(240 * 4) {
+            world.tick(&mut [&mut core]);
+            assert!(
+                core.model().locked,
+                "seed {seed:#x}: locked at {locked_at}s, lost at {}s (e {:?})",
+                world.t as f64 / 1e9,
+                core.model().offset_ns
+            );
+            if i >= 120 * 4 {
+                worst = worst.max(world.error_ns(&core).expect("anchored").abs());
+            }
+        }
+        let reseed = core
+            .core
+            .boot_reseed()
+            .unwrap_or_else(|| panic!("seed {seed:#x}: the continued fit never re-seeded"));
+        assert!(
+            (reseed.freq_ppm + 5.4).abs() < 1.0,
+            "seed {seed:#x}: re-seeded on {}",
+            reseed.freq_ppm
+        );
+        let mean_jitter_ns = (35_000.0 * (2.0 / std::f64::consts::PI).sqrt()) as i64;
+        assert!(
+            worst <= LOCK_BOUND_NS + mean_jitter_ns,
+            "seed {seed:#x}: settled error {worst}ns"
+        );
+    }
+}
+
+/// dsync#170, a risk the design named: a USB NIC's acquisition fit is noisier (σ ~0.1-2 ppm
+/// against the 1 ppm gate), and a refused fit falls back to the rate lock. The model's USB world
+/// engages on the fit.
+#[test]
+fn a_cold_follower_on_a_usb_nic_engages_on_the_acquisition_fit_170() {
+    for seed in SEEDS {
+        let mut world = usb_world(seed);
+        let mut core = new_core(&world);
+        while !core.engaged() {
+            assert!(
+                world.t < 120 * 1_000_000_000,
+                "seed {seed:#x}: never engaged"
+            );
+            world.tick(&mut [&mut core]);
+        }
+        // Reached `Fit`, not `Refused` (its accuracy, ~1 ppm here, is the refinement's job:
+        // `a_follower_on_a_usb_nic_locks_on_the_delay_floor_and_holds_the_line_160`).
+        assert!(
+            core.core.engaged_on_fit().is_some(),
+            "seed {seed:#x}: the fit was refused (the boot fit {:?})",
+            core.core.boot_fit_line()
+        );
+    }
+}
+
 /// dsync#136, the mbc-snv probe: the Dante NIC there is a USB adapter, and now and then 3 of a
 /// window's 4 Syncs arrive ~0.5 ms late. That window's median `e` reads +455…+504 µs, and the PI's
 /// proportional term turned each into an 8-10 µs move of the follower's line (the probe's

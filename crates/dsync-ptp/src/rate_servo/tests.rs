@@ -103,6 +103,28 @@ fn a_growing_offset_drives_the_word_negative_and_the_integrator_learns_it() {
     assert!(servo.is_locked);
 }
 
+/// dsync#170: the phase lock engaged on its fit before this servo counted a lock: the servo takes
+/// it as its own, with a full count, and keeps it while held; a lock already counted keeps its
+/// count.
+#[test]
+fn the_phase_locks_engagement_is_adopted_as_the_rate_lock_170() {
+    let mut s = RateServo::<MonoNs>::new();
+    s.word(12.0, true, false);
+    assert!(!s.is_locked);
+    s.adopt_lock();
+    assert!(s.is_locked);
+    assert_eq!(s.lock_stable_count, LOCK_STABLE_COUNT);
+    for _ in 0..10 {
+        s.word(40.0, true, true);
+    }
+    assert!(s.is_locked, "held while the phase lock owns the word");
+    let mut counted = RateServo::<MonoNs>::new();
+    counted.is_locked = true;
+    counted.lock_stable_count = LOCK_STABLE_COUNT + 7;
+    counted.adopt_lock();
+    assert_eq!(counted.lock_stable_count, LOCK_STABLE_COUNT + 7);
+}
+
 #[test]
 fn an_unstable_window_unlocks_gradually_unless_the_phase_lock_holds_it_146() {
     let locked = || {

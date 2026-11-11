@@ -154,13 +154,112 @@ mod tests {
         assert_eq!(last, Some(5_500_000_000));
     }
 
+    /// dsync#170: an acquiring core after `windows` unlocked 0.5 s windows (anchored on the third,
+    /// where its acquisition ring starts), `e` alternating +-`noise_us`, the rate servo's word 0.
+    fn acquiring(windows: usize, noise_us: f64) -> PhaseLockCore {
+        let mut core = PhaseLockCore::new();
+        for n in 0..windows {
+            let e_us = if n % 2 == 0 { noise_us } else { -noise_us };
+            core.on_window(5_000_000 + (e_us * 1_000.0) as i64, false, 0.0, 0.5);
+        }
+        assert!(core.anchor_ns().is_some() && !core.engaged_once());
+        core
+    }
+
+    /// The windows after which the acquisition ring has run `s` seconds.
+    fn ring_windows(s: f64) -> usize {
+        crate::ptp_phase_lock::ANCHOR_CONFIRM_WINDOWS + (s / 0.5).round() as usize
+    }
+
     #[test]
-    fn the_phase_lock_engages_only_on_a_rate_lock_with_ptp_live() {
-        // Before the anchor the rate lock decides (dsync#170 keeps that law there).
+    fn the_phase_lock_never_engages_while_ptp_is_stale_and_before_the_anchor_on_the_rate_lock() {
         let core = PhaseLockCore::new();
         assert!(engage_on(&core, true, false, false));
         assert!(!engage_on(&core, true, false, true));
         assert!(!engage_on(&core, false, false, false));
+        // A seed changes nothing before the anchor (a locked window anchors at once, #134).
+        assert!(!engage_on(&core, false, true, false));
+        let fit = acquiring(ring_windows(25.0), 1.0);
+        assert!(!engage_on(&fit, true, true, true), "stale: never");
+    }
+
+    /// dsync#170: the FIRST engagement is the acquisition ring's readiness, in grandmaster time,
+    /// whatever the rate servo's lock says, except a fit the ring refuses, where the rate lock
+    /// decides as before.
+    #[test]
+    fn the_first_engagement_is_the_rings_readiness_not_the_rate_lock_170() {
+        // A short ring: not yet, even rate-locked.
+        let short = acquiring(ring_windows(3.0), 1.0);
+        assert_eq!(
+            short.first_engagement_readiness(false),
+            FirstEngagement::NotYet
+        );
+        assert!(!engage_on(&short, true, false, false));
+        // A seed accepted: engaged at BOOT_SEEDED_ENGAGE_S of ring, not a window before.
+        let seeded_s = crate::ptp_phase_lock::BOOT_SEEDED_ENGAGE_S;
+        let before = acquiring(ring_windows(seeded_s) - 1, 1.0);
+        assert_eq!(
+            before.first_engagement_readiness(true),
+            FirstEngagement::NotYet
+        );
+        assert!(!engage_on(&before, true, true, false));
+        let seeded = acquiring(ring_windows(seeded_s), 1.0);
+        assert_eq!(
+            seeded.first_engagement_readiness(true),
+            FirstEngagement::Seeded
+        );
+        assert!(
+            engage_on(&seeded, false, true, false),
+            "no rate lock needed"
+        );
+        assert!(
+            !engage_on(&seeded, true, false, false),
+            "without a seed: the fit"
+        );
+        // The full 20 s ring with a good fit: engaged, rate-locked or not.
+        let full_s = crate::ptp_phase_lock::BOOT_FIT_WINDOW_S;
+        let not_full = acquiring(ring_windows(full_s) - 1, 1.0);
+        assert_eq!(
+            not_full.first_engagement_readiness(false),
+            FirstEngagement::NotYet
+        );
+        let fit = acquiring(ring_windows(full_s), 1.0);
+        assert_eq!(fit.first_engagement_readiness(false), FirstEngagement::Fit);
+        assert!(engage_on(&fit, false, false, false));
+        // A full ring the fit refuses (sigma > 1 ppm): the rate lock decides.
+        let noisy = acquiring(ring_windows(full_s), 70.0);
+        assert_eq!(
+            noisy.first_engagement_readiness(false),
+            FirstEngagement::Refused
+        );
+        assert!(engage_on(&noisy, true, false, false));
+        assert!(!engage_on(&noisy, false, false, false));
+    }
+
+    /// dsync#170: once engaged, every later engagement (after an outage or a lock loss) is the
+    /// rate lock's, as before; the engaging window asks the rate servo to adopt the lock.
+    #[test]
+    fn a_re_engagement_is_the_rate_locks_and_the_engaging_window_adopts_it_170() {
+        let mut core = acquiring(ring_windows(crate::ptp_phase_lock::BOOT_FIT_WINDOW_S), 1.0);
+        let (mut gate, mut dev) = (PhaseLockGate::new(), WordDeviation::default());
+        assert!(engage_on(&core, false, false, false));
+        let out = core.on_window(5_000_000, true, 0.0, 0.5);
+        assert!(core.engaged());
+        let close = close_window(&core, &mut gate, &mut dev, &out, false, 0.0);
+        assert!(
+            close.adopt_rate_lock,
+            "the engaging window adopts the rate lock"
+        );
+        let out = core.on_window(5_000_000, true, 0.0, 0.5);
+        let close = close_window(&core, &mut gate, &mut dev, &out, true, 0.0);
+        assert!(!close.adopt_rate_lock, "only the engaging window");
+        core.disengage();
+        assert!(core.engaged_once());
+        assert!(engage_on(&core, true, false, false));
+        assert!(
+            !engage_on(&core, false, true, false),
+            "the fit no longer decides"
+        );
     }
 
     /// An engaged core: anchored on a locked window at 0.
