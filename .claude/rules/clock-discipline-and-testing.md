@@ -1515,18 +1515,30 @@ learned:
   normal constants bit for bit (`without_a_confirmed_step_…_bit_for_bit_1372` still holds).
 - **Gain changes keep the word continuous without a bumpless-transfer term:** the boost starts on
   the event's window, where the tracked error is ~0 (`Rebased`: e = 0 at the re-anchor;
-  `GmContinued`: the residual is in the pull, the PI tracks `e − r`), and the ramp moves the
-  gains by < 0.5 % per window.
+  `GmContinued`: the residual is in the pull, the PI tracks `e − r`), and the ramp moves `K_P`
+  by < 0.5 % per second (`K_I` ~0.9 %, but it acts only through the integrator's increment).
+- **The boost belongs to the engagement that took the change** (review of #166): a lock loss
+  ends it (`end_gain_boost`); a change still unlearned at that point restarts it at the next
+  engagement (`gm_change_unengaged`). Without that a re-engagement 1 ms off ran `K_P × 4` on the
+  raw error (80 ppm instead of 20). A change during the boot acquisition starts no boost (the
+  boot fit owns it); a provisional window held before the PI does not advance its clock.
 - **Measured (core, 600 s, ±4.5 ppm step 20 s after the change and ±4 ppm warm-up τ 60 s, jitter
-  0/10 µs × 3 seeds):** peak 164 µs with 25 windows > 150 µs before, ≤ 57 µs after; 52-83 µs at
-  90 s before, ≤ 20 µs after. Follower world (+4.5 ppm step): 167 µs, lock lost at 83 s before;
+  0/10 µs × 3 seeds, continued and re-based):** before, peak 155.8 µs with up to 11 consecutive
+  windows > 150 µs (only the +4.5 ppm step at 10 µs jitter crosses the 4-window unlock rule, 4 of
+  32 cases) and 52.4-74.8 µs at 90 s in every case; after, peak ≤ 57.4 µs, ≤ 20 µs from 90 s.
+  The core RED rests mostly on the 50 µs-at-90 s bound; the follower's lock loss is the primary
+  reproduction of the incident. Follower world (+4.5 ppm step): 167 µs, lock lost at 83 s before;
   45 µs, never lost, after. The bench got BETTER (wall disagreement 69 → 46 µs, relative phase
   43 → 27 µs): the faster loop also retires the re-anchor residuals sooner.
 - **A bench bound derived from the PI's pull-in rate scales with the boost.** The bit-identity
   pair's "≤ 1 ppm in the 10 min after a GM event" was ≈ 100 µs / 100 s; the boosted loop pulls
   the same residual in 4× faster, so the bound is `GM_BOOST_GAIN` ppm (measured 0.59 → 2.39).
   Re-derive any such bound when the loop's gains change, never widen it blindly.
-- Tests: `the_new_grandmasters_rate_moving_after_the_re_seed_never_unlocks_166` (core,
+- Tests: `the_gain_boost_is_4x_critically_damped_…_166` and
+  `the_gain_boost_ends_and_the_words_are_the_plain_pi_bit_for_bit_after_it_166` pin the
+  schedule itself (the scenario tests have wide margins and would not catch a boost that never
+  ends or a wrong `K_I` factor); `a_lock_loss_ends_the_gain_boost_of_a_grandmaster_change_166`;
+  `the_new_grandmasters_rate_moving_after_the_re_seed_never_unlocks_166` (core,
   `gm_change_with` takes a per-window rate profile; `e` judged against the anchor in force) and
   `a_secondary_grandmaster_whose_rate_moves_after_the_handover_keeps_the_lock_166` (follower,
   `World::gm_profile` accumulates the moving rate's phase per tick).

@@ -215,7 +215,9 @@ pub const GM_BOOST_RAMP_S: f64 = 300.0;
 /// dsync#166 — the PI gains (`K_P`, `K_I`) at `boost_s` PTP seconds after the last time-base
 /// change (`None` = no boost running: the normal gains, bit for bit). A pure function of the
 /// grandmaster time since the event, so two followers on one PC fed the same windows apply the
-/// same gains.
+/// same gains. That time is the `dt` of the windows the engaged PI took (late ones included);
+/// a provisional window held before the PI (#160) does not advance it. A change during the
+/// boot acquisition (before the first engagement) starts no boost: the boot fit owns that case.
 pub fn boosted_gains(boost_s: Option<f64>) -> (f64, f64) {
     let Some(t) = boost_s else {
         return (K_P_PER_S, K_I_PER_S2);
@@ -442,6 +444,12 @@ impl PhaseLockCore {
     }
 
     /// The phase (µs) still being retired after the last followed step; 0 when none.
+    /// dsync#166: PTP seconds since the time-base change whose gain boost is running
+    /// ([`boosted_gains`]); `None` = the normal gains.
+    pub fn gain_boost_s(&self) -> Option<f64> {
+        self.boost_s
+    }
+
     pub fn pull_us(&self) -> f64 {
         self.pull_us
     }
@@ -497,6 +505,7 @@ impl PhaseLockCore {
         self.close_boot_fit();
         self.refine = None;
         self.close_gm_fit();
+        self.end_gain_boost();
     }
 
     /// The boot fit's line while it is open (diagnostics: its slope and σ, even when refused).
@@ -527,6 +536,13 @@ impl PhaseLockCore {
             self.gm_change_unengaged = true;
         }
         self.gm_fit_shift_us = 0.0;
+    }
+
+    /// dsync#166 (review): the gain boost belongs to the engagement that took the change. A lock
+    /// loss ends it; a change still unlearned then (`gm_change_unengaged`) starts it again at
+    /// the next engagement, a learned one does not: a re-engagement is the plain PI's.
+    fn end_gain_boost(&mut self) {
+        self.boost_s = None;
     }
 
     /// dsync#146: the first engagement's fit ends (resolved, or its engagement ended).
@@ -786,6 +802,7 @@ impl PhaseLockCore {
                 self.close_boot_fit();
                 self.refine = None;
                 self.close_gm_fit();
+                self.end_gain_boost();
             }
             return WindowOutcome {
                 freq_ppm: None,
@@ -2156,6 +2173,72 @@ mod tests {
             p.advance(w, DT);
             q.advance(w_ref, DT);
             q_e = q.e_ns;
+        }
+    }
+
+    #[test]
+    fn the_gain_boost_is_4x_critically_damped_then_back_to_the_normal_gains_bit_for_bit_166() {
+        let (k_p, k_i) = boosted_gains(None);
+        assert_eq!(k_p.to_bits(), K_P_PER_S.to_bits());
+        assert_eq!(k_i.to_bits(), K_I_PER_S2.to_bits());
+        for t in [0.0, GM_BOOST_HOLD_S / 2.0, GM_BOOST_HOLD_S - 1e-9] {
+            let (k_p, k_i) = boosted_gains(Some(t));
+            assert!((k_p - 4.0 * K_P_PER_S).abs() < 1e-15, "t {t}");
+            assert!((k_i - 16.0 * K_I_PER_S2).abs() < 1e-15, "t {t}");
+        }
+        // Halfway down the ramp: ×2 and ×4; critically damped everywhere on it.
+        let (k_p, k_i) = boosted_gains(Some(GM_BOOST_HOLD_S + GM_BOOST_RAMP_S / 2.0));
+        assert!((k_p / K_P_PER_S - 2.0).abs() < 1e-12);
+        assert!((k_i / K_I_PER_S2 - 4.0).abs() < 1e-12);
+        let mut last = f64::INFINITY;
+        for n in 0..=1_000 {
+            let t = GM_BOOST_HOLD_S + GM_BOOST_RAMP_S * n as f64 / 1_000.0;
+            let (k_p, k_i) = boosted_gains(Some(t));
+            assert!((k_p / (2.0 * k_i.sqrt()) - 1.0).abs() < 1e-12, "ζ at t {t}");
+            assert!(k_p <= last, "monotonic at t {t}");
+            last = k_p;
+        }
+        assert!(
+            (last - K_P_PER_S).abs() < 1e-15,
+            "the ramp ends on the normal K_P"
+        );
+    }
+
+    #[test]
+    fn the_gain_boost_ends_and_the_words_are_the_plain_pi_bit_for_bit_after_it_166() {
+        let (mut c, mut p) = settled_core();
+        assert_eq!(c.gain_boost_s(), None, "no boost before a change");
+        c.request_rebase();
+        p.e_ns -= 20_000.0;
+        let mut windows = 0usize;
+        while windows == 0 || c.gain_boost_s().is_some() {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, 12.0, DT);
+            if windows == 0 {
+                assert_eq!(c.gain_boost_s(), Some(DT), "started on the change's window");
+            }
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+            windows += 1;
+            assert!(windows <= 2_000, "the boost never ended");
+        }
+        let ended_s = windows as f64 * DT;
+        assert!(
+            (ended_s - (GM_BOOST_HOLD_S + GM_BOOST_RAMP_S)).abs() <= DT,
+            "ended at {ended_s} s"
+        );
+        assert_eq!(c.pull_us(), 0.0);
+        let mut i_ref = c.integrator_ppm();
+        let mut q = Plant::new(p.osc_ppm, 1, 0.0);
+        q.e_ns = p.e_ns;
+        q.applied = p.applied.clone();
+        for n in 0..600 {
+            let w = c
+                .on_window(D + p.e_ns.round() as i64, true, 12.0, DT)
+                .freq_ppm
+                .unwrap();
+            let w_ref = plain_pi(&mut i_ref, q.e_ns.round() as i64, DT);
+            assert_eq!(w.to_bits(), w_ref.to_bits(), "window {n} after the boost");
+            p.advance(w, DT);
+            q.advance(w_ref, DT);
         }
     }
 
