@@ -5,6 +5,8 @@ paths:
   - "src/ntp_server.rs"
   - "src/status.rs"
   - "crates/dsync-ptp/src/ptp_phase_lock.rs"
+  - "crates/dsync-ptp/src/ptp_phase_lock/first_engagement.rs"
+  - "crates/dsync-ptp/src/phase_window.rs"
   - "crates/dsync-ptp/src/delay_floor.rs"
   - "src/date_offset.rs"
   - "src/boot_ready.rs"
