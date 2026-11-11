@@ -64,7 +64,7 @@ use dsync::date_offset::{
     DateFollower, DateOffsetState, FollowAction, SlewSpec, StepKind, DEFAULT_SLEW_PPM,
     DEFAULT_STEP_BOUND_NS, MIN_STEP_LEAD_NS,
 };
-use dsync::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
+use dsync::ptp_phase_lock::{AnchorEvent, PhaseLockCore, GM_BOOST_GAIN};
 use dsync_ptp::delay_floor::DelayFloor;
 
 const NS: i64 = 1;

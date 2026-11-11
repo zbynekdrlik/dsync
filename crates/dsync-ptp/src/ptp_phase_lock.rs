@@ -190,6 +190,47 @@ pub const GM_FIT_WINDOW_S: f64 = BOOT_REFINE_WINDOW_S;
 pub const GM_FIT_MIN_SPAN_S: f64 = 5.0;
 pub const GM_FIT_EARLY_SIGMA_PPM: f64 = 0.3;
 
+/// dsync#166 — after every time-base change (`GmContinued`, `Rebased`) the PI runs at
+/// `K_P × GM_BOOST_GAIN` and `K_I × GM_BOOST_GAIN²`: still critically damped (ζ = 1), its time
+/// constant 100 s / 4 = 25 s. The one-shot re-seed after the change (the GM fit, ~5-11 s) is
+/// right for its seconds, but a promoted secondary settling its own servo or a card warming
+/// after its reset MOVES its rate afterwards, by up to ~4-5 ppm (iemmixer, 6.11.2026), under the
+/// 6 ppm frequency-step minimum: the plain ~100 s PI leaves 36.8 µs per ppm at 100 s and a
+/// ramp `ρ` a standing `ρ / K_I`, so 4.2 ppm unlocked [41] for 3-5 minutes. ×4 gives 9.2 µs per
+/// ppm and `ρ / (16 K_I)`. Not more: every µs of window noise passes as `K_P` ppm of word
+/// jitter, 0.08 ppm here, and an ×8 loop (τ 12.5 s) would let the fit's noise through too.
+pub const GM_BOOST_GAIN: f64 = 4.0;
+
+/// dsync#166 — PTP seconds after the change the boost is held at full strength. The rate moves
+/// over the first minutes (a warm-up with a ~60 s time constant is 86 % done at 120 s), and
+/// the boosted loop takes ~5 τ to settle what moved in that time.
+pub const GM_BOOST_HOLD_S: f64 = 120.0;
+
+/// dsync#166 — PTP seconds over which the boost then returns to the normal gains, geometrically
+/// (`GM_BOOST_GAIN^(1 − t/ramp)`, smooth per window). Slow against the boosted loop (12 τ), so
+/// what is still moving is handed over to the normal PI gradually and the word never steps;
+/// the normal gains again 7 minutes after the change.
+pub const GM_BOOST_RAMP_S: f64 = 300.0;
+
+/// dsync#166 — the PI gains (`K_P`, `K_I`) at `boost_s` PTP seconds after the last time-base
+/// change (`None` = no boost running: the normal gains, bit for bit). A pure function of the
+/// grandmaster time since the event, so two followers on one PC fed the same windows apply the
+/// same gains. That time is the `dt` of the windows the engaged PI took (late ones included);
+/// a provisional window held before the PI (#160) does not advance it. A change during the
+/// boot acquisition (before the first engagement) starts no boost: the boot fit owns that case.
+pub fn boosted_gains(boost_s: Option<f64>) -> (f64, f64) {
+    let Some(t) = boost_s else {
+        return (K_P_PER_S, K_I_PER_S2);
+    };
+    let g = if t < GM_BOOST_HOLD_S {
+        GM_BOOST_GAIN
+    } else {
+        let left = (1.0 - (t - GM_BOOST_HOLD_S) / GM_BOOST_RAMP_S).clamp(0.0, 1.0);
+        GM_BOOST_GAIN.powf(left)
+    };
+    (K_P_PER_S * g, K_I_PER_S2 * g * g)
+}
+
 /// What happened to the anchor `D` in one window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnchorEvent {
@@ -321,6 +362,9 @@ pub struct PhaseLockCore {
     /// dsync#158 (review of PR #159): a grandmaster change (or its fit) that no engaged window
     /// took yet: the next engagement retires `e` along the pull and opens the fit.
     gm_change_unengaged: bool,
+    /// dsync#166: PTP seconds since the last time-base change while its gain boost runs
+    /// ([`boosted_gains`]); `None` = the normal gains.
+    boost_s: Option<f64>,
 }
 
 impl PhaseLockCore {
@@ -400,6 +444,12 @@ impl PhaseLockCore {
     }
 
     /// The phase (µs) still being retired after the last followed step; 0 when none.
+    /// dsync#166: PTP seconds since the time-base change whose gain boost is running
+    /// ([`boosted_gains`]); `None` = the normal gains.
+    pub fn gain_boost_s(&self) -> Option<f64> {
+        self.boost_s
+    }
+
     pub fn pull_us(&self) -> f64 {
         self.pull_us
     }
@@ -455,6 +505,7 @@ impl PhaseLockCore {
         self.close_boot_fit();
         self.refine = None;
         self.close_gm_fit();
+        self.end_gain_boost();
     }
 
     /// The boot fit's line while it is open (diagnostics: its slope and σ, even when refused).
@@ -485,6 +536,13 @@ impl PhaseLockCore {
             self.gm_change_unengaged = true;
         }
         self.gm_fit_shift_us = 0.0;
+    }
+
+    /// dsync#166 (review): the gain boost belongs to the engagement that took the change. A lock
+    /// loss ends it; a change still unlearned then (`gm_change_unengaged`) starts it again at
+    /// the next engagement, a learned one does not: a re-engagement is the plain PI's.
+    fn end_gain_boost(&mut self) {
+        self.boost_s = None;
     }
 
     /// dsync#146: the first engagement's fit ends (resolved, or its engagement ended).
@@ -744,6 +802,7 @@ impl PhaseLockCore {
                 self.close_boot_fit();
                 self.refine = None;
                 self.close_gm_fit();
+                self.end_gain_boost();
             }
             return WindowOutcome {
                 freq_ppm: None,
@@ -800,6 +859,8 @@ impl PhaseLockCore {
             self.gm_fit = Some(BootFreqFit::with_window(GM_FIT_WINDOW_S));
             self.gm_fit_shift_us = 0.0;
             self.gm_change_unengaged = false;
+            // dsync#166: the new grandmaster's rate may still move after the fit's re-seed.
+            self.boost_s = Some(0.0);
         } else if gm_at_engagement {
             // The change came on an unlocked window: what it left (the residual plus the
             // free-run since) is retired along the pull, and the new rate fitted from here.
@@ -811,6 +872,7 @@ impl PhaseLockCore {
             }
             self.gm_fit = Some(BootFreqFit::with_window(GM_FIT_WINDOW_S));
             self.gm_fit_shift_us = 0.0;
+            self.boost_s = Some(0.0);
         }
         if first_engagement && event == AnchorEvent::None {
             // dsync#134: the boot hold — the acquisition drift off the early anchor is retired
@@ -852,11 +914,17 @@ impl PhaseLockCore {
             self.late_held = 0;
             self.last_taken_e_us = Some(e_raw_us);
             let e_us = e_raw_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+            let (k_p, k_i) = boosted_gains(self.boost_s);
             // offset = local − master: a fast local clock GROWS e, so the correction is negative.
-            self.i_ppm =
-                (self.i_ppm - K_I_PER_S2 * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
-            (self.i_ppm - K_P_PER_S * e_us).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM)
+            self.i_ppm = (self.i_ppm - k_i * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+            (self.i_ppm - k_p * e_us).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM)
         };
+        // dsync#166: the boost's clock is the engaged windows' grandmaster time (late ones
+        // included), so it is the same on every box that took the same windows.
+        if let Some(t) = self.boost_s {
+            let t = t + dt;
+            self.boost_s = (t < GM_BOOST_HOLD_S + GM_BOOST_RAMP_S).then_some(t);
+        }
         self.fstep.note_word(f);
         self.last_freq_ppm = f;
         let disturbed = event != AnchorEvent::None || freq_step.is_some();
@@ -1017,8 +1085,9 @@ impl PhaseLockCore {
     fn pulled_word(&mut self, e_raw_us: f64, dt: f64) -> f64 {
         let e_us = (e_raw_us - self.pull_us).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
         let pull_rate = -self.pull_us / FSTEP_PULL_TAU_S;
-        self.i_ppm = (self.i_ppm - K_I_PER_S2 * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
-        let f = (self.i_ppm - K_P_PER_S * e_us + pull_rate).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+        let (k_p, k_i) = boosted_gains(self.boost_s);
+        self.i_ppm = (self.i_ppm - k_i * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+        let f = (self.i_ppm - k_p * e_us + pull_rate).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
         self.pull_us *= (-dt / FSTEP_PULL_TAU_S).exp();
         if self.pull_us.abs() < FSTEP_PULL_DONE_US {
             self.pull_us = 0.0;
@@ -1826,6 +1895,20 @@ mod tests {
         seed: u64,
         windows: usize,
     ) -> (PhaseLockCore, WindowOutcome, Vec<(f64, f64)>) {
+        gm_change_with(shift_ns, gm_ppm, |_| 0.0, jitter_us, seed, windows)
+    }
+
+    /// [`gm_change`] with the new grandmaster's rate MOVING after the change (dsync#166): its
+    /// extra rate `profile(t)` (ppm, `t` = s since the change, faster = positive) on top of
+    /// `gm_ppm`, applied per window.
+    fn gm_change_with(
+        shift_ns: f64,
+        gm_ppm: f64,
+        profile: impl Fn(f64) -> f64,
+        jitter_us: f64,
+        seed: u64,
+        windows: usize,
+    ) -> (PhaseLockCore, WindowOutcome, Vec<(f64, f64)>) {
         let mut noise = seed;
         let mut jitter = move || {
             noise ^= noise << 13;
@@ -1847,15 +1930,19 @@ mod tests {
         p.e_ns -= shift_ns;
         p.osc_ppm -= gm_ppm;
         let first = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
-        let mut trace = vec![(
-            p.e_ns / 1_000.0,
-            first.freq_ppm.expect("engaged") + p.osc_ppm,
-        )];
+        // `e` against the anchor in force (a `Rebased` change moves it).
+        let e_us = |c: &PhaseLockCore, p: &Plant| {
+            (p.e_ns - (c.anchor_ns().expect("anchored") - D) as f64) / 1_000.0
+        };
+        let mut trace = vec![(e_us(&c, &p), first.freq_ppm.expect("engaged") + p.osc_ppm)];
+        let osc_after = p.osc_ppm;
+        p.osc_ppm = osc_after - profile(0.0);
         p.advance(first.freq_ppm.expect("engaged"), DT);
-        for _ in 1..windows {
+        for n in 1..windows {
+            p.osc_ppm = osc_after - profile(n as f64 * DT);
             let out = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, 12.0, DT);
             let f = out.freq_ppm.expect("engaged");
-            trace.push((p.e_ns / 1_000.0, f + p.osc_ppm));
+            trace.push((e_us(&c, &p), f + p.osc_ppm));
             p.advance(f, DT);
         }
         (c, first, trace)
@@ -1995,6 +2082,164 @@ mod tests {
             .map(|&(e, _)| e.abs())
             .fold(0.0, f64::max);
         assert!(worst_after <= 50.0, "|e| {worst_after:.1} µs after 50 s");
+    }
+
+    /// dsync#166: the longest run of consecutive windows with |e| beyond `bound_us`.
+    fn longest_run_beyond(trace: &[(f64, f64)], bound_us: f64) -> usize {
+        let (mut run, mut longest) = (0usize, 0usize);
+        for &(e, _) in trace {
+            run = if e.abs() > bound_us { run + 1 } else { 0 };
+            longest = longest.max(run);
+        }
+        longest
+    }
+
+    #[test]
+    fn the_new_grandmasters_rate_moving_after_the_re_seed_never_unlocks_166() {
+        // dstack, iemmixer 6.11.2026 (v1.28.0): ~2 min after a continuous handover to a stable
+        // secondary grandmaster `e` passed 150 µs for 4 windows (−155.1 / +153.8 µs) and the lock
+        // stayed lost for 3-5 minutes. The one-shot re-seed (~11 s) was right; the new
+        // grandmaster's rate MOVED after it (a promoted secondary settling, a card warming), and
+        // only the ~100 s PI followed: 36.8 µs per ppm left at 100 s. A step of 4.5 ppm 20 s
+        // after the change, and a 4 ppm warm-up with a 60 s time constant, both under the 6 ppm
+        // frequency-step minimum: never 4 windows beyond the [41] unlock bound (150 µs) over
+        // 600 s, and within the lock bound (50 µs) from 90 s after the change on.
+        let step = |sign: f64| move |t: f64| if t >= 20.0 { sign * 4.5 } else { 0.0 };
+        let warm = |sign: f64| move |t: f64| sign * 4.0 * (1.0 - (-t / 60.0).exp());
+        let profiles: [(&str, Box<dyn Fn(f64) -> f64>); 4] = [
+            ("+4.5 ppm step at 20 s", Box::new(step(1.0))),
+            ("-4.5 ppm step at 20 s", Box::new(step(-1.0))),
+            ("+4 ppm warm-up", Box::new(warm(1.0))),
+            ("-4 ppm warm-up", Box::new(warm(-1.0))),
+        ];
+        let mut report = Vec::new();
+        for (name, profile) in &profiles {
+            // A continued time base (dstack's case) and a new one (`Rebased`).
+            for shift in [20_000.0, 1_500_000.0] {
+                for (jitter_us, seed) in [
+                    (0.0, 1),
+                    (10.0, 0x5eed_0166),
+                    (10.0, 0x5eed_0167),
+                    (10.0, 0x5eed_0168),
+                ] {
+                    let (_, _, trace) = gm_change_with(shift, 3.0, profile, jitter_us, seed, 1_200);
+                    let peak = trace.iter().map(|&(e, _)| e.abs()).fold(0.0, f64::max);
+                    let late = trace[180..]
+                        .iter()
+                        .map(|&(e, _)| e.abs())
+                        .fold(0.0, f64::max);
+                    let run = longest_run_beyond(&trace, 150.0);
+                    report.push(format!(
+                        "{name}, shift {shift} ns, jitter {jitter_us} µs, seed {seed:#x}: \
+                         peak {peak:.1} µs, after 90 s {late:.1} µs, {run} windows > 150 µs"
+                    ));
+                    assert!(run < 4 && late <= 50.0, "{}", report.last().unwrap());
+                }
+            }
+        }
+        eprintln!("{}", report.join("\n"));
+    }
+
+    #[test]
+    fn a_lock_loss_ends_the_gain_boost_of_a_grandmaster_change_166() {
+        // Review of #166: the boost belongs to the engagement that took the change. A lock loss
+        // after the change was learned (the fit closed), then a re-engagement 500 µs off (not
+        // re-aligned, no pull), must run the plain PI, not a boost frozen mid-hold.
+        let (mut c, mut p) = settled_core();
+        c.request_rebase();
+        p.e_ns -= 20_000.0;
+        for _ in 0..60 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, 12.0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        assert!(!c.gm_fitting(), "the change was learned");
+        let held = c.integrator_ppm();
+        for _ in 0..4 {
+            c.on_window(D + p.e_ns.round() as i64, false, held, DT);
+            p.advance(held, DT);
+        }
+        p.e_ns = 500_000.0;
+        let mut i_ref = held;
+        let mut q_e = p.e_ns;
+        let mut q = Plant::new(p.osc_ppm, 1, held);
+        q.e_ns = q_e;
+        for n in 0..200 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, held, DT);
+            assert_eq!(out.event, AnchorEvent::None, "window {n}");
+            assert_eq!(c.pull_us(), 0.0, "window {n}: no pull");
+            let w = out.freq_ppm.expect("engaged");
+            let w_ref = plain_pi(&mut i_ref, q_e.round() as i64, DT);
+            assert_eq!(w.to_bits(), w_ref.to_bits(), "window {n}: {w} vs {w_ref}");
+            p.advance(w, DT);
+            q.advance(w_ref, DT);
+            q_e = q.e_ns;
+        }
+    }
+
+    #[test]
+    fn the_gain_boost_is_4x_critically_damped_then_back_to_the_normal_gains_bit_for_bit_166() {
+        let (k_p, k_i) = boosted_gains(None);
+        assert_eq!(k_p.to_bits(), K_P_PER_S.to_bits());
+        assert_eq!(k_i.to_bits(), K_I_PER_S2.to_bits());
+        for t in [0.0, GM_BOOST_HOLD_S / 2.0, GM_BOOST_HOLD_S - 1e-9] {
+            let (k_p, k_i) = boosted_gains(Some(t));
+            assert!((k_p - 4.0 * K_P_PER_S).abs() < 1e-15, "t {t}");
+            assert!((k_i - 16.0 * K_I_PER_S2).abs() < 1e-15, "t {t}");
+        }
+        // Halfway down the ramp: ×2 and ×4; critically damped everywhere on it.
+        let (k_p, k_i) = boosted_gains(Some(GM_BOOST_HOLD_S + GM_BOOST_RAMP_S / 2.0));
+        assert!((k_p / K_P_PER_S - 2.0).abs() < 1e-12);
+        assert!((k_i / K_I_PER_S2 - 4.0).abs() < 1e-12);
+        let mut last = f64::INFINITY;
+        for n in 0..=1_000 {
+            let t = GM_BOOST_HOLD_S + GM_BOOST_RAMP_S * n as f64 / 1_000.0;
+            let (k_p, k_i) = boosted_gains(Some(t));
+            assert!((k_p / (2.0 * k_i.sqrt()) - 1.0).abs() < 1e-12, "ζ at t {t}");
+            assert!(k_p <= last, "monotonic at t {t}");
+            last = k_p;
+        }
+        assert!(
+            (last - K_P_PER_S).abs() < 1e-15,
+            "the ramp ends on the normal K_P"
+        );
+    }
+
+    #[test]
+    fn the_gain_boost_ends_and_the_words_are_the_plain_pi_bit_for_bit_after_it_166() {
+        let (mut c, mut p) = settled_core();
+        assert_eq!(c.gain_boost_s(), None, "no boost before a change");
+        c.request_rebase();
+        p.e_ns -= 20_000.0;
+        let mut windows = 0usize;
+        while windows == 0 || c.gain_boost_s().is_some() {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, 12.0, DT);
+            if windows == 0 {
+                assert_eq!(c.gain_boost_s(), Some(DT), "started on the change's window");
+            }
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+            windows += 1;
+            assert!(windows <= 2_000, "the boost never ended");
+        }
+        let ended_s = windows as f64 * DT;
+        assert!(
+            (ended_s - (GM_BOOST_HOLD_S + GM_BOOST_RAMP_S)).abs() <= DT,
+            "ended at {ended_s} s"
+        );
+        assert_eq!(c.pull_us(), 0.0);
+        let mut i_ref = c.integrator_ppm();
+        let mut q = Plant::new(p.osc_ppm, 1, 0.0);
+        q.e_ns = p.e_ns;
+        q.applied = p.applied.clone();
+        for n in 0..600 {
+            let w = c
+                .on_window(D + p.e_ns.round() as i64, true, 12.0, DT)
+                .freq_ppm
+                .unwrap();
+            let w_ref = plain_pi(&mut i_ref, q.e_ns.round() as i64, DT);
+            assert_eq!(w.to_bits(), w_ref.to_bits(), "window {n} after the boost");
+            p.advance(w, DT);
+            q.advance(w_ref, DT);
+        }
     }
 
     #[test]

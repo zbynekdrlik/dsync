@@ -31,7 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   5. Consult with user before switching approaches - do not endlessly iterate without results
 - **Test Quality:** All code must have 100% test coverage with high-quality, complex E2E tests. Never put out a broken version. The `tests/simulation_e2e.rs` contains critical simulation tests that validate the servo and controller behavior under various conditions.
 - **CI/CD Verification:** Wait until GitHub Actions CI/CD pipeline has successfully finished (green checkmark) before telling the user to update or run commands. Monitor `gh run view` until completion
-- **Deployment:** Never deploy to a node on your own. The rules in `docs/HANDOVER.md` apply: the camera rig belongs to camera-box, and requests come through dstack. Site facts are in `~/.config/dsync/TARGETS.md`.
+- **Deployment:** Never deploy to a RIG node on your own: the camera rig belongs to camera-box, and requests come through dstack (`docs/HANDOVER.md`). The non-rig boxes are the exception: roll every release to them yourself right after the assets exist (#169). Site facts are in `~/.config/dsync/TARGETS.md`.
 - **STRICT CI - Fight Regressions:** CI is configured to be maximally strict to prevent regressions:
   1. **Version bump required**: CI blocks merging if Cargo.toml version matches an existing release tag
      - ALWAYS bump version before merging ANY change to master — including docs-only /

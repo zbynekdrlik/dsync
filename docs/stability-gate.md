@@ -32,11 +32,15 @@ Part 1 (this file) is live. Part 2 waits on the owner (see below).
   - Exit 5: a bad file. Exit 0: done (`--restore` on a free lease included).
   - After a restore, `.gate-prev` is removed, so the next install saves the binary that is current
     then.
+  - A RELEASE deploy on companion (#169) also goes through the helper's plain install, which
+    keeps the old binary as `dsync.gate-prev`. Move that file aside (e.g. `dsync.<old>.bak`) right
+    after, or the next gate's `--restore` puts the old release back. Check first that no restore is
+    queued (`/var/lib/dsync-gate-restore-pending`) and no `drift.json.gate-*` file exists.
   - The held-lease restore ran live for the first time at 03:40 on 2026-11-02 (the queued
     restore of run 41372498483). `--cold` has not run live yet: the gate on #146's push is its
     first run.
-- dsync never deploys to nodes. This job and its helper are dsync's only touch of companion. No
-  ssh.
+- dsync deploys only to the non-rig boxes (#169, owner 11.11.2026: every release, right after its
+  assets exist). On companion that is the helper above, never ssh.
 
 ## Workflow: `.github/workflows/gate.yml`
 

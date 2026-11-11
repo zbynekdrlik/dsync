@@ -295,8 +295,10 @@ fn two_clock_bench_rate_is_ptp_phase_agrees_and_every_date_step_is_coordinated_1
     // tolerance) inside that step instead of as an absorb — by construction dependent on the
     // date's timing (the slew test below judges the same way). Then, and only then, the 10
     // minutes after each grandmaster event may differ by the phase lock's pull-in of that
-    // residual (< 1 ppm) and every later word by its decaying tail in the integrator (< 0.001
-    // ppm, the slew test's numerical bound); without a renamed step every word is bit-identical.
+    // residual (< 1 ppm at the normal gains, × `GM_BOOST_GAIN` under the dsync#166 boost that
+    // runs right after every grandmaster event) and every later word by its decaying tail in the
+    // integrator (< 0.001 ppm, the slew test's numerical bound); without a renamed step every
+    // word is bit-identical.
     let renamed = !plus.renamed_steps.is_empty() || !fast.renamed_steps.is_empty();
     let after_gm_event = |k: usize| {
         renamed
@@ -309,7 +311,7 @@ fn two_clock_bench_rate_is_ptp_phase_agrees_and_every_date_step_is_coordinated_1
         for (k, (a, b)) in plus.words[i].iter().zip(&fast.words[i]).enumerate() {
             if after_gm_event(k) {
                 assert!(
-                    (a - b).abs() < 1.0,
+                    (a - b).abs() < GM_BOOST_GAIN,
                     "box {i} window {k}: a re-anchor residual is at most the absorb tolerance"
                 );
             } else if renamed {
@@ -379,7 +381,9 @@ fn a_fleet_ahead_of_utc_slews_back_never_steps_back_and_keeps_its_relative_phase
     // every box removes its re-anchor residual (≤ the 100 µs absorb tolerance): as an absorb the
     // phase lock slews out over ~2 min, or — when a micro STEP of the other run is due just then —
     // inside that step. Which one depends on the date's timing by construction, so the words may
-    // differ there by the phase lock's pull-in of that residual (≈ 100 µs / 100 s = 1 ppm), never
+    // differ there by the phase lock's pull-in of that residual (≈ 100 µs / 100 s = 1 ppm at the
+    // normal gains; dsync#166 runs the PI × `GM_BOOST_GAIN` faster right after every grandmaster
+    // event, so ≈ 100 µs / 25 s = 4 ppm: measured 0.59 ppm before the boost, 2.39 with it), never
     // by more; everywhere else by numerical noise only.
     let plus = run(&Scenario::plain("UTC +8 ppm vs GM", 8.0, false));
     let after_gm_event = |k: usize| {
@@ -406,7 +410,7 @@ fn a_fleet_ahead_of_utc_slews_back_never_steps_back_and_keeps_its_relative_phase
     let worst_near_gm = diff(true);
     println!("[slew] worst word difference right after a GM event: {worst_near_gm:.6} ppm");
     assert!(
-        worst_near_gm < 1.0,
+        worst_near_gm < GM_BOOST_GAIN,
         "a re-anchor residual is at most the absorb tolerance: {worst_near_gm} ppm"
     );
     println!("[slew] worst word difference vs the forward-only run: {worst:.6} ppm");

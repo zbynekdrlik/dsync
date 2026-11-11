@@ -63,6 +63,11 @@ struct World {
     /// dsync#160 (the v1.30.0 release run): every core gets the SAME receive instant (one kernel
     /// stamp per datagram on one PC), core `i > 0` plus a few ns of conversion residue.
     shared_rx: bool,
+    /// dsync#166: the grandmaster's rate MOVING — an extra rate (ppm) on top of `gm_ppm`, a
+    /// function of the seconds since `gm_profile_t0`, accumulated per tick into `gm_extra_ns`.
+    gm_profile: Option<fn(f64) -> f64>,
+    gm_profile_t0: i64,
+    gm_extra_ns: f64,
 }
 
 impl World {
@@ -84,11 +89,23 @@ impl World {
             late_ns: 0,
             usb_delay: false,
             shared_rx: false,
+            gm_profile: None,
+            gm_profile_t0: 0,
+            gm_extra_ns: 0.0,
         }
     }
 
+    /// dsync#166: the extra rate (ppm) at true time `t`.
+    fn gm_extra_ppm(&self, t: i64) -> f64 {
+        self.gm_profile
+            .map_or(0.0, |f| f((t - self.gm_profile_t0) as f64 / 1e9))
+    }
+
     fn gm_time(&self, t: i64) -> i64 {
-        self.gm_base + t + (t as f64 * self.gm_ppm * 1e-6) as i64
+        // dsync#166: the phase the moving rate accumulated up to the current tick, extended to
+        // `t` at the current extra rate (`t` is at most a latency away from it).
+        let extra = self.gm_extra_ns + (t - self.t) as f64 * self.gm_extra_ppm(self.t) * 1e-6;
+        self.gm_base + t + (t as f64 * self.gm_ppm * 1e-6) as i64 + extra as i64
     }
 
     fn mono(&self, t: i64) -> i64 {
@@ -98,6 +115,7 @@ impl World {
     /// One Sync period: the Sync and its Follow_Up reach `core` (the same packets, each core with
     /// its own latency jitter, when there are several).
     fn tick(&mut self, cores: &mut [&mut FollowerCore]) {
+        self.gm_extra_ns += self.sync_period_ns as f64 * self.gm_extra_ppm(self.t) * 1e-6;
         self.t += self.sync_period_ns;
         self.seq = self.seq.wrapping_add(1);
         let t1 = self.gm_time(self.t);
@@ -941,4 +959,68 @@ fn the_residual_being_retired_after_a_grandmaster_change_is_published_158() {
         world.tick(&mut [&mut core]);
     }
     assert_eq!(core.model().pull_ns, 0, "retired after 120 s");
+}
+
+/// dsync#166: the grandmaster's rate steps +4.5 ppm 20 s after a handover (the warm-up variant
+/// in the core tests).
+fn step_4_5_ppm_after_20_s(s: f64) -> f64 {
+    if s >= 20.0 {
+        4.5
+    } else {
+        0.0
+    }
+}
+
+fn step_minus_4_5_ppm_after_20_s(s: f64) -> f64 {
+    -step_4_5_ppm_after_20_s(s)
+}
+
+fn warm_up_4_ppm(s: f64) -> f64 {
+    4.0 * (1.0 - (-s / 60.0).exp())
+}
+
+#[test]
+fn a_secondary_grandmaster_whose_rate_moves_after_the_handover_keeps_the_lock_166() {
+    // dstack, iemmixer 6.11.2026 (v1.28.0): ~2 min after a continuous handover to a stable
+    // secondary the in-process follower read −155.1 µs for 4 windows and lost the lock for 3-5
+    // minutes; the one-shot re-seed was right, the new grandmaster's rate moved after it.
+    let profiles: [(&str, fn(f64) -> f64); 3] = [
+        ("+4.5 ppm step at 20 s", step_4_5_ppm_after_20_s),
+        ("-4.5 ppm step at 20 s", step_minus_4_5_ppm_after_20_s),
+        ("+4 ppm warm-up", warm_up_4_ppm),
+    ];
+    for (name, profile) in profiles {
+        let mut world = World::new(0x5eed_0166, 5_000.0);
+        let mut core = new_core(&world);
+        run_to_lock(&mut world, &mut core, 300);
+        for _ in 0..(120 * 8) {
+            world.tick(&mut [&mut core]);
+        }
+        let t = world.t;
+        let a_now = world.gm_time(t);
+        world.gm = GM_B;
+        world.gm_base = a_now + 20_000 - t - (t as f64 * world.gm_ppm * 1e-6) as i64;
+        world.gm_profile = Some(profile);
+        world.gm_profile_t0 = t;
+        assert_eq!(world.gm_time(t), a_now + 20_000);
+        let mut worst_e = 0i64;
+        let mut lost_at = None;
+        for i in 0..(600 * 8) {
+            world.tick(&mut [&mut core]);
+            worst_e = worst_e.max(world.error_ns(&core).expect("anchored").abs());
+            if !core.model().locked && lost_at.is_none() {
+                lost_at = Some(i as f64 / 8.0);
+            }
+        }
+        eprintln!("{name}: worst |e| {worst_e} ns, lock lost at {lost_at:?} s");
+        assert_eq!(core.model().gm_uuid, Some(GM_B.grandmaster_uuid));
+        assert_eq!(
+            lost_at, None,
+            "{name}: the lock was lost (worst |e| {worst_e} ns)"
+        );
+        assert!(
+            worst_e <= 150_000,
+            "{name}: {worst_e} ns off B's line after the handover"
+        );
+    }
 }
