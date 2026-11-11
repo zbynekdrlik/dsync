@@ -63,6 +63,8 @@ struct World {
     /// dsync#160 (the v1.30.0 release run): every core gets the SAME receive instant (one kernel
     /// stamp per datagram on one PC), core `i > 0` plus a few ns of conversion residue.
     shared_rx: bool,
+    /// dsync#170: the half-width (ns) of that residue: core `i > 0` gets −r…+r ns.
+    rx_residue_ns: i64,
     /// dsync#166: the grandmaster's rate MOVING — an extra rate (ppm) on top of `gm_ppm`, a
     /// function of the seconds since `gm_profile_t0`, accumulated per tick into `gm_extra_ns`.
     gm_profile: Option<fn(f64) -> f64>,
@@ -89,6 +91,7 @@ impl World {
             late_ns: 0,
             usb_delay: false,
             shared_rx: false,
+            rx_residue_ns: 3,
             gm_profile: None,
             gm_profile_t0: 0,
             gm_extra_ns: 0.0,
@@ -141,7 +144,13 @@ impl World {
             if self.shared_rx {
                 let first = *shared.get_or_insert(rx);
                 let k = (self.seq as i64).wrapping_mul(7_919) + i as i64 * 104_729;
-                rx = first + if i == 0 { 0 } else { k.rem_euclid(7) - 3 };
+                let r = self.rx_residue_ns;
+                rx = first
+                    + if i == 0 {
+                        0
+                    } else {
+                        k.rem_euclid(2 * r + 1) - r
+                    };
             }
             let mono_rx = self.mono(rx);
             let wall_rx = mono_rx + self.wall_minus_mono;
@@ -420,6 +429,49 @@ fn two_followers_on_one_usb_pc_agree_within_a_microsecond_160() {
         }
         assert!(worst <= 1_000, "seed {seed:#x}: followers {worst} ns apart");
     }
+}
+
+/// dsync#170 (`library_acceptance`, ~1 run in 12 on dev1 and master: followers 1.7-4.9 µs apart):
+/// on dev1 the two followers' samples differ by up to ~50 ns (the stamp conversion's residue on
+/// a host whose wall slews), not 3. Every decision on that residue must be continuous: the
+/// window minimum's grandmaster TIME (the argmin of two near-equal samples, 125 ms apart, moved
+/// the floor by slope × 125 ms ≈ 0.5 µs) and the rate servo's spike filter (a rate at its
+/// threshold kept by one follower, replaced by the median in the other) each moved one follower's
+/// rate lock — the phase lock's engagement — one or more windows, and the boot pulls then ran
+/// µs apart for a minute. Even with both continuous, the rate lock itself (|rate| < 5 µs/s
+/// counted to `LOCK_STABLE_COUNT`) is a step on that residue: one window of engagement split
+/// leaves ≈ 50 µs × dt/τ ≈ 1.25 µs at the gate's lock, whatever the start error. So the first
+/// engagement is keyed on the acquisition fit (a decision in grandmaster time), not the rate lock.
+#[test]
+fn two_followers_with_the_measured_conversion_residue_agree_within_a_microsecond_170() {
+    let mut fails = Vec::new();
+    for seed in 0..24_u64 {
+        let mut world = World::new(0x5eed_1660 ^ (seed << 8), 4_000.0);
+        world.gm_ppm = 20.0;
+        world.pc_ppm = 0.0;
+        world.shared_rx = true;
+        world.rx_residue_ns = 40;
+        let mut a = new_core(&world);
+        let mut b = new_core(&world);
+        let mut worst = 0_i64;
+        while world.t < 150 * 1_000_000_000 {
+            world.tick(&mut [&mut a, &mut b]);
+            let m = world.mono(world.t);
+            if let (Some(pa), Some(pb)) = (a.model().ptp_at(m), b.model().ptp_at(m)) {
+                if a.engaged() || b.engaged() {
+                    worst = worst.max((pa - pb).abs());
+                }
+            }
+        }
+        assert!(a.model().locked && b.model().locked, "seed {seed}: no lock");
+        if worst > 1_000 {
+            fails.push((seed, worst));
+        }
+    }
+    assert!(
+        fails.is_empty(),
+        "followers > 1 µs apart (seed, ns): {fails:?}"
+    );
 }
 
 /// dsync#160 (dstack, mbc-snv 9-10.11.2026): neither the service nor the follower locked on the
