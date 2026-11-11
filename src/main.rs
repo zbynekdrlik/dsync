@@ -845,19 +845,22 @@ fn run_sync_loop(
 
     info!("Starting PTP Loop...");
 
-    // Notify systemd we are ready and loop is running
+    // dsync#164: systemd's READY=1 waits for the placed wall (the boot date decided), bounded,
+    // so units ordered After=dsync.service under Type=notify start on a placed wall.
     #[cfg(unix)]
     {
         let _ = sd_notify::notify(
             false,
-            &[
-                sd_notify::NotifyState::Ready,
-                sd_notify::NotifyState::Status(
-                    format!("v{} | PTP Loop Running", env!("CARGO_PKG_VERSION")).as_str(),
-                ),
-            ],
+            &[sd_notify::NotifyState::Status(
+                format!(
+                    "v{} | PTP Loop Running | waiting for the boot date",
+                    env!("CARGO_PKG_VERSION")
+                )
+                .as_str(),
+            )],
         );
     }
+    let mut ready_gate = dsync::boot_ready::ReadyGate::new(Instant::now());
 
     let mut last_log = Instant::now();
     let loop_status = controller.get_status_shared();
@@ -902,6 +905,39 @@ fn run_sync_loop(
 
         if let Err(e) = controller.process_loop_iteration() {
             warn!("Error in loop: {}", e);
+        }
+
+        if !ready_gate.sent() {
+            if let Some(reason) = ready_gate.poll(Instant::now(), controller.wall_placement()) {
+                match &reason {
+                    dsync::boot_ready::ReadyReason::Placed(how) => {
+                        info!("[READY] the wall is placed ({}): systemd READY=1", how)
+                    }
+                    dsync::boot_ready::ReadyReason::TimedOut(what) => warn!(
+                        "[READY] the wall is not placed after {} s ({}): systemd READY=1 anyway, \
+                         so the units ordered after dsync are not held for ever",
+                        dsync::boot_ready::READY_PLACEMENT_BOUND.as_secs(),
+                        what
+                    ),
+                }
+                #[cfg(unix)]
+                {
+                    let _ = sd_notify::notify(
+                        false,
+                        &[
+                            sd_notify::NotifyState::Ready,
+                            sd_notify::NotifyState::Status(
+                                format!(
+                                    "v{} | PTP Loop Running | {}",
+                                    env!("CARGO_PKG_VERSION"),
+                                    reason.status_text()
+                                )
+                                .as_str(),
+                            ),
+                        ],
+                    );
+                }
+            }
         }
     });
 

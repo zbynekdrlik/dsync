@@ -31,7 +31,7 @@ const BASE_NS: i64 = 1_789_000_000_000_000_000;
 /// xorshift64* + Box-Muller, a fixed seed per run (never an unseeded source).
 pub(super) struct Noise(pub(super) u64);
 impl Noise {
-    fn uniform(&mut self) -> f64 {
+    pub(super) fn uniform(&mut self) -> f64 {
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;

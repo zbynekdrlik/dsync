@@ -1154,3 +1154,5 @@ mod restart_tests;
 mod tests;
 #[cfg(test)]
 mod trigger_tests;
+#[cfg(test)]
+mod usb_rate_tests;

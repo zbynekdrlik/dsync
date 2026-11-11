@@ -1,6 +1,7 @@
 // dsync#136: the PTP code (wire format, receive paths, servo, phase lock, lock gate, filters)
 // lives in the shared `dsync-ptp` crate; re-exported so every `crate::ptp::…` path is unchanged.
 pub mod atomic_file;
+pub mod boot_ready;
 pub mod clock;
 pub mod clock_alarm;
 pub mod config;
