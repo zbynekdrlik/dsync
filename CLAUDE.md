@@ -144,6 +144,10 @@ on either platform skips `publish` — no release with a missing asset).
   report-only follower check, the constant kept on the 31900 wire), report-only sender fields,
   a read-only tcpdump capture on dev1) →
   `.claude/rules/ptpv1-wire-format.md` (auto-loads on its `paths:`)
+- The fallback time source (#129 slice 2, v1.33 — a dsync node elected by `system.fallback.priority`
+  multicasts its line on 239.255.77.1:31910 ONLY when no PTP leader exists, steps down on the first
+  PTP message; the receive thread, the source line `wall − D`, the liveness split) →
+  `.claude/rules/fallback-time-source.md` (auto-loads on `src/fallback/**` / `src/controller/fallback*`)
 - DSCP marking of timesync sockets (#52 — which sockets are markable per platform: Linux ntp_server
   reply YES, Linux rsntp client NO handle, Windows filters IP_TOS; the `dscp<<2` TOS-byte math;
   fail-open; socket2 0.5.10 set_tos) → `.claude/rules/dscp-marking.md` (auto-loads on its `paths:`)

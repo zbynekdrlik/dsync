@@ -10,6 +10,7 @@ pub mod date_offset;
 pub mod date_step_trigger;
 pub mod drift_file;
 pub mod dscp;
+pub mod fallback;
 pub use dsync_ptp::gm_filter;
 pub mod http_status;
 pub use dsync_ptp::lock_gate;

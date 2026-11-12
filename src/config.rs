@@ -111,6 +111,11 @@ pub struct SystemConfig {
     /// Lenient as a whole: `null` or a non-object means the defaults, never a failed parse.
     #[serde(default, deserialize_with = "lenient_date_offset")]
     pub date_offset: DateOffsetConfig,
+
+    /// dsync#129 slice 2 — the fallback time source (`crate::fallback`). OFF by default; lenient
+    /// as a whole (a malformed block leaves it off, loudly).
+    #[serde(default, deserialize_with = "crate::fallback::config::lenient")]
+    pub fallback: crate::fallback::FallbackConfig,
 }
 
 impl SystemConfig {
@@ -819,6 +824,9 @@ impl Default for SystemConfig {
 
             // dsync#88: 50 ms step bound, 5 s announce lead.
             date_offset: DateOffsetConfig::default(),
+
+            // dsync#129: the fallback time source is OFF unless a site enables it.
+            fallback: crate::fallback::FallbackConfig::default(),
         }
     }
 }

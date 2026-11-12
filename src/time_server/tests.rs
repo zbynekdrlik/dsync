@@ -119,6 +119,9 @@ fn test_mode_encoding() {
         ("LOCK", 3),
         ("NANO", 4),
         ("NTP-only", 5),
+        // dsync#129: the fallback time source (an unknown mode read 0 before 1.33).
+        ("FALLBACK", 6),
+        ("anything else", 0),
     ];
 
     for (mode_str, expected) in modes {

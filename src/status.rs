@@ -54,7 +54,9 @@ pub struct SyncStatus {
 
     /// Current operating mode: "ACQ" (acquiring), "PROD" (production), "LOCK" (locked), "NANO",
     /// "NTP-only" (dsync#112: no allowed PTP packet for 10 s, whatever the servo last reached;
-    /// `is_locked` is then false). Used for status display and icon state
+    /// `is_locked` is then false), "FALLBACK" (dsync#129: this node is the fallback time source,
+    /// or follows one with its phase lock within the bound — a fallback lock never reads LOCK or
+    /// NANO). Used for status display and icon state
     pub mode: String,
 
     /// True when this node's UTC alignment is NOT being maintained.
@@ -578,6 +580,31 @@ pub struct SyncStatus {
     /// (after a grandmaster change, a frequency step, the boot hold); 0 when none.
     #[serde(default)]
     pub ptp_phase_pull_us: f64,
+
+    // ========================================================================
+    // The fallback time source (dsync#129 slice 2, 1.33) — additive.
+    // ========================================================================
+    /// dsync#129: the class of the time this node runs on: `"ptp"` (a PTP grandmaster),
+    /// `"dsync-fallback"` (this node IS the fallback source, or follows one) or `"none"` (no time
+    /// source: NTP only). `null` in a pre-1.33 blob. On `"dsync-fallback"` the clock alarm
+    /// (`clock_alarm`) stays active by design: there is no PTP grandmaster.
+    #[serde(default)]
+    pub gm_class: Option<String>,
+
+    /// dsync#129: `"off"` (the feature is not enabled), `"candidate"`, `"follower"` or
+    /// `"source"`. `null` in a pre-1.33 blob.
+    #[serde(default)]
+    pub fallback_role: Option<String>,
+
+    /// dsync#129: the IPv4 of the fallback source this node follows (its own on the source);
+    /// `null` otherwise, and in a pre-1.33 blob.
+    #[serde(default)]
+    pub fallback_source_ip: Option<String>,
+
+    /// dsync#129: that source's epoch (a new one each time a node becomes the source); `null`
+    /// like `fallback_source_ip`.
+    #[serde(default)]
+    pub fallback_epoch: Option<u32>,
 }
 
 fn default_clock_alarm_interval_s() -> u64 {
@@ -708,6 +735,11 @@ impl Default for SyncStatus {
             ptp_phase_gm_continued: 0,
             ptp_phase_gm_refit_ppm: None,
             ptp_phase_pull_us: 0.0,
+            // #129 slice 2: published by the controller
+            gm_class: None,
+            fallback_role: None,
+            fallback_source_ip: None,
+            fallback_epoch: None,
         }
     }
 }

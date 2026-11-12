@@ -742,6 +742,8 @@ fn run_sync_loop(
     // `ntp-burst` thread, which measures the periodic burst off the loop.
     let ntp_client = Arc::new(ntp::NtpClient::new(ntp_server, &dscp_config));
 
+    // dsync#129 slice 2: the fallback time source, opened below once PTP joined.
+    let fallback_config = system_config.fallback.clone();
     let mut controller = PtpController::new(
         sys_clock,
         network,
@@ -754,6 +756,27 @@ fn run_sync_loop(
     controller.open_drift_file(&state_dir().drift_path());
     // dsync#131 / #116: /status names the pin, the joined interface and the config source.
     controller.set_ptp_interface(pinned, &joined_iface, joined_ip);
+    // dsync#129 slice 2: the fallback time source on the PTP interface (off by default).
+    if fallback_config.enabled {
+        match dsync::fallback::UdpFallbackTransport::open(joined_ip) {
+            Ok(transport) => {
+                controller.enable_fallback(Box::new(transport), joined_ip);
+                // A PTP re-join opens it again on the address it joined.
+                controller.set_fallback_reopener(Box::new(|ip| {
+                    let transport: Box<dyn dsync::fallback::FallbackTransport> =
+                        Box::new(dsync::fallback::UdpFallbackTransport::open(ip)?);
+                    Ok(transport)
+                }));
+            }
+            Err(e) => error!(
+                "[FALLBACK] could not open the fallback socket on {}: {:#} -- the fallback time \
+                 source stays OFF",
+                joined_ip, e
+            ),
+        }
+    } else {
+        info!("[FALLBACK] off (system.fallback.enabled is false)");
+    }
     controller.set_config_state(config_state);
     let burst_client = ntp_client.clone();
     match dsync::ntp_burst::NtpBurstThread::spawn(

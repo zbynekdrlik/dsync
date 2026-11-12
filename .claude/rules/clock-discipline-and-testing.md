@@ -618,7 +618,7 @@ re-join. So in daily mode:
 - Its landing is off by its free-run error, like the rest of its wall. The bench's
   simultaneity check leaves out a master landing inside its own outage, and the daily scenario
   bounds that landing directly: within its re-join size + 50 µs of the fleet's median landing.
-- A failed own step while off-line is retried (review round 2, `realign_offline_daily_master`,
+- A failed own step while off-line is retried (review round 2, `realign_offline_master_to_fleet_line` since 1.33,
   `src/controller/date_sync/daily.rs`): after the backoff, one Join of `fleet − own`. There is no
   phase error to measure without PTP, and `realign_master_to_fleet` waits for PTP. The controller
   test models the failure's aftermath directly (D behind the fleet, the backoff running): no time

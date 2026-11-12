@@ -82,8 +82,10 @@ where
         };
         let daily = self.date_sync.daily();
         // #119 (1.12): a daily-mode master without PTP keeps the fleet D (no local NTP steps), so
-        // it takes the fleet's steps on its own wall too.
-        let on_line = own == fleet && (!self.ptp_offline || daily) && !self.in_step_backoff();
+        // it takes the fleet's steps on its own wall too; dsync#129: so does a master that is the
+        // fallback source.
+        let holds_line = self.master_holds_fleet_line_offline();
+        let on_line = own == fleet && (!self.ptp_offline || holds_line) && !self.in_step_backoff();
         if daily {
             // #119 (1.12): the nightly step — one a night, loud. 1.16: the step is the UTC error
             // rounded to whole quanta; both are logged (the remainder waits for the next night).

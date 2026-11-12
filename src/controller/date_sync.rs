@@ -750,12 +750,14 @@ where
                 .wrapping_add(anchor.wrapping_sub(fleet))
                 .wrapping_add(acquiring_err);
             self.date_sync.master_utc_error_ns = Some(fleet_err);
-            let daily = self.date_sync.daily();
             // #119 (1.12): a daily-mode master without PTP is still on the fleet line (its D is
             // the fleet D, it takes no local NTP steps), so it takes the fleet's steps itself.
+            // dsync#129: so does a master that IS the fallback source, in either mode: its
+            // `wall − D` is the time its followers hold, so its wall stays on the fleet line.
+            let holds_line = self.master_holds_fleet_line_offline();
             let on_line =
-                anchor == fleet && (!self.ptp_offline || daily) && !self.in_step_backoff();
-            if !self.ptp_offline || daily {
+                anchor == fleet && (!self.ptp_offline || holds_line) && !self.in_step_backoff();
+            if !self.ptp_offline || holds_line {
                 // Log-surface contract: every NTP cycle keeps the exact `[NTP] offset:{:+}us`
                 // prefix the camera-box freshness gates parse (offline, the NTP step path logs it).
                 info!(
@@ -818,7 +820,7 @@ where
             // Publish NOW: the 31900 time server reads this snapshot, and an announce heard only
             // at the next 10 s status tick would arrive after its 5 s lead (a late step).
             self.update_shared_status();
-            if self.ptp_offline && !daily {
+            if self.ptp_offline && !holds_line {
                 // Its OWN wall keeps the local NTP step path while it has no PTP (micro mode; in
                 // daily mode it free-runs and re-joins the fleet line, see above).
                 return false;
@@ -828,7 +830,11 @@ where
             self.ntp_server_checks_since_step = 0;
             return true;
         }
-        if self.ptp_offline {
+        // dsync#129: the fallback source is offline but follows the fleet's announces (see
+        // `service_date_offset`): once it adopted the fleet D it takes no local NTP step, like
+        // an online follower (its line never moves with a step, but its wall would leave the
+        // fleet line and the next announce would Join it back: two steps per cycle).
+        if self.ptp_offline && !self.fallback_is_source() {
             return false;
         }
         if self.date_sync.follower.adopted() {
@@ -842,6 +848,14 @@ where
             return true;
         }
         false
+    }
+
+    /// #119 (1.12) / dsync#129 — a master WITHOUT PTP that still holds the fleet line (its D is
+    /// the fleet D, no local NTP step, it takes the fleet's steps on its own wall and re-joins
+    /// after a failed one): a daily-mode master, and a master that IS the fallback source in either
+    /// mode (its `wall − D` is the time its followers hold). One predicate for every such path.
+    pub(super) fn master_holds_fleet_line_offline(&self) -> bool {
+        self.date_sync.daily() || self.fallback_is_source()
     }
 
     /// #88 — make the NTP master the fleet date-offset authority once it is anchored, and align
@@ -990,7 +1004,7 @@ where
             self.tick_date_authority();
             self.realign_master_to_fleet();
             self.note_master_placement();
-            self.realign_offline_daily_master();
+            self.realign_offline_master_to_fleet_line();
             self.save_date_state_if_changed();
             return;
         }
@@ -1018,7 +1032,11 @@ where
         // (`same_time_base`). dsync#129: the grandmaster UUID is reported, never enforced
         // (pre-1.17 every node read one constant; two ports of one clock carry two UUIDs). A 1.17
         // master announces that constant for 1.16 followers: only a real, different UUID is logged.
-        if self.ptp_offline || self.date_sync.core.rebase_pending() {
+        // dsync#129: the fallback source is offline (it follows no one) but its `wall − D` IS the
+        // time base it sends: its followers, the master among them, announce in that base, so it
+        // takes the fleet's coordinated steps like any follower (`same_time_base` decides).
+        if (self.ptp_offline && !self.fallback_is_source()) || self.date_sync.core.rebase_pending()
+        {
             return;
         }
         let Some(anchor) = self.date_sync.core.anchor_ns() else {

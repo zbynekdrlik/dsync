@@ -984,3 +984,160 @@ fn the_service_phase_window_hands_over_the_rings_delay_floor_160() {
         Some(3_000)
     );
 }
+
+/// dsync#129 slice 2: the fallback source has no PTP (`ptp_offline`), yet its `wall − D` is the
+/// time base its followers announce in, so it takes the fleet's coordinated step; an ordinary
+/// offline node still does not.
+#[test]
+fn the_fallback_source_takes_the_fleets_announced_step_while_offline_129() {
+    let mut clock = MockSystemClock::new();
+    clock
+        .expect_step_clock()
+        .times(1)
+        .withf(|d, sign| *d == Duration::from_micros(3_000) && *sign == 1)
+        .returning(|_, _| Ok(()));
+    let (mut c, d) = anchored_controller(clock, MockNtpSource::new(), false);
+    c.ptp_offline = true;
+    let slot = with_authority(&mut c);
+    *slot.lock().unwrap() = Some(authority_reply(1, PL_GM, d + 3_000_000, 5_000_000_000, 7));
+    c.service_date_offset();
+    assert_eq!(
+        c.date_sync.core.anchor_ns(),
+        Some(d),
+        "offline, not the source: ignored"
+    );
+
+    make_fallback_source(&mut c);
+    *slot.lock().unwrap() = Some(authority_reply(2, PL_GM, d + 3_000_000, 5_000_000_000, 7));
+    c.service_date_offset();
+    assert_eq!(
+        c.date_sync.core.anchor_ns(),
+        Some(d + 3_000_000),
+        "the source joined"
+    );
+}
+
+/// dsync#129: `c` becomes the fallback source (no transport: nothing is sent).
+fn make_fallback_source(c: &mut PtpController<MockSystemClock, MockPtpNetwork, MockNtpSource>) {
+    c.ptp_offline = true;
+    let me = crate::fallback::wire::node_id(std::net::Ipv4Addr::new(10, 77, 9, 202));
+    c.fallback.election = Some(crate::fallback::Election::new(
+        true,
+        9,
+        me,
+        Instant::now() - Duration::from_secs(30),
+    ));
+    c.service_fallback(Instant::now());
+    assert!(c.fallback_is_source());
+}
+
+/// dsync#129 (review round 3): a fallback source that adopted the fleet D takes no local NTP
+/// step, like an online follower. A step would move its wall off the fleet line and the next
+/// announce would Join it back: two wall steps per cycle on the source box.
+#[test]
+fn an_adopted_fallback_source_never_steps_on_its_own_ntp_reading_129() {
+    let mut ntp = MockNtpSource::new();
+    ntp.expect_get_offset()
+        .returning(|| Ok(one_offset(5_000, 1)));
+    // No step_clock expectation: an NTP-driven step would panic the mock.
+    let (mut c, d) = anchored_controller(MockSystemClock::new(), ntp, false);
+    make_fallback_source(&mut c);
+    let slot = with_authority(&mut c);
+    *slot.lock().unwrap() = Some(authority_reply(1, PL_GM, d, 1_000_000_000, 3));
+    c.service_date_offset();
+    assert!(c.date_sync.follower.adopted());
+    for _ in 0..3 {
+        c.last_ntp_check = Instant::now() - Duration::from_secs(120);
+        c.check_ntp_utc_tracking();
+    }
+    assert_eq!(c.date_sync.core.anchor_ns(), Some(d));
+}
+
+/// dsync#129 (review round 3): on the fallback source `wall − D` is the line its followers hold,
+/// so an announce inside the absorb tolerance moves D only together with the wall (a step of the
+/// same size), never alone (which would jump the line).
+#[test]
+fn the_fallback_source_steps_its_wall_with_an_absorbed_d_129() {
+    let mut clock = MockSystemClock::new();
+    clock
+        .expect_step_clock()
+        .times(1)
+        .withf(|d, sign| *d == Duration::from_micros(50) && *sign == 1)
+        .returning(|_, _| Ok(()));
+    let (mut c, d) = anchored_controller(clock, MockNtpSource::new(), false);
+    make_fallback_source(&mut c);
+    let slot = with_authority(&mut c);
+    *slot.lock().unwrap() = Some(authority_reply(1, PL_GM, d + 50_000, 1_000_000_000, 3));
+    c.service_date_offset();
+    assert_eq!(c.date_sync.core.anchor_ns(), Some(d + 50_000));
+}
+
+/// dsync#129 (review round 4): a micro-mode master that IS the fallback source stays on the fleet
+/// line through its PTP outage like a daily master: no local NTP step, and its own micro
+/// increments are scheduled on its own wall (its followers step every one).
+#[test]
+fn a_micro_master_that_is_the_source_takes_its_own_increments_not_ntp_steps_129() {
+    let mut ntp = MockNtpSource::new();
+    ntp.expect_get_offset()
+        .returning(|| Ok(one_offset(7_000, 1)));
+    // No step_clock expectation: a local NTP step would panic the mock.
+    let (mut c, _d) = anchored_controller(MockSystemClock::new(), ntp, true);
+    make_fallback_source(&mut c);
+    for _ in 0..6 {
+        c.last_ntp_check = Instant::now() - Duration::from_secs(60);
+        c.check_ntp_utc_tracking();
+    }
+    c.service_date_offset();
+    let st = c.get_status_shared();
+    let st = st.read().expect("status");
+    assert_eq!(
+        st.date_step_pending_ns,
+        Some(500_000),
+        "one 500 µs increment"
+    );
+    assert!(st.date_micro_active, "the master's own scheduler holds it");
+}
+
+/// dsync#129 (review round 4): a micro-mode master that is the source has no local NTP path any
+/// more, so a failed own step is re-joined after the backoff, as a daily master's is.
+#[test]
+fn a_micro_master_that_is_the_source_rejoins_the_fleet_line_after_a_failed_step_129() {
+    let mut clock = MockSystemClock::new();
+    clock
+        .expect_step_clock()
+        .times(1)
+        .withf(|dur, sg| *dur == Duration::from_millis(300) && *sg == 1)
+        .returning(|_, _| Ok(()));
+    let (mut c, d) = anchored_controller(clock, MockNtpSource::new(), true);
+    make_fallback_source(&mut c);
+    c.service_date_offset();
+    c.date_sync.core.set_anchor(d - 300_000_000);
+    c.date_sync.step_failed_at = Some(Instant::now() - Duration::from_secs(11));
+    c.service_date_offset();
+    assert_eq!(
+        c.date_sync.core.anchor_ns(),
+        Some(d),
+        "back on the fleet line"
+    );
+    assert_eq!(c.date_sync.last_step.map(|s| s.2), Some("join"));
+}
+
+/// dsync#129 (review round 5): a daily master that becomes the fallback source drops its outage
+/// re-align. Its free-run is the fleet's (every follower holds its line), so when PTP returns the
+/// fleet slews the residual through the sync-source change; a Join of the master's wall alone
+/// would split it from the fleet for that slew.
+#[test]
+fn a_daily_master_that_becomes_the_source_drops_its_outage_realign_129() {
+    let mut config = phase_lock_config();
+    config.date_offset.correction = "daily".to_string();
+    let (mut c, _d) =
+        anchored_controller_with(MockSystemClock::new(), MockNtpSource::new(), true, config);
+    c.ptp_offline = true;
+    c.on_ptp_offline_edge();
+    assert!(c.date_sync.master_outage_realign, "a daily master's outage");
+    make_fallback_source(&mut c);
+    assert!(
+        !c.date_sync.master_outage_realign,
+        "the source's free-run is the fleet's"
+    );
+}

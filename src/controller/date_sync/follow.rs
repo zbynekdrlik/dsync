@@ -21,6 +21,20 @@ where
     ) {
         match act {
             FollowAction::None => {}
+            // dsync#129: on the fallback source `wall − D` is the line its followers hold; D
+            // moving without the wall would jump it. The source steps its wall with D instead.
+            FollowAction::Absorb { new_anchor_ns } if self.fallback_is_source() => {
+                if first {
+                    info!(
+                        "[DATE] aligned with the fleet date offset (seq {}): D adopted, {:+}ns \
+                         inside the absorb tolerance -- stepped with the wall (the fallback \
+                         source's line must not move)",
+                        ann.seq,
+                        new_anchor_ns.wrapping_sub(anchor)
+                    );
+                }
+                self.apply_date_step(new_anchor_ns.wrapping_sub(anchor), StepKind::Join, ann.seq);
+            }
             FollowAction::Absorb { new_anchor_ns } => {
                 self.date_sync.core.set_anchor(new_anchor_ns);
                 if first {

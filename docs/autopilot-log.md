@@ -938,3 +938,18 @@ canary evidence before continuing.
     again, uninstall offers both data dirs. Not verifiable from here: the `dsync-gate` runner label
     (403 listing runners; the gate run proves it) and whether camera-box greps the alarm's human
     text (now "NO PTP CLOCK"; the `[CLOCK-ALARM]` tag is unchanged) — relayed to dstack.
+
+## 1.33.0 — #129 slice 2: the dsync fallback time source (12.11.2026)
+
+- **#129 slice 2** (dstack ROZHODNUTÉ 2.11.2026; design issuecomment-6810218909, updated by
+  issuecomment-6810625921): `src/fallback/` (config, the 32-byte `DSFB` wire on
+  239.255.77.1:31910, the pure election, the UDP transport with its own receive thread) +
+  `src/controller/fallback.rs`. Off by default (`system.fallback`). RED → GREEN pairs:
+  70bd86f → bf647ca (`the_source_steps_down_on_the_first_ptp_message_before_its_next_sync_129`),
+  5cb8aff → 1bbed14 (the source takes the fleet's step while offline), 6ca93d3 → fdd6fd4 (the
+  source's date paths, a failed re-open), f19d939 → 3034b22 (a micro master that is the source),
+  1ab14b4 → 0f1ffce (the outage re-align). Six fresh-context review rounds, the last 0 🔴 0 🟡.
+  Decided: the source keeps its NTP path (its line absorbs every step; holding steps protected
+  nothing), stamps come from a thread blocked on the read (the Windows loop waits ~1 ms in Npcap
+  with no PTP), service-only (the library follower serves Dante audio, which a no-PTP network
+  does not carry). Playbook: `.claude/rules/fallback-time-source.md`.

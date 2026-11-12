@@ -74,6 +74,12 @@ pub(crate) fn heavy_test_guard() -> std::sync::MutexGuard<'static, ()> {
 /// `freq_seed` field.
 mod freq_seed;
 
+/// dsync#129 slice 2 — the fallback time source's glue (`crate::fallback`): the loop service,
+/// the step-down on the first PTP message, a follower's samples into the one pipeline, the
+/// source's time line, `/status`. A child module like `date_sync`; its state is the one
+/// `fallback` field.
+mod fallback;
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
@@ -854,6 +860,10 @@ where
     /// dsync#142 — the drift file: the seed, its judge, the save while LOCKED, owned by
     /// `controller/freq_seed.rs`.
     freq_seed: freq_seed::FreqSeed,
+
+    /// dsync#129 slice 2 — the fallback time source (off unless `main` enables it), owned by
+    /// `controller/fallback.rs`.
+    fallback: fallback::FallbackGlue,
 }
 
 struct PendingSync {
@@ -1053,6 +1063,7 @@ where
             config_state: None,
             ntp_burst: ntp_check::NtpBurstState::default(),
             freq_seed: freq_seed::FreqSeed::default(),
+            fallback: fallback::FallbackGlue::default(),
         }
     }
 
@@ -2134,7 +2145,20 @@ where
         // only the NTP master can announce the step).
         self.serve_date_step_requests();
 
-        let (buf, size, t2, source_ip) = match self.network.recv_packet()? {
+        let received = self.network.recv_packet();
+        // dsync#129 slice 2 (dstack ROZHODNUTÉ 2.11.2026): ANY PTP time message -- PTPv1 or
+        // PTPv2, allowed by the allowlist or not -- is a PTP leader on the network. A fallback
+        // source or follower steps down HERE, before the fallback service below could send.
+        if let Ok(Some((buf, size, _, source_ip))) = &received {
+            if crate::ptp::is_time_message(&buf[..(*size).min(buf.len())]) {
+                self.fallback_note_ptp(Instant::now(), *source_ip);
+            }
+        }
+        // dsync#129 slice 2: the fallback time source (a no-op unless enabled): its datagrams,
+        // the election, the source's Sync. Before the `?`: a failing PTP receive never stops it.
+        self.service_fallback(Instant::now());
+
+        let (buf, size, t2, source_ip) = match received? {
             Some(res) => res,
             None => {
                 // No packet, but still run NTP tracking if PTP is offline
@@ -2276,21 +2300,7 @@ where
                     format_mac(&source_uuid)
                 );
                 self.current_sync_source = Some(source_uuid);
-                // Soft reset: clear stale data but KEEP current frequency
-                // Both audio devices should have similar frequencies since they're
-                // synchronized to the same grandmaster time
-                self.pending_syncs.clear();
-                self.sample_window.clear();
-                self.prev_t1_ns = 0;
-                self.prev_t2_ns = 0;
-                // #117: a different sender may carry a different time base.
-                self.date_sync.on_time_base_change();
-                // Keep: applied_freq_ppm, drift_baseline_ppm (learned values)
-                // Stay in production mode - let servo naturally adjust if needed
-                info!(
-                    "Soft reset: keeping freq={:.1}ppm, drift_baseline={:.1}ppm",
-                    self.applied_freq_ppm, self.rate.drift_baseline_ppm
-                );
+                self.soft_reset_for_new_sync_source();
             }
             None => {
                 info!("Sync source: {}", format_mac(&source_uuid));
@@ -2347,6 +2357,23 @@ where
                 _ => {}
             }
         }
+    }
+
+    /// A new sender of the time (another PTP clock, or a dsync fallback source, #129): clear the
+    /// stale data but KEEP the learned frequency (both senders tick at about the same rate).
+    fn soft_reset_for_new_sync_source(&mut self) {
+        self.pending_syncs.clear();
+        self.sample_window.clear();
+        self.prev_t1_ns = 0;
+        self.prev_t2_ns = 0;
+        // #117: a different sender may carry a different time base.
+        self.date_sync.on_time_base_change();
+        // Keep: applied_freq_ppm, drift_baseline_ppm (learned values)
+        // Stay in production mode - let servo naturally adjust if needed
+        info!(
+            "Soft reset: keeping freq={:.1}ppm, drift_baseline={:.1}ppm",
+            self.applied_freq_ppm, self.rate.drift_baseline_ppm
+        );
     }
 
     fn handle_followup_message(&mut self, header: &PtpV1Header, buf: &[u8]) {
@@ -2850,7 +2877,8 @@ where
         // #112: while no allowed PTP packet comes, nothing PTP-derived is live: the node is not
         // locked (and not settled), whatever the servo last reached. The last offset stays,
         // flagged by `last_ptp_rx_age_s`.
-        let stale = self.ptp_stale_at(now);
+        // dsync#129: or no fallback source followed (the same as `ptp_stale_at` with it off).
+        let stale = self.time_source_stale_at(now);
         if let Ok(mut status) = self.status_shared.write() {
             // Core fields
             status.offset_ns = self.last_phase_offset_ns;
@@ -2881,8 +2909,18 @@ where
             // dsync#142: the frequency seed from the drift file.
             self.publish_freq_seed(&mut status);
             status.smoothed_rate_ppm = self.rate.smoothed_rate_ppm;
-            status.mode = if stale {
+            // dsync#129: the fallback source, and a follower whose phase lock is within the
+            // bound, read FALLBACK: a fallback lock never reads LOCK or NANO.
+            self.publish_fallback(&mut status, now);
+            let fallback_time = self.fallback_is_source() || self.fallback_following_live(now);
+            status.mode = if self.fallback_is_source() {
+                fallback::FALLBACK_MODE.to_string()
+            } else if stale {
                 ptp_liveness::PTP_STALE_MODE.to_string()
+            } else if fallback_time
+                && (reported_lock || (self.rate.in_nano_mode && !self.date_sync.enabled))
+            {
+                fallback::FALLBACK_MODE.to_string()
             } else if self.rate.in_nano_mode && (reported_lock || !self.date_sync.enabled) {
                 // Legacy: NANO exactly as before 1.23 (it may outlive the rate lock by a window).
                 "NANO".to_string()

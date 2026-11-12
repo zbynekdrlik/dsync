@@ -146,6 +146,7 @@ fn state_labels_are_distinct() {
         TrayState::NtpOnly,
         TrayState::Nano,
         TrayState::Locked,
+        TrayState::Fallback,
         TrayState::Settled,
         TrayState::Acquiring,
     ];
@@ -701,4 +702,25 @@ fn the_renderer_is_byte_identical_to_the_windows_one_before_132() {
             }
         }
     }
+}
+
+/// dsync#129: a lock on the fallback time source has its own state and colour, never the green
+/// of a PTP lock, whatever `is_locked` says.
+#[test]
+fn a_fallback_lock_never_reads_as_a_ptp_lock_129() {
+    let s = status("FALLBACK", true, true, 2.0);
+    assert_eq!(tray_state(Some(&s)), TrayState::Fallback);
+    let icon = icon_spec(Some(&s), false);
+    assert_eq!(icon.rgb, RGB_FALLBACK);
+    assert_ne!(icon.rgb, RGB_LOCKED);
+    assert_eq!(TrayState::Fallback.label(), "FALLBACK");
+    assert_eq!(
+        status_texts(&s, "1.33.0").mode_line,
+        "Mode: FALLBACK | Adj: +0.0ppm"
+    );
+    assert!(offline_ended_message(&s).contains("fallback"));
+    assert_eq!(
+        offline_ended_message(&status("LOCK", true, true, 0.0)),
+        "PTP restored - resuming PTP sync"
+    );
 }
