@@ -30,6 +30,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
@@ -113,15 +114,36 @@ def ssh_answers(addr: str) -> bool:
         return False
 
 
+LATEST_URL = f"https://github.com/{REPO}/releases/latest"
+TAG_PREFIX = f"https://github.com/{REPO}/releases/tag/v"
+
+
+def version_from_latest_location(location: str | None) -> str:
+    """The version named by the `releases/latest` redirect's Location. Raises on anything else."""
+    if not location or not location.startswith(TAG_PREFIX):
+        raise RuntimeError(f"releases/latest redirected to {location!r}, not a release tag")
+    version = location[len(TAG_PREFIX):]
+    if not version or not version[0].isdigit():
+        raise RuntimeError(f"releases/latest redirected to {location!r}, not a release tag")
+    return version
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 def latest_release() -> str:
-    """The latest release's version without the `v`. Raises on any gh failure (fail loud)."""
-    out = subprocess.run(
-        ["gh", "api", f"repos/{REPO}/releases/latest", "--jq", ".tag_name"],
-        check=True, capture_output=True, text=True, timeout=30,
-    ).stdout.strip()
-    if not out.startswith("v"):
-        raise RuntimeError(f"unexpected latest tag {out!r}")
-    return out[1:]
+    """The latest published release's version, from the public `releases/latest` redirect: no API,
+    no token (the systemd --user unit has no GH_TOKEN; `gh api` exits 4 there). Raises on failure."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        opener.open(urllib.request.Request(LATEST_URL, method="HEAD"), timeout=15)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (301, 302, 303, 307, 308):
+            return version_from_latest_location(exc.headers.get("Location"))
+        raise
+    raise RuntimeError(f"{LATEST_URL} did not redirect")
 
 
 def send_alert(text: str, key: str) -> None:
