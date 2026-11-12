@@ -1,0 +1,11 @@
+# dsync #179: run the node watch every 60 s.
+[Unit]
+Description=dsync node watch every 60 s (#179)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
