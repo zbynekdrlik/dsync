@@ -1018,7 +1018,11 @@ where
         // (`same_time_base`). dsync#129: the grandmaster UUID is reported, never enforced
         // (pre-1.17 every node read one constant; two ports of one clock carry two UUIDs). A 1.17
         // master announces that constant for 1.16 followers: only a real, different UUID is logged.
-        if self.ptp_offline || self.date_sync.core.rebase_pending() {
+        // dsync#129: the fallback source is offline (it follows no one) but its `wall − D` IS the
+        // time base it sends: its followers, the master among them, announce in that base, so it
+        // takes the fleet's coordinated steps like any follower (`same_time_base` decides).
+        if (self.ptp_offline && !self.fallback_is_source()) || self.date_sync.core.rebase_pending()
+        {
             return;
         }
         let Some(anchor) = self.date_sync.core.anchor_ns() else {
