@@ -43,7 +43,7 @@ where
     /// without this it would stay a whole nightly step off the fleet until PTP returns. Nothing
     /// while a change is in flight, and nothing in micro mode (its local NTP path runs instead)
     /// unless the master is the fallback source (dsync#129: it holds the line, no local path).
-    pub(super) fn realign_offline_daily_master(&mut self) {
+    pub(super) fn realign_offline_master_to_fleet_line(&mut self) {
         if !self.master_holds_fleet_line_offline()
             || !self.ptp_offline
             || self.in_step_backoff()

@@ -754,10 +754,10 @@ where
             // the fleet D, it takes no local NTP steps), so it takes the fleet's steps itself.
             // dsync#129: so does a master that IS the fallback source, in either mode: its
             // `wall − D` is the time its followers hold, so its wall stays on the fleet line.
-            let daily = self.master_holds_fleet_line_offline();
+            let holds_line = self.master_holds_fleet_line_offline();
             let on_line =
-                anchor == fleet && (!self.ptp_offline || daily) && !self.in_step_backoff();
-            if !self.ptp_offline || daily {
+                anchor == fleet && (!self.ptp_offline || holds_line) && !self.in_step_backoff();
+            if !self.ptp_offline || holds_line {
                 // Log-surface contract: every NTP cycle keeps the exact `[NTP] offset:{:+}us`
                 // prefix the camera-box freshness gates parse (offline, the NTP step path logs it).
                 info!(
@@ -820,7 +820,7 @@ where
             // Publish NOW: the 31900 time server reads this snapshot, and an announce heard only
             // at the next 10 s status tick would arrive after its 5 s lead (a late step).
             self.update_shared_status();
-            if self.ptp_offline && !daily {
+            if self.ptp_offline && !holds_line {
                 // Its OWN wall keeps the local NTP step path while it has no PTP (micro mode; in
                 // daily mode it free-runs and re-joins the fleet line, see above).
                 return false;
@@ -1004,7 +1004,7 @@ where
             self.tick_date_authority();
             self.realign_master_to_fleet();
             self.note_master_placement();
-            self.realign_offline_daily_master();
+            self.realign_offline_master_to_fleet_line();
             self.save_date_state_if_changed();
             return;
         }

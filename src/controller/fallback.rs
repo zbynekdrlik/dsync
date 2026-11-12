@@ -353,6 +353,10 @@ where
         f.next_send = Some(now);
         f.followed = None;
         f.last_rx = None;
+        // A daily master's outage re-align (#119 1.12) would Join its wall alone when PTP returns;
+        // its free-run is the fleet's now (every follower holds its line), and the fleet slews
+        // the residual through the sync-source change. So the master does not re-align alone.
+        self.date_sync.master_outage_realign = false;
         info!(
             "[FALLBACK] source: line = {}, epoch {}, a Sync every {} ms to {}",
             if anchored {
