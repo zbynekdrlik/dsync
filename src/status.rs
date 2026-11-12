@@ -605,6 +605,12 @@ pub struct SyncStatus {
     /// like `fallback_source_ip`.
     #[serde(default)]
     pub fallback_epoch: Option<u32>,
+
+    /// dsync#179: the running build's version (`CARGO_PKG_VERSION` of the process that publishes
+    /// this status), so a watcher grades upgrade debt from `/status` alone. Additive; `""` in a
+    /// pre-1.35 blob.
+    #[serde(default)]
+    pub version: String,
 }
 
 fn default_clock_alarm_interval_s() -> u64 {
@@ -740,6 +746,8 @@ impl Default for SyncStatus {
             fallback_role: None,
             fallback_source_ip: None,
             fallback_epoch: None,
+            // #179: the publishing process's own version
+            version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
 }
