@@ -218,6 +218,8 @@ where
                     status.ptp_interface = Some(outcome.iface.clone());
                     status.ptp_interface_ip = Some(outcome.ip.to_string());
                 }
+                // dsync#129: the fallback socket joins again on the same interface.
+                self.fallback_rejoin(outcome.ip);
             }
             Err(e) => {
                 let text = format!("{e:#}");

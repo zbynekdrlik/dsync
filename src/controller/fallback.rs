@@ -38,11 +38,16 @@ pub(super) const GM_CLASS_NONE: &str = "none";
 /// `/status.mode` on the fallback source and on a follower whose phase lock is within the bound.
 pub(super) const FALLBACK_MODE: &str = "FALLBACK";
 
+/// Opens the fallback transport on an interface address (`main`: the UDP sockets).
+pub type FallbackOpener = Box<dyn FnMut(Ipv4Addr) -> Result<Box<dyn FallbackTransport>> + Send>;
+
 /// All fallback state of one controller (the feature is off while `election` is `None`).
 #[derive(Default)]
 pub(super) struct FallbackGlue {
     pub(super) election: Option<Election>,
     pub(super) transport: Option<Box<dyn FallbackTransport>>,
+    /// Re-opens the transport after a PTP re-join (`None` in the unit tests).
+    reopener: Option<FallbackOpener>,
     /// The PTP interface's IPv4 (the node id is derived from it).
     pub(super) ip: Option<Ipv4Addr>,
     // ---- the source ----
@@ -61,7 +66,6 @@ pub(super) struct FallbackGlue {
     send_warned_at: Option<Instant>,
     recv_warned_at: Option<Instant>,
     spoof_warned_at: Option<Instant>,
-    clash_warned_at: Option<Instant>,
 }
 
 fn due(last: Option<Instant>, now: Instant) -> bool {
@@ -92,6 +96,47 @@ where
         self.fallback.transport = Some(transport);
         self.fallback.ip = Some(iface_ip);
         self.update_shared_status();
+    }
+
+    /// `main`: how to open the transport again on another address, after a PTP re-join.
+    pub fn set_fallback_reopener(&mut self, reopener: FallbackOpener) {
+        self.fallback.reopener = Some(reopener);
+    }
+
+    /// A PTP re-join succeeded on `ip` (`maybe_rejoin_ptp`): the fallback socket joins again
+    /// there too (a re-plugged NIC lost its membership, the same as the PTP sockets), and a moved
+    /// address is a new node id. A failed re-open keeps the old socket.
+    pub(super) fn fallback_rejoin(&mut self, ip: Ipv4Addr) {
+        if self.fallback.election.is_none() {
+            return;
+        }
+        if let Some(open) = self.fallback.reopener.as_mut() {
+            match open(ip) {
+                Ok(transport) => {
+                    self.fallback.transport = Some(transport);
+                    info!("[FALLBACK] socket re-joined on {}", ip);
+                }
+                Err(e) => warn!(
+                    "[FALLBACK] re-join on {} failed: {:#} -- the old socket stays",
+                    ip, e
+                ),
+            }
+        }
+        if self.fallback.ip != Some(ip) {
+            info!(
+                "[FALLBACK] the PTP interface moved to {}: node {}",
+                ip,
+                format_node(&wire::node_id(ip))
+            );
+            self.fallback.ip = Some(ip);
+            let events = self
+                .fallback
+                .election
+                .as_mut()
+                .map(|e| e.rebind(wire::node_id(ip)))
+                .unwrap_or_default();
+            self.apply_fallback_events(events, Instant::now());
+        }
     }
 
     pub(super) fn fallback_role(&self) -> Role {
@@ -241,18 +286,15 @@ where
         }
         for event in events {
             match event {
-                Event::PriorityClash { peer, ip, priority } => {
-                    if due(self.fallback.clash_warned_at, now) {
-                        error!(
-                            "[FALLBACK] priority clash: {} ({}) also has priority {} -- the lower \
-                             node id wins; give every node its own system.fallback.priority",
-                            ip.map_or_else(|| "?".to_string(), |ip| ip.to_string()),
-                            format_node(&peer),
-                            priority
-                        );
-                        self.fallback.clash_warned_at = Some(now);
-                    }
-                }
+                // Once per peer (the election reports each clashing peer once; a peer id is its
+                // sender's address and the table is capped, so this cannot flood).
+                Event::PriorityClash { peer, ip, priority } => error!(
+                    "[FALLBACK] priority clash: {} ({}) also has priority {} -- the lower node id \
+                     wins; give every node its own system.fallback.priority",
+                    ip.map_or_else(|| "?".to_string(), |ip| ip.to_string()),
+                    format_node(&peer),
+                    priority
+                ),
                 Event::Role { from, to, reason } => {
                     warn!(
                         "[FALLBACK] role {} -> {}: {}",

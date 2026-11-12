@@ -586,7 +586,8 @@ pub struct SyncStatus {
     // ========================================================================
     /// dsync#129: the class of the time this node runs on: `"ptp"` (a PTP grandmaster),
     /// `"dsync-fallback"` (this node IS the fallback source, or follows one) or `"none"` (no time
-    /// source: NTP only). `null` in a pre-1.33 blob.
+    /// source: NTP only). `null` in a pre-1.33 blob. On `"dsync-fallback"` the clock alarm
+    /// (`clock_alarm`) stays active by design: there is no PTP grandmaster.
     #[serde(default)]
     pub gm_class: Option<String>,
 

@@ -759,7 +759,15 @@ fn run_sync_loop(
     // dsync#129 slice 2: the fallback time source on the PTP interface (off by default).
     if fallback_config.enabled {
         match dsync::fallback::UdpFallbackTransport::open(joined_ip) {
-            Ok(transport) => controller.enable_fallback(Box::new(transport), joined_ip),
+            Ok(transport) => {
+                controller.enable_fallback(Box::new(transport), joined_ip);
+                // A PTP re-join opens it again on the address it joined.
+                controller.set_fallback_reopener(Box::new(|ip| {
+                    let transport: Box<dyn dsync::fallback::FallbackTransport> =
+                        Box::new(dsync::fallback::UdpFallbackTransport::open(ip)?);
+                    Ok(transport)
+                }));
+            }
             Err(e) => error!(
                 "[FALLBACK] could not open the fallback socket on {}: {:#} -- the fallback time \
                  source stays OFF",

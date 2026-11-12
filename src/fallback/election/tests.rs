@@ -446,3 +446,31 @@ fn a_flood_of_forged_ids_never_grows_the_peer_table_past_its_cap_129() {
         .peer(&[0xD5, 0xFB, last[0], last[1], last[2], last[3]])
         .is_some());
 }
+
+#[test]
+fn a_moved_interface_gives_a_new_id_and_restarts_the_source_under_it_129() {
+    let t0 = Instant::now();
+    let old = node_id(Ipv4Addr::new(10, 0, 0, 1));
+    let new = node_id(Ipv4Addr::new(10, 0, 0, 9));
+    let mut el = Election::new(true, 9, old, t0);
+    el.tick(t0 + secs(20.0));
+    assert_eq!(el.role(), Role::Source);
+    assert!(el.rebind(old).is_empty(), "the same id: nothing");
+    let ev = el.rebind(new);
+    assert_eq!(el.me(), new);
+    assert!(matches!(
+        &ev[..],
+        [Event::Role {
+            to: Role::Candidate,
+            ..
+        }]
+    ));
+    let ev = el.tick(t0 + secs(20.1));
+    assert!(matches!(
+        &ev[..],
+        [Event::Role {
+            to: Role::Source,
+            ..
+        }]
+    ));
+}

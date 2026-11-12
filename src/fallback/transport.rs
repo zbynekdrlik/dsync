@@ -40,11 +40,15 @@ const QUEUE: usize = 1024;
 /// The receive thread wakes this often to see whether the transport was dropped.
 const RX_POLL: Duration = Duration::from_millis(200);
 
+/// Read errors in a row before the receive thread backs off (a dead socket, not one bad datagram).
+const ERRORS_BEFORE_BACKOFF: u32 = 16;
+
 pub struct UdpFallbackTransport {
     tx: UdpSocket,
     dest: SocketAddrV4,
     rx: Receiver<std::result::Result<Received, String>>,
     stop: Arc<AtomicBool>,
+    /// Detached on drop (see `Drop`).
     thread: Option<JoinHandle<()>>,
 }
 
@@ -144,19 +148,30 @@ fn receive_loop(
     queue: SyncSender<std::result::Result<Received, String>>,
     stop: Arc<AtomicBool>,
 ) {
-    let mut buf = [0u8; 256];
+    // Far above a Sync (32 bytes): an oversize datagram fails the read on Windows (`WSAEMSGSIZE`).
+    let mut buf = [0u8; 2048];
     let mut dropped: u64 = 0;
+    let mut errors_in_a_row: u32 = 0;
     while !stop.load(Ordering::Relaxed) {
         let item = match crate::net::recv_with_timestamp(&socket, &mut buf) {
-            Ok(Some((size, rx, from))) => Ok(Received {
-                bytes: buf[..size].to_vec(),
-                rx,
-                from,
-            }),
+            Ok(Some((size, rx, from))) => {
+                errors_in_a_row = 0;
+                Ok(Received {
+                    bytes: buf[..size].to_vec(),
+                    rx,
+                    from,
+                })
+            }
             Ok(None) => continue,
             Err(e) if is_timeout(&e) => continue,
             Err(e) => {
-                std::thread::sleep(Duration::from_millis(100));
+                // One bad datagram (oversize, a reset) is dropped and the next read is at once:
+                // a pause here would make the next Sync's stamp late. Only a socket that keeps
+                // failing is backed off.
+                errors_in_a_row = errors_in_a_row.saturating_add(1);
+                if errors_in_a_row >= ERRORS_BEFORE_BACKOFF {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
                 Err(format!("{e:#}"))
             }
         };
@@ -190,11 +205,11 @@ fn is_timeout(e: &anyhow::Error) -> bool {
 }
 
 impl Drop for UdpFallbackTransport {
+    /// The receive thread ends within `RX_POLL`; it is not waited for (a re-join replaces the
+    /// transport from the sync loop, which must not stall).
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        drop(self.thread.take());
     }
 }
 

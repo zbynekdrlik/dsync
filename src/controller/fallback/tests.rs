@@ -160,8 +160,15 @@ fn the_source_steps_down_on_the_first_ptp_message_before_its_next_sync_129() {
         FALLBACK_MODE
     );
 
-    // One loop iteration: the PTP Sync arrives (and is dropped by the allowlist).
+    // One loop iteration with the next Sync already DUE: the PTP Sync arrives (and is dropped
+    // by the allowlist). The step-down runs before the fallback service, so nothing is sent.
+    c.fallback.next_send = Some(Instant::now() - Duration::from_millis(1));
     c.process_loop_iteration().expect("an iteration");
+    assert_eq!(
+        transport.sent().len(),
+        1,
+        "a Sync in the iteration that read the PTP message"
+    );
     assert_eq!(
         c.fallback_role(),
         Role::Candidate,
@@ -406,7 +413,6 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
     let wall_minus_line_ns: i64 = 3_456_789_000;
     let mut true_offset_us = 0.0_f64;
     let mut line_ns: i64 = 1_700_000_000 * 1_000_000_000;
-    let t0 = Instant::now();
     let mut engaged_at = None;
     let mut reported_at = None;
     // The receive time of a datagram sent at `line_ns` (wall = line + offset + path delay).
@@ -420,8 +426,19 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
         SystemTime::UNIX_EPOCH + Duration::from_nanos(rx_ns as u64)
     };
 
-    // 4 minutes of fallback Syncs, through the transport and the fallback service. The service
-    // runs on 125 ms steps of a virtual `Instant` (a test cannot wait 4 minutes).
+    // 4 minutes of fallback Syncs, through the transport and the REAL loop: the PTP silence
+    // takes the offline edge first, the first followed sample brings the node back online.
+    // (Only the samples' `t1` / `t2` carry the 4 minutes; the loop's `Instant`s run in real
+    // time, well inside every liveness bound.)
+    c.process_loop_iteration().expect("an iteration");
+    assert!(
+        c.ptp_offline,
+        "no PTP, nothing followed yet: the offline edge"
+    );
+    assert_eq!(
+        c.get_status_shared().read().expect("status").mode,
+        "NTP-only"
+    );
     for k in 0..(240 * 8) {
         line_ns += SYNC_NS;
         let rx = rx_at(line_ns, &mut noise, &mut true_offset_us);
@@ -437,7 +454,7 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
             rx,
             from: Some(SOURCE_IP),
         });
-        c.service_fallback(t0 + Duration::from_nanos((k * SYNC_NS) as u64));
+        c.process_loop_iteration().expect("an iteration");
         let s = k as f64 / 8.0;
         if engaged_at.is_none() && c.date_sync.core.engaged() {
             engaged_at = Some(s);
@@ -447,6 +464,10 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
         }
     }
     assert_eq!(c.fallback_role(), Role::Follower(source));
+    assert!(
+        !c.ptp_offline,
+        "the online edge came with the fallback source"
+    );
     let engaged_at = engaged_at.expect("the phase lock engaged on the fallback source");
     let reported_at = reported_at.expect("the lock gate was set on the fallback source");
     assert!(engaged_at <= 90.0, "engaged at {engaged_at} s");
@@ -548,4 +569,46 @@ fn a_follower_keeps_its_periodic_ntp_check_129() {
     assert!(c.fallback_following_live(Instant::now()));
     // A second service right after: not due again (`times(1)`).
     c.service_fallback(Instant::now());
+}
+
+/// A PTP re-join re-opens the fallback socket on the address it joined, and a moved address is
+/// a new node id (a source restarts under it).
+#[test]
+fn a_ptp_rejoin_reopens_the_fallback_socket_and_a_moved_address_renames_the_node_129() {
+    let moved = Ipv4Addr::new(10, 77, 9, 77);
+    let mut net = MockPtpNetwork::new();
+    net.expect_rejoin().times(2).returning(move || {
+        Ok(crate::traits::RejoinOutcome {
+            iface: "enx0".to_string(),
+            ip: moved,
+            changed: true,
+        })
+    });
+    let (mut c, _old) = controller(net, MockSystemClock::new(), config(9));
+    let opened: Arc<Mutex<Vec<Ipv4Addr>>> = Arc::default();
+    let reopened = FakeTransport::default();
+    let (o, r) = (opened.clone(), reopened.clone());
+    c.set_fallback_reopener(Box::new(move |ip| {
+        o.lock().expect("opened").push(ip);
+        Ok(Box::new(r.clone()) as Box<dyn FallbackTransport>)
+    }));
+    c.service_fallback(Instant::now());
+    assert!(c.fallback_is_source());
+    c.maybe_rejoin_ptp(Instant::now());
+    assert_eq!(*opened.lock().expect("opened"), vec![moved]);
+    assert_eq!(c.fallback.ip, Some(moved));
+    let me = c.fallback.election.as_ref().expect("on").me();
+    assert_eq!(me, wire::node_id(moved));
+    // It starts again under the new id, on the new socket.
+    c.service_fallback(Instant::now());
+    assert!(c.fallback_is_source());
+    assert_eq!(
+        reopened.sent().last().map(|s| s.node),
+        Some(wire::node_id(moved))
+    );
+    // A second re-join on the same address: the socket is opened again, the id stays.
+    c.ptp_liveness.schedule = Default::default();
+    c.maybe_rejoin_ptp(Instant::now());
+    assert_eq!(opened.lock().expect("opened").len(), 2);
+    assert_eq!(c.fallback.election.as_ref().expect("on").me(), me);
 }

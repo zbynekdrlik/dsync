@@ -152,6 +152,27 @@ impl Election {
         RANK_STEP * u32::from(255 - priority)
     }
 
+    /// The PTP interface moved (a re-join on another address): this node's id is `me` now. A
+    /// source stops (its followers will see a new source with a new id); it may start again under
+    /// the new id by the usual rules.
+    pub fn rebind(&mut self, me: NodeId) -> Vec<Event> {
+        if me == self.me {
+            return Vec::new();
+        }
+        self.me = me;
+        self.peers.remove(&me);
+        match self.role {
+            Role::Source => vec![self.become_(
+                Role::Candidate,
+                format!(
+                    "the PTP interface moved, this node is {} now",
+                    format_node(&me)
+                ),
+            )],
+            _ => Vec::new(),
+        }
+    }
+
     /// A PTP time message (any source, any version, allowed or not) was seen at `now`: a PTP
     /// leader is visible. A source or a follower steps down at once.
     pub fn note_ptp(&mut self, now: Instant, from: Option<Ipv4Addr>) -> Vec<Event> {
