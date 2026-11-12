@@ -610,7 +610,7 @@ mod app {
                                     } else if !is_ptp_offline && state.was_ptp_offline {
                                         show_notification(
                                             "dsync",
-                                            "PTP restored - resuming PTP sync"
+                                            tray_view::offline_ended_message(&status)
                                         );
                                     }
                                     // NANO mode and lock state transitions: icon color change is sufficient,

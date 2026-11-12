@@ -380,6 +380,7 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
         assert_eq!(st.fallback_source_ip.as_deref(), Some("10.77.9.201"));
         assert_eq!(st.fallback_epoch, Some(42));
         assert_eq!(st.gm_uuid, Some(source));
+        assert_eq!(st.gm_source_ip, None, "no PTP grandmaster");
     }
     let continued_before = c.date_sync.core.gm_continued();
 
@@ -420,4 +421,46 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
     assert_eq!(st.fallback_role.as_deref(), Some("candidate"));
     assert_eq!(st.mode, "LOCK");
     // `step_clock` is `.never()`: no wall step on the way in or out.
+}
+
+/// A follower gets no PTP packet, so the loop's packet path never runs its periodic NTP check:
+/// the fallback service runs it (gated on its own interval), as the no-packet branch does for an
+/// NTP-only node.
+#[test]
+fn a_follower_keeps_its_periodic_ntp_check_129() {
+    let mut ntp = MockNtpSource::new();
+    ntp.expect_get_offset()
+        .times(1)
+        .returning(|| Err(anyhow::anyhow!("no upstream in a unit test")));
+    let mut c: Ctl = PtpController::new(
+        MockSystemClock::new(),
+        MockPtpNetwork::new(),
+        ntp,
+        Arc::new(RwLock::new(SyncStatus::default())),
+        config(0),
+    );
+    let transport = FakeTransport::default();
+    c.enable_fallback(Box::new(transport.clone()), ME);
+    let quiet_since = Instant::now() - Duration::from_secs(30);
+    c.last_ptp_packet = quiet_since;
+    c.fallback.election = Some(Election::new(true, 0, wire::node_id(ME), quiet_since));
+    // Locked to the source, the check is due.
+    c.rate.is_locked = true;
+    c.last_ntp_check = Instant::now() - Duration::from_secs(600);
+    let sync = FallbackSync {
+        priority: 7,
+        node: wire::node_id(SOURCE_IP),
+        seq: 0,
+        epoch: 1,
+        t1_ns: 1_700_000_000 * 1_000_000_000,
+    };
+    transport.inbox.lock().expect("inbox").push_back(Received {
+        bytes: sync.encode().to_vec(),
+        rx: SystemTime::now(),
+        from: Some(SOURCE_IP),
+    });
+    c.service_fallback(Instant::now());
+    assert!(c.fallback_following_live(Instant::now()));
+    // A second service right after: not due again (`times(1)`).
+    c.service_fallback(Instant::now());
 }

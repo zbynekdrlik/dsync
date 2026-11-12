@@ -149,6 +149,12 @@ where
         if self.fallback_is_source() && self.fallback.next_send.map_or(true, |t| now >= t) {
             self.send_fallback_sync(now);
         }
+        // A follower receives no PTP packet, so the loop's packet path (which runs the periodic
+        // NTP check after every PTP packet) never runs: run it here, as the no-packet branch
+        // does for an NTP-only node. It gates itself on its own interval.
+        if self.fallback_following_live(now) {
+            self.check_ntp_utc_tracking();
+        }
     }
 
     /// A PTP time message (any version, any sender, before the allowlist) arrived at `now`.
@@ -202,6 +208,8 @@ where
             );
             self.fallback.followed = Some(key);
             self.current_sync_source = Some(sync.node);
+            // `gm_source_ip` names a PTP grandmaster; there is none now.
+            self.current_sync_source_ip = None;
             self.soft_reset_for_new_sync_source();
             if self.current_gm_uuid != Some(sync.node) {
                 self.current_gm_uuid = Some(sync.node);

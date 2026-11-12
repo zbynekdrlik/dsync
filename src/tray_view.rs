@@ -38,6 +38,9 @@ pub const RGB_NTP_ONLY: [u8; 3] = [255, 152, 0];
 pub const RGB_NANO: [u8; 3] = [0, 188, 212];
 /// LOCK: PTP-locked (green).
 pub const RGB_LOCKED: [u8; 3] = [40, 167, 69];
+/// FALLBACK (dsync#129): on the dsync fallback time source, no PTP leader exists (purple):
+/// never the green of a PTP lock.
+pub const RGB_FALLBACK: [u8; 3] = [111, 66, 193];
 /// Acquiring / settled but not locked (yellow).
 pub const RGB_ACQUIRING: [u8; 3] = [255, 193, 7];
 /// The update badge dot (orange).
@@ -123,6 +126,8 @@ pub enum TrayState {
     NtpOnly,
     /// `mode == "NANO"`.
     Nano,
+    /// `mode == "FALLBACK"` (dsync#129): the fallback time source, or locked to it.
+    Fallback,
     /// `is_locked`.
     Locked,
     /// Settled but not locked.
@@ -138,6 +143,7 @@ impl TrayState {
             TrayState::Offline => "OFFLINE",
             TrayState::NtpOnly => "NTP-only",
             TrayState::Nano => "NANO",
+            TrayState::Fallback => "FALLBACK",
             TrayState::Locked => "LOCK",
             TrayState::Settled => "SETTLED",
             TrayState::Acquiring => "ACQUIRING",
@@ -151,6 +157,7 @@ pub fn tray_state(status: Option<&TrayStatus>) -> TrayState {
         None => TrayState::Offline,
         Some(s) if s.mode == "NTP-only" => TrayState::NtpOnly,
         Some(s) if s.mode == "NANO" => TrayState::Nano,
+        Some(s) if s.mode == "FALLBACK" => TrayState::Fallback,
         Some(s) if s.is_locked => TrayState::Locked,
         Some(s) if s.settled => TrayState::Settled,
         Some(_) => TrayState::Acquiring,
@@ -203,6 +210,7 @@ pub fn icon_spec(status: Option<&TrayStatus>, update_badge: bool) -> IconSpec {
         TrayState::NtpOnly => (RGB_NTP_ONLY, 0.0),
         TrayState::Nano => (RGB_NANO, (rate / 5.0).min(1.0) as f32),
         TrayState::Locked => (RGB_LOCKED, pulse),
+        TrayState::Fallback => (RGB_FALLBACK, pulse),
         TrayState::Settled => (RGB_ACQUIRING, pulse.max(0.3)),
         TrayState::Acquiring => (RGB_ACQUIRING, 0.0),
     };
@@ -317,6 +325,16 @@ pub fn status_texts(status: &TrayStatus, version: &str) -> TrayTexts {
             Some(ip) => format!("PTP Master: {}", ip),
             None => "PTP Master: --".to_string(),
         },
+    }
+}
+
+/// The toast when the NTP-only state ends: PTP is back, or (dsync#129) the node now runs on the
+/// dsync fallback time source, which is NOT PTP.
+pub fn offline_ended_message(status: &TrayStatus) -> &'static str {
+    if status.mode == "FALLBACK" {
+        "No PTP leader - on the dsync fallback time source"
+    } else {
+        "PTP restored - resuming PTP sync"
     }
 }
 
