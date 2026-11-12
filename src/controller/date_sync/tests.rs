@@ -1071,3 +1071,53 @@ fn the_fallback_source_steps_its_wall_with_an_absorbed_d_129() {
     c.service_date_offset();
     assert_eq!(c.date_sync.core.anchor_ns(), Some(d + 50_000));
 }
+
+/// dsync#129 (review round 4): a micro-mode master that IS the fallback source stays on the fleet
+/// line through its PTP outage like a daily master: no local NTP step, and its own micro
+/// increments are scheduled on its own wall (its followers step every one).
+#[test]
+fn a_micro_master_that_is_the_source_takes_its_own_increments_not_ntp_steps_129() {
+    let mut ntp = MockNtpSource::new();
+    ntp.expect_get_offset()
+        .returning(|| Ok(one_offset(7_000, 1)));
+    // No step_clock expectation: a local NTP step would panic the mock.
+    let (mut c, _d) = anchored_controller(MockSystemClock::new(), ntp, true);
+    make_fallback_source(&mut c);
+    for _ in 0..6 {
+        c.last_ntp_check = Instant::now() - Duration::from_secs(60);
+        c.check_ntp_utc_tracking();
+    }
+    c.service_date_offset();
+    let st = c.get_status_shared();
+    let st = st.read().expect("status");
+    assert_eq!(
+        st.date_step_pending_ns,
+        Some(500_000),
+        "one 500 µs increment"
+    );
+    assert!(st.date_micro_active, "the master's own scheduler holds it");
+}
+
+/// dsync#129 (review round 4): a micro-mode master that is the source has no local NTP path any
+/// more, so a failed own step is re-joined after the backoff, as a daily master's is.
+#[test]
+fn a_micro_master_that_is_the_source_rejoins_the_fleet_line_after_a_failed_step_129() {
+    let mut clock = MockSystemClock::new();
+    clock
+        .expect_step_clock()
+        .times(1)
+        .withf(|dur, sg| *dur == Duration::from_millis(300) && *sg == 1)
+        .returning(|_, _| Ok(()));
+    let (mut c, d) = anchored_controller(clock, MockNtpSource::new(), true);
+    make_fallback_source(&mut c);
+    c.service_date_offset();
+    c.date_sync.core.set_anchor(d - 300_000_000);
+    c.date_sync.step_failed_at = Some(Instant::now() - Duration::from_secs(11));
+    c.service_date_offset();
+    assert_eq!(
+        c.date_sync.core.anchor_ns(),
+        Some(d),
+        "back on the fleet line"
+    );
+    assert_eq!(c.date_sync.last_step.map(|s| s.2), Some("join"));
+}
