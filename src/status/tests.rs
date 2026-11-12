@@ -871,3 +871,19 @@ fn the_state_dir_field_is_additive_147() {
     let fresh = serde_json::to_string(&SyncStatus::default()).expect("json");
     assert!(fresh.contains(r#""state_dir":null"#), "{fresh}");
 }
+
+/// dsync#179: `/status` names the running build's version, so the dev1 node watch grades
+/// upgrade debt over plain HTTP; a pre-1.35 blob without the field still parses (as `""`).
+#[test]
+fn status_reports_the_running_version_179() {
+    let status = SyncStatus::default();
+    assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
+    assert!(!status.version.is_empty());
+    let json: serde_json::Value = serde_json::from_slice(&status.to_json_bytes().unwrap()).unwrap();
+    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+
+    let mut old = serde_json::to_value(&status).unwrap();
+    old.as_object_mut().unwrap().remove("version");
+    let restored: SyncStatus = serde_json::from_value(old).expect("a pre-1.35 blob parses");
+    assert_eq!(restored.version, "");
+}

@@ -1,0 +1,12 @@
+# dsync #179: one pass of the node watch (scripts/node_watch.py), fired by dsync-node-watch.timer.
+# Installed on dev1 for the dsync account: copy both files to ~/.config/systemd/user/ and run
+#   systemctl --user daemon-reload && systemctl --user enable --now dsync-node-watch.timer
+[Unit]
+Description=dsync node watch: grade every dsync-owned node's /status (#179)
+
+[Service]
+Type=oneshot
+SyslogIdentifier=dsync-node-watch
+ExecStart=/usr/bin/env python3 %h/devel/dsync/scripts/node_watch.py
+# 6 nodes x (4 s HTTP + 2 s :22 probe) + gh + notify; a pass must never pile up behind a hung call.
+TimeoutStartSec=120
