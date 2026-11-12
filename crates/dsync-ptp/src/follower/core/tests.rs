@@ -1150,3 +1150,97 @@ fn a_secondary_grandmaster_whose_rate_moves_after_the_handover_keeps_the_lock_16
         );
     }
 }
+
+/// dsync#166 (dstack, iemmixer 12.11.2026, follower v1.30.1): the FOH grandmaster came back and
+/// took the role over from the secondary. `e` read +34.9 µs at the change and ran on at ~1.4 µs/s
+/// the SAME way (the handback needed a ~7 ppm frequency step, freq_ppb ~47 000 -> ~40 100); the
+/// pull was spent in a minute and the lock fell 96 s later.
+fn step_minus_7_ppm(_s: f64) -> f64 {
+    -7.0
+}
+
+fn step_plus_7_ppm(_s: f64) -> f64 {
+    7.0
+}
+
+fn no_rate_step(_s: f64) -> f64 {
+    0.0
+}
+
+/// One continued grandmaster change `jump_ns` off the line with the new grandmaster's rate
+/// `profile`, 600 s after it: (worst |e| ns, seconds not settled, the lock lost).
+fn replay_a_handover_166(profile: fn(f64) -> f64, jump_ns: i64) -> (i64, f64, bool) {
+    let mut world = World::new(0x5eed_1667, 5_000.0);
+    let mut core = new_core(&world);
+    run_to_lock(&mut world, &mut core, 300);
+    for _ in 0..(120 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    assert!(core.model().settled, "not settled before the change");
+    let t = world.t;
+    let a_now = world.gm_time(t);
+    world.gm = GM_B;
+    world.gm_base = a_now + jump_ns - t - (t as f64 * world.gm_ppm * 1e-6) as i64;
+    world.gm_profile = Some(profile);
+    world.gm_profile_t0 = t;
+    let (mut worst_e, mut unsettled, mut lost) = (0i64, 0usize, false);
+    for _ in 0..(600 * 8) {
+        world.tick(&mut [&mut core]);
+        worst_e = worst_e.max(world.error_ns(&core).expect("anchored").abs());
+        let m = core.model();
+        lost |= !m.locked;
+        unsettled += usize::from(!m.settled);
+    }
+    assert_eq!(core.model().gm_uuid, Some(GM_B.grandmaster_uuid));
+    assert_eq!(core.model().epoch, 0, "a continued change, not a re-base");
+    let unsettled_s = unsettled as f64 * SYNC_PERIOD_NS as f64 / 1e9;
+    eprintln!("{jump_ns} ns: worst |e| {worst_e} ns, unsettled {unsettled_s} s, lock lost {lost}");
+    (worst_e, unsettled_s, lost)
+}
+
+#[test]
+fn a_handover_with_a_7_ppm_rate_step_at_the_change_keeps_the_lock_166() {
+    // The field's shape, both ways: the handback's −7 ppm and the handover's +7 ppm, each with
+    // the change's 35 µs time offset in the ramp's direction (the worst case). The rate is
+    // unknown until the grandmaster fit has measured it (`GM_FIT_MIN_SPAN_S`, 5 s: 35 µs at
+    // 7 ppm), so |e| reaches the offset + that, and `settled` waits for the pull to retire it
+    // under 30 µs. The lock (150 µs) must never fall.
+    for (name, profile, jump_ns) in [
+        ("-7 ppm", step_minus_7_ppm as fn(f64) -> f64, -35_000),
+        ("+7 ppm", step_plus_7_ppm, 35_000),
+    ] {
+        let (worst_e, unsettled_s, lost) = replay_a_handover_166(profile, jump_ns);
+        assert!(!lost, "{name}: the lock was lost (worst |e| {worst_e} ns)");
+        assert!(worst_e < 75_000, "{name}: {worst_e} ns off B's line");
+        assert!(unsettled_s <= 40.0, "{name}: unsettled for {unsettled_s} s");
+    }
+    // The rate step's own share: on a change with no time offset |e| stays under 50 µs.
+    for (name, profile) in [
+        ("-7 ppm", step_minus_7_ppm as fn(f64) -> f64),
+        ("+7 ppm", step_plus_7_ppm),
+    ] {
+        let (worst_e, _, lost) = replay_a_handover_166(profile, 0);
+        assert!(!lost, "{name}: the lock was lost");
+        assert!(
+            worst_e < 50_000,
+            "{name}, no offset: {worst_e} ns off B's line"
+        );
+    }
+}
+
+#[test]
+fn a_continued_handover_within_the_settled_bound_never_unsettles_166() {
+    // dstack asks a follower to STAY settled through a handover. A continued change keeps `D`
+    // and `e` continuous; 20 µs off the line (under the 30 µs settled bound, in the pull) and on
+    // the same rate it is no reason to forget the last 30 windows and report "not settled" for
+    // the ~15 s they take to refill.
+    for jump_ns in [20_000, -20_000] {
+        let (worst_e, unsettled_s, lost) = replay_a_handover_166(no_rate_step, jump_ns);
+        assert!(!lost);
+        assert!(worst_e < 30_000, "{jump_ns} ns: {worst_e} ns off B's line");
+        assert_eq!(
+            unsettled_s, 0.0,
+            "{jump_ns} ns: unsettled for {unsettled_s} s"
+        );
+    }
+}
