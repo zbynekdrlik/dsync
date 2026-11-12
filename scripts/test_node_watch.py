@@ -27,11 +27,19 @@ class Grade(unittest.TestCase):
             (with_(ptp_phase_error_us=-61.5), "|e| 61.5 us >= 50"),
             (with_(ptp_phase_error_us=None), "no phase error"),
             (with_(ntp_step_storm=True), "ntp step storm"),
-            (with_(version="1.34.0"), "version 1.34.0 != latest 1.35.0"),
+            (with_(version="1.34.0"), "version 1.34.0 < latest 1.35.0"),
         ]
         for status, reason in cases:
             with self.subTest(reason=reason):
                 self.assertEqual(w.grade(status, "1.35.0", False, True), ("ALARM", [reason]))
+
+    def test_a_newer_candidate_is_not_upgrade_debt(self):
+        """#179: the stability gate installs the dev candidate (newer than the latest release) on
+        companion for an hour; that is not debt, only an older version is."""
+        self.assertEqual(w.grade(with_(version="1.35.1"), "1.35.0", False, True), ("OK", []))
+        self.assertEqual(w.grade(with_(version="1.36.0"), "1.35.10", False, True), ("OK", []))
+        self.assertEqual(w.grade(with_(version="1.35.9"), "1.35.10", False, True),
+                         ("ALARM", ["version 1.35.9 < latest 1.35.10"]))
 
     def test_just_inside_the_bound_is_ok(self):
         self.assertEqual(w.grade(with_(ptp_phase_error_us=49.99), "1.35.0", False, True)[0], "OK")
@@ -40,7 +48,7 @@ class Grade(unittest.TestCase):
         s = dict(GOOD)
         del s["version"]
         self.assertEqual(w.grade(s, "1.35.0", False, True),
-                         ("ALARM", ["version <1.35 != latest 1.35.0"]))
+                         ("ALARM", ["version <1.35 < latest 1.35.0"]))
 
     def test_unreadable_fixed_node_alarms(self):
         self.assertEqual(w.grade(None, "1.35.0", False, True),
