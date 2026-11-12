@@ -162,7 +162,13 @@ where
     pub(super) fn tick_drift_file(&mut self) {
         self.freq_seed.word_before = self.freq_seed.word_last;
         self.freq_seed.word_last = self.applied_freq_ppm;
-        if !self.reported_lock() || self.ptp_offline || self.freq_seed.path.is_none() {
+        // dsync#129: a frequency locked to a fallback source is a software line, not this
+        // oscillator against a grandmaster: never saved.
+        if !self.reported_lock()
+            || self.ptp_offline
+            || self.fallback_following_live(Instant::now())
+            || self.freq_seed.path.is_none()
+        {
             self.freq_seed.next_save = None;
             return;
         }
@@ -180,7 +186,10 @@ where
     /// dsync#142: at shutdown, save the learned frequency when LOCKED (else the file keeps
     /// the last locked value). `main` calls it after the sync loop ends.
     pub fn save_drift_file_at_shutdown(&mut self) {
-        if self.reported_lock() && !self.ptp_offline {
+        if self.reported_lock()
+            && !self.ptp_offline
+            && !self.fallback_following_live(Instant::now())
+        {
             self.save_drift_file("at shutdown");
         } else {
             info!("[FREQ-SEED] not locked at shutdown: the drift file keeps its last locked value");

@@ -84,7 +84,9 @@ where
     /// Check PTP status and handle offline mode: the offline edge (PTP stale) and the online edge
     /// (the next allowed packet), every loop iteration.
     pub(super) fn check_ptp_status(&mut self) {
-        if self.ptp_stale_at(Instant::now()) {
+        // dsync#129: a followed fallback source is a time source too (with the feature off this
+        // is exactly `ptp_stale_at`).
+        if self.time_source_stale_at(Instant::now()) {
             if !self.ptp_offline {
                 self.ptp_offline = true;
                 // #112: the servo keeps its lock state through the outage (the learned frequency
@@ -131,7 +133,11 @@ where
             // PTP came back online
             self.ptp_offline = false;
             self.ptp_offline_logged = false;
-            info!("[PTP] Packets received - PTP sync resumed");
+            if self.fallback_following_live(Instant::now()) {
+                info!("[FALLBACK] time from the fallback source -- sync resumed (no PTP leader)");
+            } else {
+                info!("[PTP] Packets received - PTP sync resumed");
+            }
             if self.rate.is_locked || self.rate.in_nano_mode {
                 info!("[PTP] === LOCKED === (PTP packets back; the servo held its lock through the outage)");
             }

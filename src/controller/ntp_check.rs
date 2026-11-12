@@ -111,6 +111,9 @@ where
     pub(in crate::controller) fn step_wall(&mut self, offset: Duration, sign: i8) -> Result<()> {
         self.clock.step_clock(offset, sign)?;
         self.ntp_burst.wall_steps += 1;
+        // dsync#129: the fallback source's line stays continuous across any step of its wall.
+        let ns = i64::try_from(offset.as_nanos()).unwrap_or(i64::MAX);
+        self.fallback_note_wall_step(if sign < 0 { -ns } else { ns });
         Ok(())
     }
 }

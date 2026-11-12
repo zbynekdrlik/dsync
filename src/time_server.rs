@@ -399,6 +399,8 @@ fn build_response(request_id: u32, status: &SyncStatus) -> [u8; RESPONSE_SIZE] {
         "LOCK" => 3,
         "NANO" => 4,
         "NTP-only" => 5,
+        // dsync#129: the fallback time source, or a node locked to it.
+        "FALLBACK" => 6,
         _ => 0,
     };
 
