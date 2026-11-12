@@ -7,7 +7,7 @@ read each node's `http://<addr>:8898/status`, grade it, write the verdicts to
 
 The grade (`grade()`, pure, unit-tested in `test_node_watch.py`):
   ALARM  `is_locked` false; `mode` not NANO/LOCK; |`ptp_phase_error_us`| >= 50; `ntp_step_storm`;
-         `version` not the latest release (upgrade debt, #169); `/status` unreadable.
+         `version` older than the latest release (upgrade debt, #169); `/status` unreadable.
   SKIP   a traveling node (alex-nb, resolume-pp) while its :22 does not answer: it is away, and
          that is never an alarm (camera-box's rule for the same nodes, dstack 12.11.2026).
   OK     otherwise.
@@ -30,6 +30,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
@@ -82,9 +83,23 @@ def grade(status: dict | None, latest: str, travel: bool, ssh_up: bool) -> tuple
     if status.get("ntp_step_storm", False):
         reasons.append("ntp step storm")
     version = status.get("version", "")
-    if version != latest:
-        reasons.append(f"version {version or '<1.35'} != latest {latest}")
+    if not _at_least(version, latest):
+        reasons.append(f"version {version or '<1.35'} < latest {latest}")
     return ("ALARM" if reasons else "OK"), reasons
+
+
+def _version_tuple(version: str) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(p) for p in version.split("."))
+    except ValueError:
+        return None
+
+
+def _at_least(version: str, latest: str) -> bool:
+    """True when `version` is the latest release or newer (the gate's dev candidate on companion
+    is newer, not debt). An empty or unparseable version is debt."""
+    have, want = _version_tuple(version), _version_tuple(latest)
+    return have is not None and want is not None and have >= want
 
 
 def dedup_key(node: str, now: float) -> str:
@@ -113,15 +128,36 @@ def ssh_answers(addr: str) -> bool:
         return False
 
 
+LATEST_URL = f"https://github.com/{REPO}/releases/latest"
+TAG_PREFIX = f"https://github.com/{REPO}/releases/tag/v"
+
+
+def version_from_latest_location(location: str | None) -> str:
+    """The version named by the `releases/latest` redirect's Location. Raises on anything else."""
+    if not location or not location.startswith(TAG_PREFIX):
+        raise RuntimeError(f"releases/latest redirected to {location!r}, not a release tag")
+    version = location[len(TAG_PREFIX):]
+    if not version or not version[0].isdigit():
+        raise RuntimeError(f"releases/latest redirected to {location!r}, not a release tag")
+    return version
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 def latest_release() -> str:
-    """The latest release's version without the `v`. Raises on any gh failure (fail loud)."""
-    out = subprocess.run(
-        ["gh", "api", f"repos/{REPO}/releases/latest", "--jq", ".tag_name"],
-        check=True, capture_output=True, text=True, timeout=30,
-    ).stdout.strip()
-    if not out.startswith("v"):
-        raise RuntimeError(f"unexpected latest tag {out!r}")
-    return out[1:]
+    """The latest published release's version, from the public `releases/latest` redirect: no API,
+    no token (the systemd --user unit has no GH_TOKEN; `gh api` exits 4 there). Raises on failure."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        opener.open(urllib.request.Request(LATEST_URL, method="HEAD"), timeout=15)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (301, 302, 303, 307, 308):
+            return version_from_latest_location(exc.headers.get("Location"))
+        raise
+    raise RuntimeError(f"{LATEST_URL} did not redirect")
 
 
 def send_alert(text: str, key: str) -> None:
