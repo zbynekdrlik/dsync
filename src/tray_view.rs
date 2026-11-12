@@ -11,7 +11,7 @@
 //! - [`tray_state`] + [`icon_spec`]: the clock state and the icon colour, pulse ring and
 //!   update badge for it; no status (daemon unreachable) is always the red offline icon,
 //!   never a stale green;
-//! - [`render_icon_rgba`]: the 32x32 RGBA pixels of that icon;
+//! - [`render_icon_rgba`]: the 32x32 RGBA pixels of that icon, a clock face (dsync#177);
 //! - [`status_texts`] / [`offline_texts`]: the tooltip and the read-only menu lines;
 //! - [`ClockAlarmCadence`]: when the Windows tray raises the dsync#114 NO PTP CLOCK
 //!   balloon (the Linux daemon already `notify-send`s it itself);
@@ -221,9 +221,48 @@ pub fn icon_spec(status: Option<&TrayStatus>, update_badge: bool) -> IconSpec {
     }
 }
 
-/// The 32x32 RGBA pixels (row-major, 4 bytes each) of an icon: a filled circle, an
-/// optional pulsing ring fading outward in a brighter tint of the fill, and an optional
-/// orange update badge in the top-right corner. Anti-aliased one pixel at each edge.
+/// The clock glyph's centre on the 32 px icon (dsync#177).
+pub const CLOCK_CENTRE: (f32, f32) = (16.0, 16.0);
+/// The minute hand's tip: straight up, to 12.
+pub const CLOCK_MINUTE_TIP: (f32, f32) = (16.0, 7.5);
+/// The hour hand's tip: to the right, to 3.
+pub const CLOCK_HOUR_TIP: (f32, f32) = (21.5, 16.0);
+/// Half the width of a clock hand: 4 px wide on 32 px, on whole 2 px blocks around the
+/// centre, so a 16 px downscale keeps each hand 2 px of solid white.
+pub const CLOCK_HAND_HALF_WIDTH: f32 = 2.0;
+
+/// How much of the white clock hands covers the point (`px`, `py`), 0..=1 (dsync#177).
+///
+/// Each hand is a round-capped stroke from the centre to its tip; the coverage is full
+/// within half a pixel inside the stroke edge and fades to 0 over one pixel, like the
+/// circle edges.
+pub fn clock_hands_coverage(px: f32, py: f32) -> f32 {
+    let d = segment_distance((px, py), CLOCK_CENTRE, CLOCK_MINUTE_TIP).min(segment_distance(
+        (px, py),
+        CLOCK_CENTRE,
+        CLOCK_HOUR_TIP,
+    ));
+    (CLOCK_HAND_HALF_WIDTH + 0.5 - d).clamp(0.0, 1.0)
+}
+
+/// Distance from `p` to the segment `a`-`b`.
+fn segment_distance(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (abx, aby) = (b.0 - a.0, b.1 - a.1);
+    let (apx, apy) = (p.0 - a.0, p.1 - a.1);
+    let len2 = abx * abx + aby * aby;
+    let t = if len2 > 0.0 {
+        ((apx * abx + apy * aby) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (dx, dy) = (apx - t * abx, apy - t * aby);
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// The 32x32 RGBA pixels (row-major, 4 bytes each) of an icon: a clock face (dsync#177)
+/// — a filled circle in the state colour with white hands at 3 o'clock — an optional
+/// pulsing ring fading outward in a brighter tint of the fill, and an optional orange
+/// update badge in the top-right corner. Anti-aliased one pixel at each edge.
 pub fn render_icon_rgba(spec: &IconSpec) -> Vec<u8> {
     let [r, g, b] = spec.rgb;
     let size = ICON_SIZE as usize;
@@ -261,7 +300,10 @@ pub fn render_icon_rgba(spec: &IconSpec) -> Vec<u8> {
                 if dist > inner_radius - 1.0 {
                     alpha = ((inner_radius - dist) * 255.0).max(0.0) as u8;
                 }
-                rgba.extend_from_slice(&[r, g, b, alpha]);
+                // dsync#177: the white clock hands on the state-coloured face.
+                let hand = clock_hands_coverage(x as f32 + 0.5, y as f32 + 0.5);
+                let mix = |c: u8| (c as f32 + (255.0 - c as f32) * hand).round() as u8;
+                rgba.extend_from_slice(&[mix(r), mix(g), mix(b), alpha]);
             } else if dist <= outer_radius && spec.pulse > 0.01 {
                 let ring_pos = (dist - inner_radius) / ring_width;
                 let ring_alpha = ((1.0 - ring_pos) * spec.pulse * 180.0) as u8;

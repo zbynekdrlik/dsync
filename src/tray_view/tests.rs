@@ -186,8 +186,8 @@ fn rendered_icon_is_32x32_rgba() {
 #[test]
 fn rendered_icon_fill_corner_and_edge() {
     let rgba = render_icon_rgba(&IconSpec::plain(RGB_OFFLINE));
-    // The centre is the solid fill.
-    assert_eq!(pixel(&rgba, 16, 16), [220, 53, 69, 255]);
+    // The face off the clock hands is the solid fill (dsync#177: the centre is the hands' hub).
+    assert_eq!(pixel(&rgba, 10, 21), [220, 53, 69, 255]);
     // The corners are transparent.
     assert_eq!(pixel(&rgba, 0, 0), [0, 0, 0, 0]);
     assert_eq!(pixel(&rgba, 31, 31), [0, 0, 0, 0]);
@@ -675,8 +675,11 @@ fn renderer_before_132(
     rgba
 }
 
+/// dsync#177 replaced the plain dot by a clock face on purpose: every pixel off the clock
+/// hands (the face, its edge, the pulse ring, the badge, the transparent corners) is still
+/// byte for byte the renderer before 132; only the hands differ.
 #[test]
-fn the_renderer_is_byte_identical_to_the_windows_one_before_132() {
+fn off_the_clock_hands_the_renderer_is_byte_identical_to_the_windows_one_before_132() {
     let colours = [
         RGB_OFFLINE,
         RGB_NTP_ONLY,
@@ -693,12 +696,26 @@ fn the_renderer_is_byte_identical_to_the_windows_one_before_132() {
                     pulse,
                     update_badge: badge,
                 };
-                assert_eq!(
-                    render_icon_rgba(&spec),
-                    renderer_before_132(rgb[0], rgb[1], rgb[2], pulse, badge),
-                    "{:?}",
-                    spec
-                );
+                let now = render_icon_rgba(&spec);
+                let before = renderer_before_132(rgb[0], rgb[1], rgb[2], pulse, badge);
+                assert_eq!(now.len(), before.len());
+                let mut differ = 0;
+                for i in 0..now.len() / 4 {
+                    let (x, y) = ((i % 32) as f32 + 0.5, (i / 32) as f32 + 0.5);
+                    if clock_hands_coverage(x, y) == 0.0 {
+                        assert_eq!(
+                            now[i * 4..i * 4 + 4],
+                            before[i * 4..i * 4 + 4],
+                            "{:?} px {}",
+                            spec,
+                            i
+                        );
+                    } else if now[i * 4..i * 4 + 4] != before[i * 4..i * 4 + 4] {
+                        differ += 1;
+                    }
+                }
+                // The hands are drawn (a white fill colour makes them invisible, by design).
+                assert!(differ > 20, "{:?}: {} hand pixels differ", spec, differ);
             }
         }
     }
@@ -723,4 +740,131 @@ fn a_fallback_lock_never_reads_as_a_ptp_lock_129() {
         offline_ended_message(&status("LOCK", true, true, 0.0)),
         "PTP restored - resuming PTP sync"
     );
+}
+
+// ---------------------------------------------------------------------------
+// dsync#177: the clock glyph
+// ---------------------------------------------------------------------------
+
+/// All state colours the face takes.
+const STATE_COLOURS: [[u8; 3]; 6] = [
+    RGB_OFFLINE,
+    RGB_NTP_ONLY,
+    RGB_NANO,
+    RGB_FALLBACK,
+    RGB_LOCKED,
+    RGB_ACQUIRING,
+];
+
+/// The icon is a clock, not a plain dot: white hands to 12 and to 3 on the state-coloured
+/// face, for every state colour.
+#[test]
+fn the_icon_is_a_clock_with_white_hands_on_the_state_colour_177() {
+    for rgb in STATE_COLOURS {
+        let rgba = render_icon_rgba(&IconSpec::plain(rgb));
+        // The hub, the minute hand (up) and the hour hand (right) are solid white.
+        for (x, y) in [(15, 15), (16, 16), (15, 9), (16, 10), (19, 15), (20, 16)] {
+            assert_eq!(
+                pixel(&rgba, x, y),
+                [255, 255, 255, 255],
+                "{:?} ({}, {})",
+                rgb,
+                x,
+                y
+            );
+        }
+        // No hand to the left or downward: the face keeps the state colour there.
+        for (x, y) in [(10, 15), (15, 21), (10, 21), (21, 10)] {
+            assert_eq!(
+                pixel(&rgba, x, y),
+                [rgb[0], rgb[1], rgb[2], 255],
+                "{:?} ({}, {})",
+                rgb,
+                x,
+                y
+            );
+        }
+        // The hands stay inside the face: nothing white beyond its edge.
+        for y in 0..32 {
+            for x in 0..32 {
+                let (dx, dy) = (x as f32 + 0.5 - 16.0, y as f32 + 0.5 - 16.0);
+                if (dx * dx + dy * dy).sqrt() > 11.0 {
+                    assert_eq!(pixel(&rgba, x, y)[3], 0, "{:?} ({}, {})", rgb, x, y);
+                }
+            }
+        }
+    }
+}
+
+/// Box-downscale the 32 px icon to 16 px (what Windows and GNOME do for a small tray).
+fn downscale_16(rgba: &[u8]) -> Vec<[u8; 4]> {
+    let mut out = Vec::with_capacity(16 * 16);
+    for y in 0..16 {
+        for x in 0..16 {
+            let mut acc = [0u32; 4];
+            for (sx, sy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let p = pixel(rgba, 2 * x + sx, 2 * y + sy);
+                for c in 0..4 {
+                    acc[c] += p[c] as u32;
+                }
+            }
+            out.push(acc.map(|a| (a / 4) as u8));
+        }
+    }
+    out
+}
+
+/// At 16 px the clock still reads: an "L" of near-white hand pixels (minute up, hour
+/// right) and a face that keeps the state colour around it.
+#[test]
+fn the_clock_still_reads_at_16_px_177() {
+    for rgb in STATE_COLOURS {
+        let small = downscale_16(&render_icon_rgba(&IconSpec::plain(rgb)));
+        let at = |x: usize, y: usize| small[y * 16 + x];
+        let whitish = |p: [u8; 4]| p[3] == 255 && p[0] >= 200 && p[1] >= 200 && p[2] >= 200;
+        // Minute hand: column 7..8 from row 4 to the hub; hour hand: row 7..8 to column 10.
+        for y in 4..8 {
+            assert!(
+                whitish(at(7, y)) || whitish(at(8, y)),
+                "{:?} minute row {}",
+                rgb,
+                y
+            );
+        }
+        for x in 8..11 {
+            assert!(
+                whitish(at(x, 7)) || whitish(at(x, 8)),
+                "{:?} hour col {}",
+                rgb,
+                x
+            );
+        }
+        // The face quadrants without a hand keep the exact state colour.
+        for (x, y) in [(5, 11), (5, 10), (10, 4), (10, 5), (4, 5), (10, 10)] {
+            assert_eq!(
+                at(x, y),
+                [rgb[0], rgb[1], rgb[2], 255],
+                "{:?} ({}, {})",
+                rgb,
+                x,
+                y
+            );
+        }
+    }
+}
+
+/// The hands' coverage: full on the stroke, anti-aliased one pixel at its edge, none off it.
+#[test]
+fn clock_hands_coverage_is_a_round_capped_stroke_177() {
+    assert_eq!(clock_hands_coverage(16.0, 16.0), 1.0);
+    assert_eq!(clock_hands_coverage(16.0, 7.5), 1.0);
+    assert_eq!(clock_hands_coverage(21.5, 16.0), 1.0);
+    // 1.5 px off the minute hand: still full; 2 px off: half covered.
+    assert_eq!(clock_hands_coverage(14.5, 12.0), 1.0);
+    assert!((clock_hands_coverage(14.0, 12.0) - 0.5).abs() < 1e-6);
+    // 2.5 px or more off any hand: nothing.
+    assert_eq!(clock_hands_coverage(13.5, 12.0), 0.0);
+    assert_eq!(clock_hands_coverage(16.0, 4.9), 0.0);
+    assert_eq!(clock_hands_coverage(24.1, 16.0), 0.0);
+    assert_eq!(clock_hands_coverage(10.0, 22.0), 0.0);
 }
