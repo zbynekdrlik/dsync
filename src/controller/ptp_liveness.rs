@@ -134,12 +134,13 @@ where
             self.ptp_offline = false;
             self.ptp_offline_logged = false;
             if self.fallback_following_live(Instant::now()) {
+                // dsync#129: not a PTP return; the `[PTP]` lines stay PTP's own.
                 info!("[FALLBACK] time from the fallback source -- sync resumed (no PTP leader)");
             } else {
                 info!("[PTP] Packets received - PTP sync resumed");
-            }
-            if self.rate.is_locked || self.rate.in_nano_mode {
-                info!("[PTP] === LOCKED === (PTP packets back; the servo held its lock through the outage)");
+                if self.rate.is_locked || self.rate.in_nano_mode {
+                    info!("[PTP] === LOCKED === (PTP packets back; the servo held its lock through the outage)");
+                }
             }
         }
     }

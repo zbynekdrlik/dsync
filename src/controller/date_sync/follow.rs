@@ -21,6 +21,11 @@ where
     ) {
         match act {
             FollowAction::None => {}
+            // dsync#129: on the fallback source `wall − D` is the line its followers hold; D
+            // moving without the wall would jump it. The source steps its wall with D instead.
+            FollowAction::Absorb { new_anchor_ns } if self.fallback_is_source() => {
+                self.apply_date_step(new_anchor_ns.wrapping_sub(anchor), StepKind::Join, ann.seq);
+            }
             FollowAction::Absorb { new_anchor_ns } => {
                 self.date_sync.core.set_anchor(new_anchor_ns);
                 if first {

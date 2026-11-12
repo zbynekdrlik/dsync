@@ -750,9 +750,11 @@ where
                 .wrapping_add(anchor.wrapping_sub(fleet))
                 .wrapping_add(acquiring_err);
             self.date_sync.master_utc_error_ns = Some(fleet_err);
-            let daily = self.date_sync.daily();
             // #119 (1.12): a daily-mode master without PTP is still on the fleet line (its D is
             // the fleet D, it takes no local NTP steps), so it takes the fleet's steps itself.
+            // dsync#129: so does a master that IS the fallback source, in either mode: its
+            // `wall − D` is the time its followers hold, so its wall stays on the fleet line.
+            let daily = self.date_sync.daily() || self.fallback_is_source();
             let on_line =
                 anchor == fleet && (!self.ptp_offline || daily) && !self.in_step_backoff();
             if !self.ptp_offline || daily {
@@ -828,7 +830,11 @@ where
             self.ntp_server_checks_since_step = 0;
             return true;
         }
-        if self.ptp_offline {
+        // dsync#129: the fallback source is offline but follows the fleet's announces (see
+        // `service_date_offset`): once it adopted the fleet D it takes no local NTP step, like
+        // an online follower (its line never moves with a step, but its wall would leave the
+        // fleet line and the next announce would Join it back: two steps per cycle).
+        if self.ptp_offline && !self.fallback_is_source() {
             return false;
         }
         if self.date_sync.follower.adopted() {

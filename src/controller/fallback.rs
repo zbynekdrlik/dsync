@@ -116,10 +116,14 @@ where
                     self.fallback.transport = Some(transport);
                     info!("[FALLBACK] socket re-joined on {}", ip);
                 }
-                Err(e) => warn!(
-                    "[FALLBACK] re-join on {} failed: {:#} -- the old socket stays",
-                    ip, e
-                ),
+                Err(e) => {
+                    // The id stays with the socket in use: a Sync's id must be its sender's.
+                    warn!(
+                        "[FALLBACK] re-join on {} failed: {:#} -- the old socket (and node id) stay",
+                        ip, e
+                    );
+                    return;
+                }
             }
         }
         if self.fallback.ip != Some(ip) {

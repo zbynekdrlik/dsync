@@ -36,6 +36,12 @@ are on the ticket (issuecomment-6810218909, updated by issuecomment-6810625921).
   anchored (`D` moves with every step AND every #119 slew), `wall − base` otherwise (`step_wall`
   adds every step to `base`). So the source keeps its normal NTP / date path: holding its NTP
   steps protected nothing and let its wall drift from UTC (review round 1).
+- **The source takes the fleet's date like a follower, though it is offline** (review rounds
+  2-3): `service_date_offset` lets it adopt announces (`same_time_base` decides: its `wall − D`
+  is the base its followers announce in); an announce inside the absorb tolerance becomes a
+  step of the same size on the source (D alone would jump the line); once adopted it takes no
+  local NTP step (a step would leave the fleet line and the next announce would Join it back);
+  a master that is the source stays on the fleet line like a daily master, in micro mode too.
 - **A follower is "online" on the fallback.** `ptp_stale_at` stays "no allowed PTP" (re-join,
   clock alarm, receive counters); `time_source_stale_at` adds the followed source (offline edge,
   `/status`). A follower gets no PTP packet, so the fallback service runs the periodic NTP check
