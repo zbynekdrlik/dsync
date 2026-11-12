@@ -358,6 +358,7 @@ impl FollowerCore {
             self.holdovers = self.holdovers.saturating_add(1);
         }
         self.drop_measurement();
+        self.recent_e.clear();
         let outage = phase_window::on_outage(&mut self.core, &mut self.gate, &mut self.deviation);
         if let Some(word) = outage.held_ppm {
             self.rate.drift_baseline_ppm = word;
@@ -371,7 +372,6 @@ impl FollowerCore {
     }
 
     fn drop_measurement(&mut self) {
-        self.recent_e.clear();
         self.pending.clear();
         self.window.clear();
         self.floor.clear();
@@ -381,7 +381,8 @@ impl FollowerCore {
     }
 
     /// The PTP sender may carry another time base: re-anchor `D_v` on the next window, never
-    /// mixing samples of two bases.
+    /// mixing samples of two bases. The settled history is judged by that window's event
+    /// (dsync#166): kept for a continued change, cleared for a re-base.
     fn on_time_base_change(&mut self) {
         self.drop_measurement();
         self.core.request_rebase();
@@ -580,6 +581,10 @@ impl FollowerCore {
                 self.recent_e.push_back(e.saturating_abs());
             }
             (true, AnchorEvent::None, _) => {}
+            // dsync#166: a continued grandmaster change keeps `D` and `e` continuous (the
+            // residual is in the pull, which `settled` checks on its own), so the history stays:
+            // forgetting it read "not settled" for ~15 s after every handover on the same line.
+            (true, AnchorEvent::GmContinued { .. }, _) => {}
             _ => self.recent_e.clear(),
         }
         if late {
