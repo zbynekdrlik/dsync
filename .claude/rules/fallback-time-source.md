@@ -43,9 +43,13 @@ are on the ticket (issuecomment-6810218909, updated by issuecomment-6810625921).
   local NTP step (a step would leave the fleet line and the next announce would Join it back);
   a master that is the source stays on the fleet line like a daily master, in micro mode too
   (`master_holds_fleet_line_offline`, the ONE predicate for every such path: the NTP gate, its
-  own increments in `tick_date_authority`, the re-join after a failed step). No outage
-  re-align is needed for it when PTP returns: the whole fleet shares the source's free-run, and
-  the sync-source change (`GmContinued` / `Rebased`) takes it.
+  own increments in `tick_date_authority`, the re-join after a failed step). Becoming the
+  source clears a daily master's outage re-align: the whole fleet shares the source's free-run.
+  When PTP returns within 1 ms of `D`, everybody slews it out (`GmContinued` on the followers,
+  the PI on the master), no step. **Known limit (accepted, the class of "whole-fleet PTP loss"):**
+  beyond 1 ms the master re-engages `Realigned` and Joins at once, the followers `Rebase` and
+  join at their next poll, so every box steps by about the free-run at slightly different
+  instants.
 - **A follower is "online" on the fallback.** `ptp_stale_at` stays "no allowed PTP" (re-join,
   clock alarm, receive counters); `time_source_stale_at` adds the followed source (offline edge,
   `/status`). A follower gets no PTP packet, so the fallback service runs the periodic NTP check
