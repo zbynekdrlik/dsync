@@ -1121,3 +1121,23 @@ fn a_micro_master_that_is_the_source_rejoins_the_fleet_line_after_a_failed_step_
     );
     assert_eq!(c.date_sync.last_step.map(|s| s.2), Some("join"));
 }
+
+/// dsync#129 (review round 5): a daily master that becomes the fallback source drops its outage
+/// re-align. Its free-run is the fleet's (every follower holds its line), so when PTP returns the
+/// fleet slews the residual through the sync-source change; a Join of the master's wall alone
+/// would split it from the fleet for that slew.
+#[test]
+fn a_daily_master_that_becomes_the_source_drops_its_outage_realign_129() {
+    let mut config = phase_lock_config();
+    config.date_offset.correction = "daily".to_string();
+    let (mut c, _d) =
+        anchored_controller_with(MockSystemClock::new(), MockNtpSource::new(), true, config);
+    c.ptp_offline = true;
+    c.on_ptp_offline_edge();
+    assert!(c.date_sync.master_outage_realign, "a daily master's outage");
+    make_fallback_source(&mut c);
+    assert!(
+        !c.date_sync.master_outage_realign,
+        "the source's free-run is the fleet's"
+    );
+}
