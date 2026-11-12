@@ -984,3 +984,43 @@ fn the_service_phase_window_hands_over_the_rings_delay_floor_160() {
         Some(3_000)
     );
 }
+
+/// dsync#129 slice 2: the fallback source has no PTP (`ptp_offline`), yet its `wall − D` is the
+/// time base its followers announce in, so it takes the fleet's coordinated step; an ordinary
+/// offline node still does not.
+#[test]
+fn the_fallback_source_takes_the_fleets_announced_step_while_offline_129() {
+    let mut clock = MockSystemClock::new();
+    clock
+        .expect_step_clock()
+        .times(1)
+        .withf(|d, sign| *d == Duration::from_micros(3_000) && *sign == 1)
+        .returning(|_, _| Ok(()));
+    let (mut c, d) = anchored_controller(clock, MockNtpSource::new(), false);
+    c.ptp_offline = true;
+    let slot = with_authority(&mut c);
+    *slot.lock().unwrap() = Some(authority_reply(1, PL_GM, d + 3_000_000, 5_000_000_000, 7));
+    c.service_date_offset();
+    assert_eq!(
+        c.date_sync.core.anchor_ns(),
+        Some(d),
+        "offline, not the source: ignored"
+    );
+
+    let me = crate::fallback::wire::node_id(std::net::Ipv4Addr::new(10, 77, 9, 202));
+    c.fallback.election = Some(crate::fallback::Election::new(
+        true,
+        9,
+        me,
+        Instant::now() - Duration::from_secs(30),
+    ));
+    c.service_fallback(Instant::now());
+    assert!(c.fallback_is_source());
+    *slot.lock().unwrap() = Some(authority_reply(2, PL_GM, d + 3_000_000, 5_000_000_000, 7));
+    c.service_date_offset();
+    assert_eq!(
+        c.date_sync.core.anchor_ns(),
+        Some(d + 3_000_000),
+        "the source joined"
+    );
+}
