@@ -1486,12 +1486,8 @@ where
                 // measurement: the agreement gate (#50) requires consecutive agreeing samples.
                 // #76: the escape valve (server_starved) bypasses BOTH the quality gate and the
                 // normal agreement gate as a last resort.
-                // dsync#129: the fallback source holds every local step (its wall is the time its
-                // followers hold); the gate keeps its candidate, so the step follows once the
-                // node is no longer the source.
-                if (server_starved
-                    || (!low_quality_server_burst && self.ntp_step_gate(offset_us, step_threshold)))
-                    && !self.fallback_holds_ntp_step(offset_us)
+                if server_starved
+                    || (!low_quality_server_burst && self.ntp_step_gate(offset_us, step_threshold))
                 {
                     // #68: a correction is rate-bounded in server mode, where this
                     // node's step is the whole fleet's step. `ntp_server_max_step_us`
@@ -2148,11 +2144,21 @@ where
         // dsync#126: answer every `POST /date/step` the HTTP route queued (every node answers;
         // only the NTP master can announce the step).
         self.serve_date_step_requests();
+
+        let received = self.network.recv_packet();
+        // dsync#129 slice 2 (dstack ROZHODNUTÉ 2.11.2026): ANY PTP time message -- PTPv1 or
+        // PTPv2, allowed by the allowlist or not -- is a PTP leader on the network. A fallback
+        // source or follower steps down HERE, before the fallback service below could send.
+        if let Ok(Some((buf, size, _, source_ip))) = &received {
+            if crate::ptp::is_time_message(&buf[..(*size).min(buf.len())]) {
+                self.fallback_note_ptp(Instant::now(), *source_ip);
+            }
+        }
         // dsync#129 slice 2: the fallback time source (a no-op unless enabled): its datagrams,
-        // the election, the source's Sync.
+        // the election, the source's Sync. Before the `?`: a failing PTP receive never stops it.
         self.service_fallback(Instant::now());
 
-        let (buf, size, t2, source_ip) = match self.network.recv_packet()? {
+        let (buf, size, t2, source_ip) = match received? {
             Some(res) => res,
             None => {
                 // No packet, but still run NTP tracking if PTP is offline
@@ -2162,13 +2168,6 @@ where
                 return Ok(());
             }
         };
-
-        // dsync#129 slice 2 (dstack ROZHODNUTÉ 2.11.2026): ANY PTP time message -- PTPv1 or
-        // PTPv2, allowed by the allowlist or not -- is a PTP leader on the network. A fallback
-        // source or follower steps down HERE, in this iteration, before its next Sync.
-        if crate::ptp::is_time_message(&buf[..size.min(buf.len())]) {
-            self.fallback_note_ptp(Instant::now(), source_ip);
-        }
 
         // camera-box issue 1073: drop a packet from a non-allowlisted grandmaster
         // source as-if it never arrived — BEFORE touching PTP liveness, the

@@ -8,10 +8,12 @@
 //! - A follower's samples go into the ONE pipeline (`process_sync_pair`): the source is a new
 //!   sync source, so the soft reset and the #158 re-anchor (`GmContinued` within 1 ms of `D`,
 //!   else `Rebased`) take it, neither with a wall step. There is no second servo.
-//! - The source sends its time line `t1 = wall − base`. `base` is the `D` in effect when it took
-//!   over (0 on a node never anchored), so after a Dante loss the line continues the PTP line on
-//!   holdover; every wall step the source applies is added to it (`step_wall` is the one step
-//!   choke point), so the line never jumps. It takes no local NTP step while it is the source.
+//! - The source sends its time line: `wall − D` in effect while its phase lock holds an anchor
+//!   (after a Dante loss the line continues the PTP line on holdover; `D` moves with every step
+//!   and slew the wall takes), else `wall − base` with every wall step added to `base`
+//!   (`step_wall` is the one step choke point). Either way no step of the source's wall moves the
+//!   line, so the source keeps its normal NTP / date path (review of #129: holding its NTP steps
+//!   protected nothing and let its wall drift from UTC and from its followers).
 //! - Liveness: `ptp_stale_at` stays "no allowed PTP for 10 s" (the re-join, the clock alarm, the
 //!   receive counters); `time_source_stale_at` adds "and no live fallback source followed" for
 //!   the offline edge and `/status`. With the feature off both are the same.
@@ -58,7 +60,8 @@ pub(super) struct FallbackGlue {
     // ---- throttles ----
     send_warned_at: Option<Instant>,
     recv_warned_at: Option<Instant>,
-    held_step_warned_at: Option<Instant>,
+    spoof_warned_at: Option<Instant>,
+    clash_warned_at: Option<Instant>,
 }
 
 fn due(last: Option<Instant>, now: Instant) -> bool {
@@ -181,6 +184,19 @@ where
         if sync.node == election.me() {
             return;
         }
+        // A node id is its sender's IPv4: a datagram claiming another node's id (or with no
+        // sender) is dropped before the election sees it.
+        if r.from.map(wire::node_id) != Some(sync.node) {
+            if due(self.fallback.spoof_warned_at, now) {
+                warn!(
+                    "[FALLBACK] dropped a Sync claiming node {} from {:?}: the id is not its sender's",
+                    format_node(&sync.node),
+                    r.from
+                );
+                self.fallback.spoof_warned_at = Some(now);
+            }
+            return;
+        }
         let events = election.note_announce(&sync, r.from, now);
         self.apply_fallback_events(events, now);
         if self.fallback_role() == Role::Follower(sync.node) {
@@ -225,13 +241,18 @@ where
         }
         for event in events {
             match event {
-                Event::PriorityClash { peer, ip, priority } => error!(
-                    "[FALLBACK] priority clash: {} ({}) also has priority {} -- the lower node id \
-                     wins; give every node its own system.fallback.priority",
-                    ip.map_or_else(|| "?".to_string(), |ip| ip.to_string()),
-                    format_node(&peer),
-                    priority
-                ),
+                Event::PriorityClash { peer, ip, priority } => {
+                    if due(self.fallback.clash_warned_at, now) {
+                        error!(
+                            "[FALLBACK] priority clash: {} ({}) also has priority {} -- the lower \
+                             node id wins; give every node its own system.fallback.priority",
+                            ip.map_or_else(|| "?".to_string(), |ip| ip.to_string()),
+                            format_node(&peer),
+                            priority
+                        );
+                        self.fallback.clash_warned_at = Some(now);
+                    }
+                }
                 Event::Role { from, to, reason } => {
                     warn!(
                         "[FALLBACK] role {} -> {}: {}",
@@ -259,19 +280,27 @@ where
         self.update_shared_status();
     }
 
+    /// The source's time line at `wall`: `wall − D` in effect while the phase lock holds an
+    /// anchor (`D` moves with every step, slew and local NTP step the wall takes, so the line
+    /// never does), else `wall − base` (`base` takes every step, see `fallback_note_wall_step`).
+    pub(super) fn fallback_line_at(&self, wall: i64) -> i64 {
+        let d = if self.date_sync.enabled {
+            self.date_sync.d_in_effect(wall)
+        } else {
+            None
+        };
+        wall.wrapping_sub(d.unwrap_or(self.fallback.base_ns))
+    }
+
     fn start_fallback_source(&mut self, now: Instant) {
         let wall = wall_now_ns();
-        let base = if self.date_sync.enabled {
-            self.date_sync.d_in_effect(wall).unwrap_or(0)
-        } else {
-            0
-        };
+        let anchored = self.date_sync.enabled && self.date_sync.d_in_effect(wall).is_some();
         let mut epoch = (wall.max(0) / 1_000_000_000) as u32;
         if epoch == self.fallback.epoch {
             epoch = epoch.wrapping_add(1);
         }
         let f = &mut self.fallback;
-        f.base_ns = base;
+        f.base_ns = 0;
         f.epoch = epoch;
         f.seq = 0;
         f.sent = 0;
@@ -279,12 +308,11 @@ where
         f.followed = None;
         f.last_rx = None;
         info!(
-            "[FALLBACK] source: line = wall - {} ns ({}), epoch {}, a Sync every {} ms to {}",
-            base,
-            if base == 0 {
-                "no PTP anchor: the wall itself"
+            "[FALLBACK] source: line = {}, epoch {}, a Sync every {} ms to {}",
+            if anchored {
+                "wall - D: the PTP line continued on holdover"
             } else {
-                "the PTP line continued on holdover"
+                "the wall itself (no PTP anchor), every wall step kept out of it"
             },
             epoch,
             SYNC_INTERVAL.as_millis(),
@@ -297,17 +325,18 @@ where
             return;
         };
         let (priority, node) = (election.priority(), election.me());
+        // One-step: the line is read immediately before the send (its error is one-sided).
+        let t1_ns = self.fallback_line_at(wall_now_ns());
         let f = &mut self.fallback;
         let Some(transport) = f.transport.as_mut() else {
             return;
         };
-        // One-step: the line is read immediately before the send (its error is one-sided).
         let sync = FallbackSync {
             priority,
             node,
             seq: f.seq,
             epoch: f.epoch,
-            t1_ns: wall_now_ns().wrapping_sub(f.base_ns),
+            t1_ns,
         };
         let result = transport.send(&sync.encode());
         f.seq = f.seq.wrapping_add(1);
@@ -327,7 +356,8 @@ where
     }
 
     /// `step_wall`: the wall moved by `delta_ns`. The source's line must not (its followers would
-    /// read it as a time-base jump), so the step goes into `base`.
+    /// read it as a time-base jump): unanchored, the step goes into `base` (anchored, `D` moves
+    /// with it already).
     pub(super) fn fallback_note_wall_step(&mut self, delta_ns: i64) {
         if self.fallback_is_source() {
             self.fallback.base_ns = self.fallback.base_ns.wrapping_add(delta_ns);
@@ -337,24 +367,6 @@ where
                 self.fallback.base_ns
             );
         }
-    }
-
-    /// A local NTP step of `offset_us` is due. On the source it is HELD: the source's wall is the
-    /// time its followers hold, and a local step would move it off them.
-    pub(super) fn fallback_holds_ntp_step(&mut self, offset_us: i64) -> bool {
-        if !self.fallback_is_source() {
-            return false;
-        }
-        let now = Instant::now();
-        if due(self.fallback.held_step_warned_at, now) {
-            warn!(
-                "[FALLBACK] source: local NTP step {:+} us held -- the source's wall is the time its \
-                 followers hold",
-                offset_us
-            );
-            self.fallback.held_step_warned_at = Some(now);
-        }
-        true
     }
 
     /// `/status` at `now`: the gm class, the role, the source; `mode` is overridden by the caller.
@@ -382,6 +394,11 @@ where
         };
         status.fallback_source_ip = ip.map(|ip| ip.to_string());
         status.fallback_epoch = epoch;
+        if role == Role::Source {
+            // The source's time is its own: no PTP grandmaster to name.
+            status.gm_uuid = self.fallback.election.as_ref().map(Election::me);
+            status.gm_source_ip = None;
+        }
     }
 }
 

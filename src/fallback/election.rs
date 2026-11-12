@@ -36,6 +36,10 @@ pub const RANK_STEP: Duration = Duration::from_millis(20);
 /// A peer silent this long is forgotten (its entry only; the liveness rule is `SILENCE`).
 const FORGET_AFTER: Duration = Duration::from_secs(300);
 
+/// At most this many peers are kept (a flood of forged ids never grows memory): a new one
+/// replaces the one heard longest ago. A real fleet has a handful of candidate sources.
+pub const MAX_PEERS: usize = 64;
+
 /// The role of this node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -178,6 +182,16 @@ impl Election {
             return Vec::new();
         }
         let mut events = Vec::new();
+        if !self.peers.contains_key(&sync.node) && self.peers.len() >= MAX_PEERS {
+            if let Some(oldest) = self
+                .peers
+                .iter()
+                .min_by_key(|(_, p)| p.last_heard)
+                .map(|(id, _)| *id)
+            {
+                self.peers.remove(&oldest);
+            }
+        }
         let peer = self.peers.entry(sync.node).or_insert(Peer {
             priority: sync.priority,
             ip,

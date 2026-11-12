@@ -422,3 +422,27 @@ fn a_source_going_silent_drops_its_followers_to_candidate_129() {
     assert_eq!(Role::Follower(src).name(), "follower");
     assert_eq!(Role::Candidate.name(), "candidate");
 }
+
+#[test]
+fn a_flood_of_forged_ids_never_grows_the_peer_table_past_its_cap_129() {
+    let t0 = Instant::now();
+    let mut el = Election::new(true, 0, node_id(Ipv4Addr::new(10, 0, 0, 1)), t0);
+    let t = t0 + secs(11.0);
+    for i in 0..10_000_u32 {
+        let o = i.to_be_bytes();
+        let sync = FallbackSync {
+            priority: 1,
+            node: [0xD5, 0xFB, o[0], o[1], o[2], o[3]],
+            seq: 0,
+            epoch: 1,
+            t1_ns: 0,
+        };
+        el.note_announce(&sync, None, t + Duration::from_micros(u64::from(i)));
+        assert!(el.peers.len() <= MAX_PEERS);
+    }
+    // The newest are kept.
+    let last = 9_999_u32.to_be_bytes();
+    assert!(el
+        .peer(&[0xD5, 0xFB, last[0], last[1], last[2], last[3]])
+        .is_some());
+}

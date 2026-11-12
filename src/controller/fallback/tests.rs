@@ -77,10 +77,19 @@ fn controller(
     clock: MockSystemClock,
     config: SystemConfig,
 ) -> (Ctl, FakeTransport) {
+    controller_with(net, clock, MockNtpSource::new(), config)
+}
+
+fn controller_with(
+    net: MockPtpNetwork,
+    clock: MockSystemClock,
+    ntp: MockNtpSource,
+    config: SystemConfig,
+) -> (Ctl, FakeTransport) {
     let mut c: Ctl = PtpController::new(
         clock,
         net,
-        MockNtpSource::new(),
+        ntp,
         Arc::new(RwLock::new(SyncStatus::default())),
         config,
     );
@@ -211,11 +220,9 @@ fn the_source_line_continues_the_ptp_line_and_absorbs_every_wall_step_129() {
     c.service_fallback(t + Duration::from_millis(250));
     assert_eq!(transport.sent().len(), 3);
 
-    // A local NTP step is held on the source only.
-    assert!(c.fallback_holds_ntp_step(1_500));
+    // Once it stepped down, a step leaves the (unused) base alone.
     c.fallback_note_ptp(t + Duration::from_millis(300), Some(GM_IP));
-    assert!(!c.fallback_holds_ntp_step(1_500), "no longer the source");
-    // A step while not the source leaves the (unused) base alone.
+    assert!(!c.fallback_is_source());
     c.step_wall(Duration::from_millis(1), 1).expect("step");
     assert_eq!(c.fallback.base_ns, 7_000_000);
 }
@@ -229,13 +236,78 @@ fn a_source_with_a_ptp_anchor_continues_the_ptp_line_129() {
     let t = Instant::now();
     c.service_fallback(t);
     let anchor = c.date_sync.d_in_effect(wall_now_ns()).expect("anchored");
-    assert_eq!(c.fallback.base_ns, anchor);
     let sync = transport.sent()[0];
     let ptp_now = wall_now_ns() - anchor;
     assert!(
         (ptp_now - sync.t1_ns).abs() < 1_000_000_000,
         "the line is this node's view of the PTP time"
     );
+    // D moves with every step of an anchored wall, so the line is `wall − D` whatever `base`
+    // holds: a step D took (here without the wall, the mock clock cannot move it) shows 1:1.
+    let wall = wall_now_ns();
+    let line = c.fallback_line_at(wall);
+    c.date_sync.note_step(2_000_000);
+    assert_eq!(c.fallback_line_at(wall), line - 2_000_000);
+    c.fallback.base_ns = 123;
+    assert_eq!(
+        c.fallback_line_at(wall),
+        line - 2_000_000,
+        "base unused while anchored"
+    );
+}
+
+#[test]
+fn a_sync_claiming_another_nodes_id_is_dropped_129() {
+    let (mut c, transport) = controller(MockPtpNetwork::new(), MockSystemClock::new(), config(0));
+    let forged = FallbackSync {
+        priority: 255,
+        node: wire::node_id(SOURCE_IP),
+        seq: 0,
+        epoch: 1,
+        t1_ns: 1,
+    };
+    for from in [Some(Ipv4Addr::new(10, 77, 9, 66)), None] {
+        transport.inbox.lock().expect("inbox").push_back(Received {
+            bytes: forged.encode().to_vec(),
+            rx: SystemTime::now(),
+            from,
+        });
+    }
+    c.service_fallback(Instant::now());
+    assert_eq!(c.fallback_role(), Role::Candidate, "nothing followed");
+    assert!(c
+        .fallback
+        .election
+        .as_ref()
+        .expect("on")
+        .peer(&forged.node)
+        .is_none());
+    // The genuine sender is followed.
+    transport.inbox.lock().expect("inbox").push_back(Received {
+        bytes: forged.encode().to_vec(),
+        rx: SystemTime::now(),
+        from: Some(SOURCE_IP),
+    });
+    c.service_fallback(Instant::now());
+    assert_eq!(c.fallback_role(), Role::Follower(forged.node));
+}
+
+/// The source's own `/status` names no PTP grandmaster: `gm_uuid` is its own node id.
+#[test]
+fn the_source_publishes_itself_not_the_lost_grandmaster_129() {
+    let (mut c, _transport) = controller(MockPtpNetwork::new(), MockSystemClock::new(), config(9));
+    c.current_gm_uuid = Some([0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14]);
+    c.current_sync_source_ip = Some(GM_IP);
+    c.service_fallback(Instant::now());
+    assert!(c.fallback_is_source());
+    let st = c.get_status_shared();
+    let st = st.read().expect("status");
+    assert_eq!(st.gm_uuid, Some(wire::node_id(ME)));
+    assert_eq!(st.gm_source_ip, None);
+    assert_eq!(st.gm_class.as_deref(), Some(GM_CLASS_FALLBACK));
+    assert_eq!(st.fallback_role.as_deref(), Some("source"));
+    assert_eq!(st.fallback_source_ip.as_deref(), Some("10.77.9.202"));
+    assert_eq!(st.mode, FALLBACK_MODE);
 }
 
 #[test]
@@ -251,7 +323,6 @@ fn the_feature_off_changes_nothing_129() {
     c.service_fallback(now);
     c.fallback_note_ptp(now, None);
     assert_eq!(c.fallback_role(), Role::Off);
-    assert!(!c.fallback_holds_ntp_step(5_000));
     c.last_ptp_packet = now - Duration::from_secs(PTP_TIMEOUT_SECS + 1);
     assert_eq!(c.time_source_stale_at(now), c.ptp_stale_at(now));
     c.update_shared_status();
@@ -298,11 +369,12 @@ fn foreign_and_own_datagrams_are_ignored_129() {
     assert!(transport.sent().is_empty(), "priority 0 never sends");
 }
 
-/// The follower side through the REAL datagram path (`on_fallback_datagram` → the election →
-/// `process_sync_pair`), closed loop: the word the controller writes moves the offset the next
-/// samples see. A fallback lock reads FALLBACK (never LOCK); then the network gets a PTP
-/// grandmaster on the same time line (+200 µs, a continued time base): the follower steps down at
-/// the first PTP message and re-locks on PTP, and nothing ever steps the wall.
+/// The follower side, closed loop (the word the controller writes moves the offset the next
+/// samples see): fallback Syncs through the transport, the fallback service, the election and
+/// `process_sync_pair`; a fallback lock reads FALLBACK (never LOCK). Then a PTP grandmaster
+/// appears on the same time line (+200 µs, a continued time base), its Syncs through the REAL
+/// loop (`process_loop_iteration`): the follower steps down at the first PTP message, re-locks
+/// on PTP, and nothing ever steps the wall.
 #[test]
 fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_step_129() {
     let _guard = crate::controller::heavy_test_guard();
@@ -314,7 +386,19 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
         Ok(())
     });
     clock.expect_step_clock().never();
-    let (mut c, _transport) = controller(MockPtpNetwork::new(), clock, config(0));
+    // The PTP receive path: whatever the test queues, one packet per iteration.
+    type Packet = (Vec<u8>, usize, SystemTime, Option<Ipv4Addr>);
+    let wire_queue: Arc<Mutex<VecDeque<Packet>>> = Arc::default();
+    let q = wire_queue.clone();
+    let mut net = MockPtpNetwork::new();
+    net.expect_recv_packet()
+        .returning(move || Ok(q.lock().expect("queue").pop_front()));
+    net.expect_rejoin()
+        .returning(|| Err(anyhow::anyhow!("no NIC in a unit test")));
+    let mut ntp = MockNtpSource::new();
+    ntp.expect_get_offset()
+        .returning(|| Err(anyhow::anyhow!("no upstream in a unit test")));
+    let (mut c, transport) = controller_with(net, clock, ntp, config(0));
     let source = wire::node_id(SOURCE_IP);
     let mut noise = Noise(0x5eed_0129);
     // The follower's oscillator against the source's line, and its wall's offset from the line.
@@ -325,20 +409,22 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
     let t0 = Instant::now();
     let mut engaged_at = None;
     let mut reported_at = None;
-    let sample = |k: i64, noise: &mut Noise, true_offset_us: &mut f64| {
+    // The receive time of a datagram sent at `line_ns` (wall = line + offset + path delay).
+    let rx_at = |line_ns: i64, noise: &mut Noise, true_offset_us: &mut f64| {
         let applied = *word.lock().expect("word");
         *true_offset_us += (natural_ppm + applied) * SYNC_NS as f64 / 1e9;
         // 300 µs path + a one-sided queueing delay + a few µs of stamp jitter.
         let delay_us = 300.0 - 20.0 * noise.uniform().ln() + (3.0 * noise.gauss()).abs();
-        let rx_ns = wall_minus_line_ns + ((*true_offset_us + delay_us) * 1_000.0).round() as i64;
-        let now = t0 + Duration::from_nanos((k * SYNC_NS) as u64);
-        (now, rx_ns)
+        let rx_ns =
+            line_ns + wall_minus_line_ns + ((*true_offset_us + delay_us) * 1_000.0).round() as i64;
+        SystemTime::UNIX_EPOCH + Duration::from_nanos(rx_ns as u64)
     };
 
-    // 4 minutes of fallback Syncs.
+    // 4 minutes of fallback Syncs, through the transport and the fallback service. The service
+    // runs on 125 ms steps of a virtual `Instant` (a test cannot wait 4 minutes).
     for k in 0..(240 * 8) {
         line_ns += SYNC_NS;
-        let (now, rx_off) = sample(k, &mut noise, &mut true_offset_us);
+        let rx = rx_at(line_ns, &mut noise, &mut true_offset_us);
         let sync = FallbackSync {
             priority: 7,
             node: source,
@@ -346,14 +432,12 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
             epoch: 42,
             t1_ns: line_ns,
         };
-        c.on_fallback_datagram(
-            Received {
-                bytes: sync.encode().to_vec(),
-                rx: SystemTime::UNIX_EPOCH + Duration::from_nanos((line_ns + rx_off) as u64),
-                from: Some(SOURCE_IP),
-            },
-            now,
-        );
+        transport.inbox.lock().expect("inbox").push_back(Received {
+            bytes: sync.encode().to_vec(),
+            rx,
+            from: Some(SOURCE_IP),
+        });
+        c.service_fallback(t0 + Duration::from_nanos((k * SYNC_NS) as u64));
         let s = k as f64 / 8.0;
         if engaged_at.is_none() && c.date_sync.core.engaged() {
             engaged_at = Some(s);
@@ -384,20 +468,19 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
     }
     let continued_before = c.date_sync.core.gm_continued();
 
-    // A PTP grandmaster appears on the same time line, 200 µs off (a continued base).
+    // A PTP grandmaster appears on the same time line, 200 µs off (a continued base). Each Sync
+    // and Follow_Up goes through `process_loop_iteration`.
     let gm = [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14];
     for k in (240 * 8)..(480 * 8) {
         line_ns += SYNC_NS;
-        let (now, rx_off) = sample(k, &mut noise, &mut true_offset_us);
-        let t1 = line_ns + 200_000;
-        let rx = SystemTime::UNIX_EPOCH + Duration::from_nanos((line_ns + rx_off) as u64);
-        let (sync_pkt, fup) = ptp_pair(gm, k as u16, t1);
-        c.fallback_note_ptp(now, Some(GM_IP));
-        c.note_allowed_ptp_packet(Instant::now());
-        let header = PtpV1Header::parse(&sync_pkt).expect("header");
-        c.handle_sync_message(&header, &sync_pkt, rx);
-        let header = PtpV1Header::parse(&fup).expect("header");
-        c.handle_followup_message(&header, &fup);
+        let rx = rx_at(line_ns, &mut noise, &mut true_offset_us);
+        let (sync_pkt, fup) = ptp_pair(gm, k as u16, line_ns + 200_000);
+        {
+            let mut q = wire_queue.lock().expect("queue");
+            q.push_back((sync_pkt, 124, rx, Some(GM_IP)));
+            q.push_back((fup, 52, rx, Some(GM_IP)));
+        }
+        c.process_loop_iteration().expect("an iteration");
         if k == 240 * 8 {
             assert_eq!(
                 c.fallback_role(),
@@ -405,8 +488,10 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
                 "stepped down at the first PTP message"
             );
         }
+        c.process_loop_iteration().expect("an iteration");
     }
     assert_eq!(c.current_gm_uuid, Some(gm));
+    assert_eq!(c.current_sync_source_ip, Some(GM_IP));
     assert!(
         c.date_sync.core.gm_continued() > continued_before,
         "the PTP line within 1 ms of D is a continued time base (D kept)"
