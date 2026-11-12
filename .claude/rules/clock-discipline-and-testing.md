@@ -1591,3 +1591,14 @@ learned:
   `gm_change_with` takes a per-window rate profile; `e` judged against the anchor in force) and
   `a_secondary_grandmaster_whose_rate_moves_after_the_handover_keeps_the_lock_166` (follower,
   `World::gm_profile` accumulates the moving rate's phase per tick).
+- **A 7 ppm step AT the change (dstack, the FOH handback 12.11.2026, v1.33.1).** The rate is
+  unknown until the GM fit measures it (`GM_FIT_MIN_SPAN_S` 5 s ≈ 35 µs at 7 ppm), so |e| reaches
+  the change's time offset + that: follower replay 59 / 64 µs with the field's 35 µs offset in the
+  ramp's direction, 34 / 39 µs with none, lock never lost (it fell on v1.30.1, no boost). A faster
+  fit is not the answer (#158: a looser fit spreads the fleet). `settled` waits for the pull to
+  retire it under 30 µs (~30 s).
+- **The follower's settled history survives a CONTINUED change** (v1.33.1). `on_time_base_change`
+  no longer clears `recent_e`; the next window's event decides (`GmContinued` keeps it, a re-base /
+  re-align / disengagement clears it, a holdover clears it). Before, every same-line handover read
+  "not settled" for the ~15 s the 30 windows took to refill. Pinned by
+  `a_continued_handover_within_the_settled_bound_never_unsettles_166`.

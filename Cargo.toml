@@ -18,7 +18,7 @@ dsync-ptp = { path = "crates/dsync-ptp", version = "1.27.3" }
 
 [package]
 name = "dsync"
-version = "1.33.0"
+version = "1.33.1"
 edition = "2021"
 description = "High-precision PTPv1 synchronization for audio networks"
 license = "MIT"
