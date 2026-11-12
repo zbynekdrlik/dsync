@@ -754,7 +754,7 @@ where
             // the fleet D, it takes no local NTP steps), so it takes the fleet's steps itself.
             // dsync#129: so does a master that IS the fallback source, in either mode: its
             // `wall − D` is the time its followers hold, so its wall stays on the fleet line.
-            let daily = self.date_sync.daily() || self.fallback_is_source();
+            let daily = self.master_holds_fleet_line_offline();
             let on_line =
                 anchor == fleet && (!self.ptp_offline || daily) && !self.in_step_backoff();
             if !self.ptp_offline || daily {
@@ -848,6 +848,14 @@ where
             return true;
         }
         false
+    }
+
+    /// #119 (1.12) / dsync#129 — a master WITHOUT PTP that still holds the fleet line (its D is
+    /// the fleet D, no local NTP step, it takes the fleet's steps on its own wall and re-joins
+    /// after a failed one): a daily-mode master, and a master that IS the fallback source in either
+    /// mode (its `wall − D` is the time its followers hold). One predicate for every such path.
+    pub(super) fn master_holds_fleet_line_offline(&self) -> bool {
+        self.date_sync.daily() || self.fallback_is_source()
     }
 
     /// #88 — make the NTP master the fleet date-offset authority once it is anchored, and align

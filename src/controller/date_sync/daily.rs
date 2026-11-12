@@ -41,9 +41,10 @@ where
     /// backoff has passed: one Join of the difference. With no PTP there is no phase error to
     /// measure and no re-alignment window ([`Self::realign_master_to_fleet`] waits for PTP), so
     /// without this it would stay a whole nightly step off the fleet until PTP returns. Nothing
-    /// while a change is in flight, and nothing in micro mode (its local NTP path runs instead).
+    /// while a change is in flight, and nothing in micro mode (its local NTP path runs instead)
+    /// unless the master is the fallback source (dsync#129: it holds the line, no local path).
     pub(super) fn realign_offline_daily_master(&mut self) {
-        if !self.date_sync.daily()
+        if !self.master_holds_fleet_line_offline()
             || !self.ptp_offline
             || self.in_step_backoff()
             || self.date_sync.core.rebase_pending()
