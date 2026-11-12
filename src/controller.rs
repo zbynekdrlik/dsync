@@ -2163,6 +2163,13 @@ where
             }
         };
 
+        // dsync#129 slice 2 (dstack ROZHODNUTÉ 2.11.2026): ANY PTP time message -- PTPv1 or
+        // PTPv2, allowed by the allowlist or not -- is a PTP leader on the network. A fallback
+        // source or follower steps down HERE, in this iteration, before its next Sync.
+        if crate::ptp::is_time_message(&buf[..size.min(buf.len())]) {
+            self.fallback_note_ptp(Instant::now(), source_ip);
+        }
+
         // camera-box issue 1073: drop a packet from a non-allowlisted grandmaster
         // source as-if it never arrived — BEFORE touching PTP liveness, the
         // adopted source IP, or any handler. A restricting allowlist thus prevents
