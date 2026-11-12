@@ -77,6 +77,22 @@ class Roster(unittest.TestCase):
                          "dsync watch: mbc (mbc.lan) ALARM: not locked; mode ACQ")
 
 
+class LatestRelease(unittest.TestCase):
+    """#179: under systemd the watch has no gh token (gh exits 4), so the latest release comes
+    from the public `releases/latest` redirect, which needs no API and no token."""
+
+    def test_the_redirect_location_names_the_latest_version(self):
+        self.assertEqual(w.version_from_latest_location(
+            "https://github.com/zbynekdrlik/dsync/releases/tag/v1.35.0"), "1.35.0")
+
+    def test_a_location_that_is_not_a_release_tag_fails_loud(self):
+        for loc in (None, "", "https://github.com/zbynekdrlik/dsync/releases",
+                    "https://github.com/zbynekdrlik/dsync/releases/tag/latest"):
+            with self.subTest(loc=loc):
+                with self.assertRaises(RuntimeError):
+                    w.version_from_latest_location(loc)
+
+
 class Cli(unittest.TestCase):
     def test_unknown_arguments_are_a_usage_error(self):
         self.assertEqual(w.main(["--bogus"]), 2)
