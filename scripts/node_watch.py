@@ -7,7 +7,7 @@ read each node's `http://<addr>:8898/status`, grade it, write the verdicts to
 
 The grade (`grade()`, pure, unit-tested in `test_node_watch.py`):
   ALARM  `is_locked` false; `mode` not NANO/LOCK; |`ptp_phase_error_us`| >= 50; `ntp_step_storm`;
-         `version` not the latest release (upgrade debt, #169); `/status` unreadable.
+         `version` older than the latest release (upgrade debt, #169); `/status` unreadable.
   SKIP   a traveling node (alex-nb, resolume-pp) while its :22 does not answer: it is away, and
          that is never an alarm (camera-box's rule for the same nodes, dstack 12.11.2026).
   OK     otherwise.
@@ -83,9 +83,23 @@ def grade(status: dict | None, latest: str, travel: bool, ssh_up: bool) -> tuple
     if status.get("ntp_step_storm", False):
         reasons.append("ntp step storm")
     version = status.get("version", "")
-    if version != latest:
-        reasons.append(f"version {version or '<1.35'} != latest {latest}")
+    if not _at_least(version, latest):
+        reasons.append(f"version {version or '<1.35'} < latest {latest}")
     return ("ALARM" if reasons else "OK"), reasons
+
+
+def _version_tuple(version: str) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(p) for p in version.split("."))
+    except ValueError:
+        return None
+
+
+def _at_least(version: str, latest: str) -> bool:
+    """True when `version` is the latest release or newer (the gate's dev candidate on companion
+    is newer, not debt). An empty or unparseable version is debt."""
+    have, want = _version_tuple(version), _version_tuple(latest)
+    return have is not None and want is not None and have >= want
 
 
 def dedup_key(node: str, now: float) -> str:
