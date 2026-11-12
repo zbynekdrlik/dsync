@@ -612,3 +612,36 @@ fn a_ptp_rejoin_reopens_the_fallback_socket_and_a_moved_address_renames_the_node
     assert_eq!(opened.lock().expect("opened").len(), 2);
     assert_eq!(c.fallback.election.as_ref().expect("on").me(), me);
 }
+
+/// Review round 3: a re-open that fails keeps the old socket, so the node keeps the old id too.
+/// Renamed on the old socket, its Syncs would carry a new id from the old address, and every
+/// follower drops a Sync whose id is not its sender's.
+#[test]
+fn a_failed_reopen_keeps_the_node_id_with_the_socket_in_use_129() {
+    let moved = Ipv4Addr::new(10, 77, 9, 77);
+    let mut net = MockPtpNetwork::new();
+    net.expect_rejoin().times(1).returning(move || {
+        Ok(crate::traits::RejoinOutcome {
+            iface: "enx0".to_string(),
+            ip: moved,
+            changed: true,
+        })
+    });
+    let (mut c, transport) = controller(net, MockSystemClock::new(), config(9));
+    c.set_fallback_reopener(Box::new(|ip| Err(anyhow::anyhow!("no NIC with {ip}"))));
+    c.service_fallback(Instant::now());
+    assert!(c.fallback_is_source());
+    c.maybe_rejoin_ptp(Instant::now());
+    assert_eq!(c.fallback.ip, Some(ME));
+    assert_eq!(
+        c.fallback.election.as_ref().expect("on").me(),
+        wire::node_id(ME)
+    );
+    assert!(c.fallback_is_source(), "still announcing on the old socket");
+    c.fallback.next_send = Some(Instant::now() - Duration::from_millis(1));
+    c.service_fallback(Instant::now());
+    assert_eq!(
+        transport.sent().last().map(|s| s.node),
+        Some(wire::node_id(ME))
+    );
+}

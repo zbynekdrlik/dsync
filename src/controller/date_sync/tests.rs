@@ -1007,6 +1007,19 @@ fn the_fallback_source_takes_the_fleets_announced_step_while_offline_129() {
         "offline, not the source: ignored"
     );
 
+    make_fallback_source(&mut c);
+    *slot.lock().unwrap() = Some(authority_reply(2, PL_GM, d + 3_000_000, 5_000_000_000, 7));
+    c.service_date_offset();
+    assert_eq!(
+        c.date_sync.core.anchor_ns(),
+        Some(d + 3_000_000),
+        "the source joined"
+    );
+}
+
+/// dsync#129: `c` becomes the fallback source (no transport: nothing is sent).
+fn make_fallback_source(c: &mut PtpController<MockSystemClock, MockPtpNetwork, MockNtpSource>) {
+    c.ptp_offline = true;
     let me = crate::fallback::wire::node_id(std::net::Ipv4Addr::new(10, 77, 9, 202));
     c.fallback.election = Some(crate::fallback::Election::new(
         true,
@@ -1016,11 +1029,45 @@ fn the_fallback_source_takes_the_fleets_announced_step_while_offline_129() {
     ));
     c.service_fallback(Instant::now());
     assert!(c.fallback_is_source());
-    *slot.lock().unwrap() = Some(authority_reply(2, PL_GM, d + 3_000_000, 5_000_000_000, 7));
+}
+
+/// dsync#129 (review round 3): a fallback source that adopted the fleet D takes no local NTP
+/// step, like an online follower. A step would move its wall off the fleet line and the next
+/// announce would Join it back: two wall steps per cycle on the source box.
+#[test]
+fn an_adopted_fallback_source_never_steps_on_its_own_ntp_reading_129() {
+    let mut ntp = MockNtpSource::new();
+    ntp.expect_get_offset()
+        .returning(|| Ok(one_offset(5_000, 1)));
+    // No step_clock expectation: an NTP-driven step would panic the mock.
+    let (mut c, d) = anchored_controller(MockSystemClock::new(), ntp, false);
+    make_fallback_source(&mut c);
+    let slot = with_authority(&mut c);
+    *slot.lock().unwrap() = Some(authority_reply(1, PL_GM, d, 1_000_000_000, 3));
     c.service_date_offset();
-    assert_eq!(
-        c.date_sync.core.anchor_ns(),
-        Some(d + 3_000_000),
-        "the source joined"
-    );
+    assert!(c.date_sync.follower.adopted());
+    for _ in 0..3 {
+        c.last_ntp_check = Instant::now() - Duration::from_secs(120);
+        c.check_ntp_utc_tracking();
+    }
+    assert_eq!(c.date_sync.core.anchor_ns(), Some(d));
+}
+
+/// dsync#129 (review round 3): on the fallback source `wall − D` is the line its followers hold,
+/// so an announce inside the absorb tolerance moves D only together with the wall (a step of the
+/// same size), never alone (which would jump the line).
+#[test]
+fn the_fallback_source_steps_its_wall_with_an_absorbed_d_129() {
+    let mut clock = MockSystemClock::new();
+    clock
+        .expect_step_clock()
+        .times(1)
+        .withf(|d, sign| *d == Duration::from_micros(50) && *sign == 1)
+        .returning(|_, _| Ok(()));
+    let (mut c, d) = anchored_controller(clock, MockNtpSource::new(), false);
+    make_fallback_source(&mut c);
+    let slot = with_authority(&mut c);
+    *slot.lock().unwrap() = Some(authority_reply(1, PL_GM, d + 50_000, 1_000_000_000, 3));
+    c.service_date_offset();
+    assert_eq!(c.date_sync.core.anchor_ns(), Some(d + 50_000));
 }
