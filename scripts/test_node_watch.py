@@ -172,9 +172,8 @@ class LatestRelease(unittest.TestCase):
     def test_a_location_that_is_not_a_release_tag_fails_loud(self):
         for loc in (None, "", "https://github.com/zbynekdrlik/dsync/releases",
                     "https://github.com/zbynekdrlik/dsync/releases/tag/latest"):
-            with self.subTest(loc=loc):
-                with self.assertRaises(RuntimeError):
-                    w.version_from_latest_location(loc)
+            with self.subTest(loc=loc), self.assertRaises(RuntimeError):
+                w.version_from_latest_location(loc)
 
 
 class Cli(unittest.TestCase):
