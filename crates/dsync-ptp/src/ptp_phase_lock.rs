@@ -221,6 +221,15 @@ pub const GM_BOOST_RAMP_S: f64 = 300.0;
 /// same gains. That time is the `dt` of the windows the engaged PI took (late ones included);
 /// a provisional window held before the PI (#160) does not advance it. A change during the
 /// boot acquisition (before the first engagement) starts no boost: the boot fit owns that case.
+/// dsync#182: the frequency an engagement started the integrator on, and the acquisition fit
+/// it came from (`None` = the rate servo's word: every re-engagement, and a first one without a
+/// good enough fit).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EngagementStart {
+    pub freq_ppm: f64,
+    pub fit: Option<BootFit>,
+}
+
 pub fn boosted_gains(boost_s: Option<f64>) -> (f64, f64) {
     let Some(t) = boost_s else {
         return (K_P_PER_S, K_I_PER_S2);
@@ -442,6 +451,15 @@ impl PhaseLockCore {
     /// (`None`: it started on the rate servo's word).
     pub fn engaged_on_fit(&self) -> Option<BootFit> {
         self.engaged_on_fit
+    }
+
+    /// dsync#182: what the LAST engagement started the integrator on. The log line at an
+    /// engagement reads this: `engaged_on_fit` is the FIRST engagement's fit and is never cleared.
+    pub fn engagement_start(&self) -> Option<EngagementStart> {
+        self.engaged_on_fit.map(|fit| EngagementStart {
+            freq_ppm: fit.freq_ppm,
+            fit: Some(fit),
+        })
     }
 
     /// dsync#134: the core has engaged at least once since start.
@@ -2167,6 +2185,127 @@ mod tests {
             }
         }
         eprintln!("{}", report.join("\n"));
+    }
+
+    /// dsync#182: the SNV rig on 13.11.2026 (strih-snv, v1.29.0, before #166). A 10 s PTP outage
+    /// during dasio's FOH restart, then on return the grandmaster flapped 02:14 → 21:C4 → 02:14
+    /// within ~1 s, each a continued time base ("D kept, −54.6 / −43.4 µs retired along the
+    /// pull"). After the re-seed the new grandmaster's rate moved ~4 ppm (the word −6.0 → −3.2
+    /// ppm), `e` ran −27 → −97 µs and the lock was lost at +155 µs. Replayed on the current core
+    /// (and the #166 rate profiles), from the second flap on: never 4 windows beyond the [41]
+    /// unlock bound (150 µs), and within the lock bound (50 µs) from 90 s on. Returns the report.
+    fn replay_outage_and_double_flap_182() -> Vec<String> {
+        let step = |sign: f64| move |t: f64| if t >= 20.0 { sign * 4.5 } else { 0.0 };
+        let warm = |sign: f64| move |t: f64| sign * 4.0 * (1.0 - (-t / 60.0).exp());
+        let profiles: [(&str, Box<dyn Fn(f64) -> f64>); 4] = [
+            ("+4.5 ppm step at 20 s", Box::new(step(1.0))),
+            ("-4.5 ppm step at 20 s", Box::new(step(-1.0))),
+            ("+4 ppm warm-up", Box::new(warm(1.0))),
+            ("-4 ppm warm-up", Box::new(warm(-1.0))),
+        ];
+        let mut report = Vec::new();
+        for (name, profile) in &profiles {
+            for (jitter_us, seed) in [(0.0, 1u64), (10.0, 0x5eed_0182), (10.0, 0x5eed_0183)] {
+                let mut noise = seed;
+                let mut jitter = move || {
+                    noise ^= noise << 13;
+                    noise ^= noise >> 7;
+                    noise ^= noise << 17;
+                    ((noise >> 11) as f64 / (1u64 << 53) as f64 - 0.5) * 2.0 * jitter_us * 1_000.0
+                };
+                let (mut c, mut p) = settled_core();
+                // The outage: no windows taken as locked for 10 s, the clock on the held word.
+                let held = c.integrator_ppm();
+                for _ in 0..20 {
+                    c.on_window(D + (p.e_ns + jitter()).round() as i64, false, held, DT);
+                    p.advance(held, DT);
+                }
+                // The return: two continued grandmaster changes one window apart (−54 µs, then
+                // back by +11 µs: −43 µs left), the rate servo's word still the held one.
+                let mut trace = Vec::new();
+                for shift in [54_000.0, -11_000.0] {
+                    c.request_rebase();
+                    p.e_ns -= shift;
+                    let out = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, held, DT);
+                    assert!(
+                        matches!(out.event, AnchorEvent::GmContinued { .. }),
+                        "{name}: a continued time base, {:?}",
+                        out.event
+                    );
+                    p.advance(out.freq_ppm.expect("engaged"), DT);
+                }
+                assert_eq!(c.anchor_ns(), Some(D), "{name}: D kept");
+                let osc = p.osc_ppm;
+                for n in 0..1_200 {
+                    p.osc_ppm = osc - profile(n as f64 * DT);
+                    let out = c.on_window(D + (p.e_ns + jitter()).round() as i64, true, held, DT);
+                    let f = out.freq_ppm.expect("engaged");
+                    trace.push((p.e_ns / 1_000.0, f + p.osc_ppm));
+                    p.advance(f, DT);
+                }
+                let peak = trace.iter().map(|&(e, _)| e.abs()).fold(0.0, f64::max);
+                let late = trace[180..]
+                    .iter()
+                    .map(|&(e, _)| e.abs())
+                    .fold(0.0, f64::max);
+                let run = longest_run_beyond(&trace, 150.0);
+                report.push(format!(
+                    "{name}, jitter {jitter_us} µs, seed {seed:#x}: peak {peak:.1} µs, \
+                     after 90 s {late:.1} µs, {run} windows > 150 µs"
+                ));
+                assert!(run < 4 && late <= 50.0, "{}", report.last().unwrap());
+            }
+        }
+        report
+    }
+
+    #[test]
+    fn an_outage_then_a_double_flap_then_a_moving_rate_never_unlocks_182() {
+        eprintln!("{}", replay_outage_and_double_flap_182().join("\n"));
+    }
+
+    #[test]
+    fn a_re_engagement_reports_the_rate_servos_word_not_the_boot_fit_182() {
+        // strih-snv 13.11.2026: the re-engagement after an outage logged "started on the
+        // acquisition's measured −8.422 ppm" (the BOOT fit) while it started on the rate servo's
+        // −3.420 ppm, a false lead in the incident's diagnosis.
+        let mut c = PhaseLockCore::new();
+        let mut p = Plant::new(-21.0, 1, 0.0);
+        for n in 0..80 {
+            let word = 21.0 * (1.0 - (-((n + 1) as f64 * DT) / 20.0).exp()) * 0.97;
+            c.on_window(D + p.e_ns.round() as i64, false, word, DT);
+            p.advance(word, DT);
+        }
+        for _ in 0..200 {
+            let out = c.on_window(D + p.e_ns.round() as i64, true, 20.37, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        let first = c.engagement_start().expect("engaged");
+        assert!(
+            first.fit.is_some(),
+            "the first engagement started on the fit: {first:?}"
+        );
+        let held = c.integrator_ppm();
+        for _ in 0..20 {
+            c.on_window(D + p.e_ns.round() as i64, false, held, DT);
+            p.advance(held, DT);
+        }
+        let servo_word = held - 3.0;
+        c.on_window(D + p.e_ns.round() as i64, true, servo_word, DT);
+        let again = c.engagement_start().expect("re-engaged");
+        assert_eq!(
+            again,
+            EngagementStart {
+                freq_ppm: servo_word,
+                fit: None
+            },
+            "a re-engagement starts on the rate servo's word"
+        );
+        assert_eq!(
+            c.engaged_on_fit(),
+            first.fit,
+            "/status keeps the first engagement's fit"
+        );
     }
 
     #[test]
