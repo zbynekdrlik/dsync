@@ -22,6 +22,11 @@ addresses, transports and credentials are not in this repository: they are in
    NTP master is the node every other node's `ntp_server` points at.
 5. **Final proof:** every node's `/status` returns 200 with `is_locked: true`.
 
+6. **Non-rig boxes (#169, #179): read the rig lease right before EACH box's swap**, not once
+   per rollout. camera-box can take the lease between two boxes (#179, v1.35.1: free at
+   23:35Z, taken at 23:36:44Z, mid-swap). companion's `dsync-gate-install` re-checks the lease
+   itself and refuses; the Windows swaps do not, so the check is yours.
+
 ## Per-release notes for step 4
 
 - **From v1.9.0 (issues #88/#117): the fleet's NTP MASTER goes right after the canary**, before
