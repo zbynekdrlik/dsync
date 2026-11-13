@@ -1602,3 +1602,23 @@ learned:
   re-align / disengagement clears it, a holdover clears it). Before, every same-line handover read
   "not settled" for the ~15 s the 30 windows took to refill. Pinned by
   `a_continued_handover_within_the_settled_bound_never_unsettles_166`.
+
+## dsync#182 (v1.35.2) — a rig incident: check the rig's BUILD before designing a mechanism
+
+The SNV rig unlocked during a FOH restart (13.11.2026): a 10 s outage, the GM flapping 02:14 →
+21:C4 → 02:14 twice, then a +155 µs unlock. dstack asked for a new "follow a GM time step"
+mechanism. What was learned:
+
+- **The rig runs camera-box's PINNED build, often several releases old.** strih-snv ran v1.29.0,
+  which predates #166's boost: the event was #166's incident class, already fixed. Read the
+  build first (`/status.version` since 1.35; before that, the journal's start line), then compare
+  a dsync-owned node on the SAME grandmaster port. companion-snv on 1.35.1 went through both flaps
+  cleanly. Only then decide whether a new mechanism is needed. Here none was.
+- **`offset_ns` is the GM-uptime offset, not an error.** −151.7 ms on every box behind one GM port
+  while locked. Grade on `ptp_phase_error_us`.
+- **A log line must name what the code DID.** The engagement log printed `engaged_on_fit` (the
+  FIRST engagement's fit, never cleared) on every re-engagement, a false lead in the diagnosis.
+  It now reads `PhaseLockCore::engagement_start`.
+- **The replay as a regression pin:** `an_outage_then_a_double_flap_then_a_moving_rate_never_unlocks_182`
+  passes on the current core (≤ 48 µs) and is RED with `GM_BOOST_GAIN = 1` (167 µs, 185 windows
+  > 150 µs). That reproduces the rig's unlock.
