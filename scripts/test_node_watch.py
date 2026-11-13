@@ -75,9 +75,12 @@ class Dedup(unittest.TestCase):
 
 
 class Roster(unittest.TestCase):
-    def test_the_roster_is_the_six_dsync_nodes_and_only_two_travel(self):
+    def test_the_roster_is_the_seven_dsync_nodes_and_only_two_travel(self):
+        """#183: the iemmixer box (iem-gen3.lan, FOH rack, fixed) is dsync's too."""
         self.assertEqual([n.name for n in w.ROSTER],
-                         ["mbc", "fohabl", "iem-snv", "companion-snv", "alex-nb", "resolume-pp"])
+                         ["mbc", "fohabl", "iem-snv", "companion-snv", "iemmixer", "alex-nb",
+                          "resolume-pp"])
+        self.assertEqual(w.ROSTER[4].addr, "iem-gen3.lan")
         self.assertEqual({n.name for n in w.ROSTER if n.travel}, {"alex-nb", "resolume-pp"})
 
     def test_the_alert_names_node_address_and_reasons(self):
