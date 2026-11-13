@@ -15,8 +15,11 @@ pub struct SyncStatus {
     // ========================================================================
     // Core PTP Status (existing fields)
     // ========================================================================
-    /// Current phase offset from grandmaster (nanoseconds)
-    /// Note: Absolute value is meaningless for PTPv1 (device uptime, not UTC)
+    /// The raw offset between this box's clock and the grandmaster's PTPv1 time (ns).
+    /// NOT an error: under PTPv1 the grandmaster's time is its device UPTIME, so the absolute
+    /// value is arbitrary. It reads the same on every box behind one grandmaster port, e.g.
+    /// −151.7 ms on the SNV rig while locked (dsync#182). The lock quality is
+    /// `ptp_phase_error_us` (~0 when locked, the [41] gate at 50 µs).
     pub offset_ns: i64,
 
     /// Current frequency adjustment being applied (PPM)

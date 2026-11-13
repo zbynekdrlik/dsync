@@ -42,7 +42,7 @@ use crate::date_offset::{
     StepKind,
 };
 use crate::phase_window;
-use crate::ptp_phase_lock::{AnchorEvent, PhaseLockCore};
+use crate::ptp_phase_lock::{AnchorEvent, EngagementStart, PhaseLockCore};
 use crate::time_server::NoAuthority;
 pub use boot::{BootNtpError, BootNtpResult, BootNtpSpawner};
 use daily::log_daily_authority;
@@ -472,13 +472,22 @@ where
                         word
                     );
                     // dsync#146: the first engagement's frequency, measured on the acquisition.
-                    if let Some(fit) = self.date_sync.core.engaged_on_fit() {
-                        info!(
+                    // dsync#182: every other engagement starts on the rate servo's word.
+                    match self.date_sync.core.engagement_start() {
+                        Some(EngagementStart { fit: Some(fit), .. }) => info!(
                             "[PHASE-LOCK] started on the acquisition's measured {:+.3}ppm \
                              (+-{:.3}ppm over {:.1}s, {} windows; the rate servo's word was \
                              {:+.3}ppm)",
                             fit.freq_ppm, fit.sigma_ppm, fit.span_s, fit.points, total_correction
-                        );
+                        ),
+                        Some(EngagementStart {
+                            freq_ppm,
+                            fit: None,
+                        }) => info!(
+                            "[PHASE-LOCK] started on the rate servo's word {:+.3}ppm",
+                            freq_ppm
+                        ),
+                        None => {}
                     }
                 }
             }
