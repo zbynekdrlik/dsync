@@ -110,6 +110,14 @@ Since 1.25 (#147) the state dir is `/etc/dsync` (`C:\ProgramData\dsync`). A box 
 1.25 keeps its old state dir in place until a deployer renames it; `/status.state_dir` names the one
 in use (`src/state_dir.rs`).
 
+`/status` on port 8898 (JSON):
+- `is_locked` / `mode`: the phase lock within 50 µs (DSYX [41]).
+- `ptp_phase_error_us`: the lock quality, ~0 when locked.
+- `offset_ns`: the raw offset to the grandmaster's PTPv1 time, which is the grandmaster's
+  device uptime. Its absolute value is arbitrary, the same on every box behind one grandmaster
+  port, and **not an error** (e.g. −151.7 ms on the SNV rig while locked).
+- `version`: the running build (since 1.35).
+
 Log files:
 - Linux: `/var/log/dsync/dsync.log`
 - Windows: `C:\ProgramData\dsync\dsync.log`
