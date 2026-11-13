@@ -342,6 +342,8 @@ pub struct PhaseLockCore {
     /// frequency the first engagement started from when it was measured there.
     boot_fit: BootFreqFit,
     engaged_on_fit: Option<BootFit>,
+    /// dsync#182: what the last engagement started on ([`PhaseLockCore::engagement_start`]).
+    engagement_start: Option<EngagementStart>,
     /// dsync#146: the first engagement started on a short ring and is still fitting.
     boot_fit_open: bool,
     /// dsync#146: the once-only re-seed of that engagement, when it happened.
@@ -453,13 +455,11 @@ impl PhaseLockCore {
         self.engaged_on_fit
     }
 
-    /// dsync#182: what the LAST engagement started the integrator on. The log line at an
-    /// engagement reads this: `engaged_on_fit` is the FIRST engagement's fit and is never cleared.
+    /// dsync#182: what the LAST engagement started the integrator on (set at every engagement).
+    /// The engagement log reads this, never [`Self::engaged_on_fit`], which is the FIRST
+    /// engagement's fit only (`/status.ptp_phase_engaged_on_ppm`).
     pub fn engagement_start(&self) -> Option<EngagementStart> {
-        self.engaged_on_fit.map(|fit| EngagementStart {
-            freq_ppm: fit.freq_ppm,
-            fit: Some(fit),
-        })
+        self.engagement_start
     }
 
     /// dsync#134: the core has engaged at least once since start.
@@ -885,6 +885,10 @@ impl PhaseLockCore {
             self.engaged_once = true;
             let start = fit.map_or(rate_servo_freq_ppm, |f| f.freq_ppm);
             self.i_ppm = start.clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+            self.engagement_start = Some(EngagementStart {
+                freq_ppm: self.i_ppm,
+                fit,
+            });
             self.drop_step_state();
         }
         if event != AnchorEvent::None {
