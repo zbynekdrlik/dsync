@@ -7,7 +7,8 @@ read each node's `http://<addr>:8898/status`, grade it, write the verdicts to
 
 The grade (`grade()`, pure, unit-tested in `test_node_watch.py`):
   ALARM  `is_locked` false; `mode` not NANO/LOCK; |`ptp_phase_error_us`| >= 50; `ntp_step_storm`;
-         `version` older than the latest release (upgrade debt, #169); `/status` unreadable.
+         `version` older than the latest release whose CODE changed (upgrade debt, #169, #186);
+         `/status` unreadable.
   SKIP   a traveling node (alex-nb, resolume-pp) while its :22 does not answer: it is away, and
          that is never an alarm (camera-box's rule for the same nodes, dstack 12.11.2026).
   OK     otherwise.
@@ -64,8 +65,12 @@ ROSTER = (
 )
 
 
-def grade(status: dict | None, latest: str, travel: bool, ssh_up: bool) -> tuple[str, list[str]]:
-    """Grade one node. `status` is the parsed `/status` or None when unreadable."""
+def grade(status: dict | None, latest: str, travel: bool, ssh_up: bool,
+          code_debt=None) -> tuple[str, list[str]]:
+    """Grade one node. `status` is the parsed `/status` or None when unreadable.
+
+    `code_debt(have, latest)` (#186) is asked only for a version older than `latest`: True when
+    the code differs between the two releases. Without it every older version is debt."""
     if status is None:
         if travel and not ssh_up:
             return "SKIP", ["away (:22 silent)"]
@@ -85,7 +90,10 @@ def grade(status: dict | None, latest: str, travel: bool, ssh_up: bool) -> tuple
         reasons.append("ntp step storm")
     version = status.get("version", "")
     if not _at_least(version, latest):
-        reasons.append(f"version {version or '<1.35'} < latest {latest}")
+        if code_debt is None:
+            reasons.append(f"version {version or '<1.35'} < latest {latest}")
+        elif not version or code_debt(version, latest):
+            reasons.append(f"version {version or '<1.35'} < latest code {latest}")
     return ("ALARM" if reasons else "OK"), reasons
 
 
@@ -101,6 +109,75 @@ def _at_least(version: str, latest: str) -> bool:
     is newer, not debt). An empty or unparseable version is debt."""
     have, want = _version_tuple(version), _version_tuple(latest)
     return have is not None and want is not None and have >= want
+
+
+# #186: what ships in the binary. Everything else (scripts/, docs/, .claude/, README, .github/)
+# can change in a release without changing what a node runs.
+CODE_PREFIXES = ("src/", "crates/")
+CODE_FILES = ("build.rs", "Cargo.toml", "Cargo.lock")
+_OWN_PACKAGES = ("dsync", "dsync-ptp")
+
+
+def _is_code_path(path: str) -> bool:
+    return path.startswith(CODE_PREFIXES) or path in CODE_FILES
+
+
+def normalize_cargo(path: str, text: str) -> str:
+    """A Cargo file without our own version lines (#186): the release bump is not code.
+
+    `Cargo.toml` / `crates/*/Cargo.toml`: the `[package]` `version = "…"` line (a dependency's
+    version is inline, never a bare `version =` line). `Cargo.lock`: the `version` that follows
+    `name = "dsync"` / `name = "dsync-ptp"`; every other package's version stays (a dependency
+    bump IS code)."""
+    out, own = [], False
+    for line in text.splitlines():
+        if path.endswith("Cargo.lock"):
+            if line.startswith("name = "):
+                own = line.split("=", 1)[1].strip().strip('"') in _OWN_PACKAGES
+            elif own and line.startswith("version = "):
+                own = False
+                continue
+        elif line.startswith("version = "):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def code_changed(changes) -> bool:
+    """True when any (path, old, new) change touches what ships in the binary (#186)."""
+    for path, old, new in changes:
+        if not _is_code_path(path):
+            continue
+        if path.endswith(("Cargo.toml", "Cargo.lock")):
+            if normalize_cargo(path, old or "") != normalize_cargo(path, new or ""):
+                return True
+        elif old != new:
+            return True
+    return False
+
+
+def _git(repo: str, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True,
+                          check=check, timeout=60)
+
+
+def _show(repo: str, tag: str, path: str) -> str | None:
+    r = _git(repo, "show", f"{tag}:{path}", check=False)
+    return r.stdout if r.returncode == 0 else None
+
+
+def code_debt(repo: str, have: str, latest: str) -> bool:
+    """#186: does the code differ between release `have` and release `latest`? Read from the
+    repo's own tags (fetched when `v<latest>` is missing). An unknown `have` tag is debt.
+    Raises on a git failure; the caller falls back to the plain version compare."""
+    old, new = f"v{have}", f"v{latest}"
+    if _git(repo, "rev-parse", "-q", "--verify", f"refs/tags/{new}", check=False).returncode:
+        _git(repo, "fetch", "-q", "--tags", "origin")
+    if _git(repo, "rev-parse", "-q", "--verify", f"refs/tags/{old}", check=False).returncode:
+        return True
+    names = _git(repo, "diff", "--name-only", old, new).stdout.split()
+    return code_changed((p, _show(repo, old, p), _show(repo, new, p))
+                        for p in names if _is_code_path(p))
 
 
 def dedup_key(node: str, now: float) -> str:
@@ -168,14 +245,29 @@ def send_alert(text: str, key: str) -> None:
     )
 
 
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _code_debt_or_plain(have: str, latest: str) -> bool:
+    """`code_debt` on this checkout; a git failure is logged and counts as debt (the plain
+    version compare: an alarm, never a silent OK)."""
+    try:
+        return code_debt(REPO_DIR, have, latest)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"code diff v{have}..v{latest} failed, grading the plain version: {exc}",
+              file=sys.stderr)
+        return True
+
+
 def run(dry_run: bool) -> int:
     now = time.time()
     latest = latest_release()
+    debt = _code_debt_or_plain
     results = []
     for node in ROSTER:
         status = fetch_status(node.addr)
         ssh_up = ssh_answers(node.addr) if (node.travel and status is None) else True
-        verdict, reasons = grade(status, latest, node.travel, ssh_up)
+        verdict, reasons = grade(status, latest, node.travel, ssh_up, debt)
         e = status.get("ptp_phase_error_us") if status else None
         print(f"{node.name}: {verdict} e={e} " + "; ".join(reasons))
         results.append({"node": node.name, "addr": node.addr, "verdict": verdict, "reasons": reasons,

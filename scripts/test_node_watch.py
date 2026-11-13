@@ -1,5 +1,8 @@
 """dsync #179: the node watch's pure grade, dedup bucket and roster."""
 
+import os
+import subprocess
+import tempfile
 import unittest
 
 import node_watch as w
@@ -66,6 +69,76 @@ class Grade(unittest.TestCase):
         self.assertEqual(reasons, ["not locked", "mode ACQ"])
 
 
+TOML_OLD = '[package]\nname = "dsync"\nversion = "1.35.2"\n\n[dependencies]\nanyhow = "1.0"\n'
+TOML_NEW = TOML_OLD.replace('version = "1.35.2"', 'version = "1.35.3"')
+LOCK_OLD = ('[[package]]\nname = "anyhow"\nversion = "1.0.90"\n\n'
+            '[[package]]\nname = "dsync"\nversion = "1.35.2"\n\n'
+            '[[package]]\nname = "dsync-ptp"\nversion = "1.35.2"\n')
+LOCK_NEW = LOCK_OLD.replace('"1.35.2"', '"1.35.3"')
+
+
+class CodeDebt(unittest.TestCase):
+    """#186 (dstack 13.11): version debt is a node older than the latest CODE release; a
+    docs-only release (v1.35.3: rules + the version bump) is no debt."""
+
+    def test_our_own_version_lines_are_not_code(self):
+        self.assertFalse(w.code_changed([("Cargo.toml", TOML_OLD, TOML_NEW),
+                                         ("crates/dsync-ptp/Cargo.toml", TOML_OLD, TOML_NEW),
+                                         ("Cargo.lock", LOCK_OLD, LOCK_NEW),
+                                         (".claude/rules/clock-discipline-and-testing.md", "a", "b"),
+                                         ("scripts/node_watch.py", "a", "b"),
+                                         ("README.md", "a", "b")]))
+
+    def test_source_and_dependency_changes_are_code(self):
+        self.assertTrue(w.code_changed([("src/status.rs", "a", "b")]))
+        self.assertTrue(w.code_changed([("crates/dsync-ptp/src/ptp_phase_lock.rs", "a", "b")]))
+        self.assertTrue(w.code_changed([("Cargo.lock", LOCK_OLD,
+                                         LOCK_NEW.replace('"1.0.90"', '"1.0.91"'))]))
+        self.assertTrue(w.code_changed([("Cargo.toml", TOML_OLD,
+                                         TOML_NEW.replace('anyhow = "1.0"', 'anyhow = "1.1"'))]))
+
+    def test_the_grade_asks_the_code_debt_only_for_an_older_version(self):
+        asked = []
+
+        def debt(have, latest):
+            asked.append((have, latest))
+            return False
+
+        self.assertEqual(w.grade(with_(version="1.35.2"), "1.35.3", False, True, debt), ("OK", []))
+        self.assertEqual(asked, [("1.35.2", "1.35.3")])
+        self.assertEqual(w.grade(with_(version="1.35.3"), "1.35.3", False, True, debt), ("OK", []))
+        self.assertEqual(len(asked), 1, "a current node needs no diff")
+        self.assertEqual(w.grade(with_(version="1.35.1"), "1.35.3", False, True,
+                                 lambda h, l: True),
+                         ("ALARM", ["version 1.35.1 < latest code 1.35.3"]))
+
+    def test_code_debt_reads_the_tags_of_a_real_repo(self):
+        with tempfile.TemporaryDirectory() as repo:
+            def git(*args):
+                subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t",
+                                *args], check=True, capture_output=True)
+
+            def release(ver, files):
+                for path, text in files.items():
+                    full = os.path.join(repo, path)
+                    os.makedirs(os.path.dirname(full), exist_ok=True)
+                    with open(full, "w") as f:
+                        f.write(text)
+                git("add", "-A")
+                git("commit", "-qm", ver)
+                git("tag", "v" + ver)
+
+            git("init", "-q")
+            release("1.0.0", {"Cargo.toml": TOML_OLD, "src/a.rs": "fn a() {}\n"})
+            release("1.0.1", {"Cargo.toml": TOML_NEW, "docs/x.md": "docs\n"})
+            release("1.0.2", {"Cargo.toml": TOML_NEW.replace("1.35.3", "1.35.4"),
+                              "src/a.rs": "fn a() { b() }\n"})
+            self.assertFalse(w.code_debt(repo, "1.0.0", "1.0.1"))
+            self.assertTrue(w.code_debt(repo, "1.0.1", "1.0.2"))
+            self.assertTrue(w.code_debt(repo, "1.0.0", "1.0.2"))
+            self.assertTrue(w.code_debt(repo, "0.9.0", "1.0.1"), "an unknown tag is debt")
+
+
 class Dedup(unittest.TestCase):
     def test_the_key_holds_within_a_bucket_and_changes_on_the_next(self):
         t = 1_000_000 * 600.0
@@ -99,9 +172,8 @@ class LatestRelease(unittest.TestCase):
     def test_a_location_that_is_not_a_release_tag_fails_loud(self):
         for loc in (None, "", "https://github.com/zbynekdrlik/dsync/releases",
                     "https://github.com/zbynekdrlik/dsync/releases/tag/latest"):
-            with self.subTest(loc=loc):
-                with self.assertRaises(RuntimeError):
-                    w.version_from_latest_location(loc)
+            with self.subTest(loc=loc), self.assertRaises(RuntimeError):
+                w.version_from_latest_location(loc)
 
 
 class Cli(unittest.TestCase):
