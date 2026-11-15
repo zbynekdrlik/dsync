@@ -2,6 +2,7 @@
 //! open, and a clock that advances one second per pause.
 
 use super::*;
+use crate::boot_ready::{ReadyGate, ReadyReason};
 use anyhow::anyhow;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -52,6 +53,7 @@ fn run(
         config_problem: None,
         notifier: notifier.clone(),
         running: &running,
+        waiting: &mut |_, _| {},
     };
     let opened = wait.run(
         || {
@@ -224,6 +226,7 @@ fn a_config_fallback_keeps_the_alarm_once_the_pinned_nic_opens_131_116() {
         config_problem: Some("config.json not loaded (x), running defaults".to_string()),
         notifier: Counting::default(),
         running: &running,
+        waiting: &mut |_, _| {},
     };
     let opened = wait.run(
         || looks.pop().expect("scripted"),
@@ -241,4 +244,113 @@ fn a_config_fallback_keeps_the_alarm_once_the_pinned_nic_opens_131_116() {
         s.clock_alarm.reason,
         "config.json not loaded (x), running defaults"
     );
+}
+
+/// What a wait driven with the real #164 `ReadyGate` saw: the open, the READY reasons with the
+/// second they were sent at, the seconds the wait took, and the gate itself.
+struct ReadyRun {
+    opened: Option<(u32, Ipv4Addr)>,
+    readies: Vec<(u64, ReadyReason)>,
+    seconds: u64,
+    gate: ReadyGate,
+    base: Instant,
+}
+
+/// The pinned NIC is missing for `missing_for` looks (1 s each), then present; the gate starts
+/// with the wait, as it does at process start.
+fn ready_run(missing_for: u32) -> ReadyRun {
+    let status = RwLock::new(SyncStatus::default());
+    let running = AtomicBool::new(true);
+    let seconds = Cell::new(0u64);
+    let base = Instant::now();
+    let looks = Cell::new(0u32);
+    let mut gate = ReadyGate::new(base);
+    let mut readies = Vec::new();
+    let opened = {
+        let mut waiting = |at: Instant, state: &str| {
+            if let Some(reason) = gate.poll(at, Err(state)) {
+                readies.push((at.duration_since(base).as_secs(), reason));
+            }
+        };
+        let wait = PinnedWait {
+            name: "enp56s0",
+            status: &status,
+            alarm_interval_s: 60,
+            config_problem: None,
+            notifier: Counting::default(),
+            running: &running,
+            waiting: &mut waiting,
+        };
+        wait.run(
+            || {
+                looks.set(looks.get() + 1);
+                if looks.get() <= missing_for {
+                    PinnedLookup::Missing
+                } else {
+                    PinnedLookup::Ready(RIG)
+                }
+            },
+            |_| Ok(7u32),
+            || seconds.set(seconds.get() + 1),
+            || base + Duration::from_secs(seconds.get()),
+        )
+    };
+    ReadyRun {
+        opened,
+        readies,
+        seconds: seconds.get(),
+        gate,
+        base,
+    }
+}
+
+/// camera-box#1483: a missing rig NIC held READY (and lightdm after it) until systemd's start
+/// timeout. READY goes at 30 s with the NIC still missing; the NIC appearing later is joined.
+#[test]
+fn ready_is_sent_while_the_pinned_nic_is_missing_and_the_nic_joins_after_it_193() {
+    let mut r = ready_run(40);
+    assert_eq!(
+        r.opened,
+        Some((7, RIG)),
+        "the NIC is joined once it appears"
+    );
+    assert_eq!(r.seconds, 40, "the join comes at 40 s, after READY");
+    assert_eq!(
+        r.readies,
+        vec![(
+            30,
+            ReadyReason::TimedOut("PTP interface enp56s0 is missing".to_string())
+        )],
+        "READY once, at the 30 s bound, naming the missing NIC"
+    );
+    assert_eq!(
+        r.gate
+            .poll(r.base + Duration::from_secs(41), Ok("PTP window")),
+        None,
+        "the sync loop never sends READY a second time"
+    );
+}
+
+/// A NIC present within the bound leaves READY to the placed wall (#164), and the bound still
+/// counts from the start, not from the join.
+#[test]
+fn a_nic_present_within_the_bound_leaves_ready_to_the_wall_193() {
+    let mut r = ready_run(5);
+    assert_eq!(r.opened, Some((7, RIG)));
+    assert!(r.readies.is_empty(), "no READY during a short wait");
+    assert!(!r.gate.sent());
+    assert_eq!(
+        r.gate.poll(
+            r.base + Duration::from_secs(29),
+            Err("waiting for the boot date")
+        ),
+        None
+    );
+    assert!(matches!(
+        r.gate.poll(
+            r.base + Duration::from_secs(30),
+            Err("waiting for the boot date")
+        ),
+        Some(ReadyReason::TimedOut(_))
+    ));
 }

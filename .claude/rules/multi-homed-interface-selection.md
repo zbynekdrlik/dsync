@@ -1,5 +1,7 @@
 ---
 paths:
+  - "src/pinned_wait.rs"
+  - "src/boot_ready.rs"
   - "crates/dsync-ptp/src/net.rs"
   - "crates/dsync-ptp/src/net_linux.rs"
   - "src/net_pcap.rs"
@@ -32,6 +34,11 @@ NIC (VBAN leg) got its /32 before the rig NIC at boot and was first in `getifadd
   config reason. A pinned Npcap open uses the IPv4 the wait approved
   (`select_pinned_device_at`), skips the allowlist resolution and is not an ERROR per retry.
   Never another NIC.
+- The wait never holds systemd READY (#193, camera-box#1483: a missing rig NIC kept lightdm dark
+  for the unit's 120 s timeout). The #164 `ReadyGate` starts at process start in `main` and is
+  polled through `PinnedWait.waiting` on every look that did not open, so READY goes at 30 s
+  with the NIC's state as the reason; the SAME gate then goes into the sync loop (READY once).
+  A new startup wait before the loop must take the gate too, or it reopens this hole.
 - Pinned re-join (Linux `UdpPtpNetwork`, Npcap `select_pinned_device`): ONLY the pinned NIC — no
   home address, no resolver, no subnet rule — with a typed `net::PinnedInterfaceUnavailable`
   BEFORE closing anything. The controller (which knows the pin from `set_ptp_interface`) turns
