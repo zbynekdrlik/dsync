@@ -224,6 +224,7 @@ fn join_ptp_network(
     running: &AtomicBool,
     status_shared: &RwLock<SyncStatus>,
     config_state: &ConfigState,
+    ready_gate: &mut dsync::boot_ready::ReadyGate,
 ) -> Result<Option<StartupJoin>> {
     let cli = args
         .interface
@@ -273,7 +274,14 @@ fn join_ptp_network(
         config_problem: config_state.alarm_reason(),
         notifier: dsync::clock_alarm::DesktopNotifier,
         running,
-        waiting: &mut |_, _| {},
+        // dsync#193: READY is due at the bound even while the NIC is still missing.
+        waiting: &mut |_, state| {
+            poll_ready(
+                ready_gate,
+                Err(state),
+                "waiting for the pinned PTP interface",
+            )
+        },
     };
     let opened = wait.run(
         || net::pinned_interface(&name),
@@ -287,6 +295,48 @@ fn join_ptp_network(
         iface,
         ip,
     }))
+}
+
+/// dsync#164 / #193: poll the bounded READY gate and, on its single reason, log it and tell
+/// systemd `READY=1` with the reason in `STATUS=`. `stage` names where startup is.
+fn poll_ready(
+    ready_gate: &mut dsync::boot_ready::ReadyGate,
+    placement: std::result::Result<&str, &str>,
+    stage: &str,
+) {
+    let Some(reason) = ready_gate.poll(Instant::now(), placement) else {
+        return;
+    };
+    match &reason {
+        dsync::boot_ready::ReadyReason::Placed(how) => {
+            info!("[READY] the wall is placed ({}): systemd READY=1", how)
+        }
+        dsync::boot_ready::ReadyReason::TimedOut(what) => warn!(
+            "[READY] the wall is not placed after {} s ({}; {}): systemd READY=1 anyway, so the \
+             units ordered after dsync are not held for ever",
+            dsync::boot_ready::READY_PLACEMENT_BOUND.as_secs(),
+            what,
+            stage
+        ),
+    }
+    #[cfg(unix)]
+    {
+        let _ = sd_notify::notify(
+            false,
+            &[
+                sd_notify::NotifyState::Ready,
+                sd_notify::NotifyState::Status(
+                    format!(
+                        "v{} | {} | {}",
+                        env!("CARGO_PKG_VERSION"),
+                        stage,
+                        reason.status_text()
+                    )
+                    .as_str(),
+                ),
+            ],
+        );
+    }
 }
 
 /// Resolve the NTP server address: CLI arg takes priority, then config file value.
@@ -659,6 +709,10 @@ fn run_sync_loop(
         );
     }
 
+    // dsync#164 + #193: the bounded READY counts from here, so a pinned NIC that is still missing
+    // cannot hold the units ordered after dsync (camera-box#1483: lightdm) past the bound.
+    let mut ready_gate = dsync::boot_ready::ReadyGate::new(Instant::now());
+
     // Initialize Shared Status
     let status_shared = Arc::new(RwLock::new(SyncStatus::default()));
     // dsync#116: the config source is visible at once, also while startup waits below.
@@ -727,6 +781,7 @@ fn run_sync_loop(
         &running,
         &status_shared,
         &config_state,
+        &mut ready_gate,
     )?
     else {
         return Ok(());
@@ -884,7 +939,6 @@ fn run_sync_loop(
             )],
         );
     }
-    let mut ready_gate = dsync::boot_ready::ReadyGate::new(Instant::now());
 
     let mut last_log = Instant::now();
     let loop_status = controller.get_status_shared();
@@ -932,36 +986,11 @@ fn run_sync_loop(
         }
 
         if !ready_gate.sent() {
-            if let Some(reason) = ready_gate.poll(Instant::now(), controller.wall_placement()) {
-                match &reason {
-                    dsync::boot_ready::ReadyReason::Placed(how) => {
-                        info!("[READY] the wall is placed ({}): systemd READY=1", how)
-                    }
-                    dsync::boot_ready::ReadyReason::TimedOut(what) => warn!(
-                        "[READY] the wall is not placed after {} s ({}): systemd READY=1 anyway, \
-                         so the units ordered after dsync are not held for ever",
-                        dsync::boot_ready::READY_PLACEMENT_BOUND.as_secs(),
-                        what
-                    ),
-                }
-                #[cfg(unix)]
-                {
-                    let _ = sd_notify::notify(
-                        false,
-                        &[
-                            sd_notify::NotifyState::Ready,
-                            sd_notify::NotifyState::Status(
-                                format!(
-                                    "v{} | PTP Loop Running | {}",
-                                    env!("CARGO_PKG_VERSION"),
-                                    reason.status_text()
-                                )
-                                .as_str(),
-                            ),
-                        ],
-                    );
-                }
-            }
+            poll_ready(
+                &mut ready_gate,
+                controller.wall_placement(),
+                "PTP Loop Running",
+            );
         }
     });
 

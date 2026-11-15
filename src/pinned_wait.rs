@@ -104,6 +104,7 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
                 log_seen(name, &seen);
                 last = Some(seen);
             }
+            (self.waiting)(at, &state);
             if let Some(reason) = problem {
                 self.raise_alarm(&mut alarm, reason, at);
             } else if alarm.is_active() {
