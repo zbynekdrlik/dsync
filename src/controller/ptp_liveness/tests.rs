@@ -603,3 +603,117 @@ fn a_pinned_wait_logs_warn_on_a_changed_reason_and_every_sixtieth_look_131() {
     assert_eq!(pinned_wait_log_level(120, false), Warn);
     assert_eq!(pinned_wait_log_level(7, true), Warn, "a changed reason");
 }
+
+// --- dsync#191: a pinned NIC opened on its APIPA address moves to the DHCP address ---
+
+const APIPA: Ipv4Addr = Ipv4Addr::new(169, 254, 39, 11);
+const DHCP: Ipv4Addr = Ipv4Addr::new(10, 77, 7, 108);
+
+/// A network whose re-joins succeed on the DHCP address of `Ethernet` and are counted.
+fn dhcp_network(count: Arc<AtomicU32>) -> MockPtpNetwork {
+    let mut net = MockPtpNetwork::new();
+    net.expect_rejoin().returning(move || {
+        count.fetch_add(1, Ordering::SeqCst);
+        Ok(RejoinOutcome {
+            iface: "Ethernet".to_string(),
+            ip: DHCP,
+            changed: true,
+        })
+    });
+    net
+}
+
+/// The NIC lookups of the APIPA→DHCP boot: link-local for the first two looks, then DHCP.
+static APIPA_THEN_DHCP_LOOKS: AtomicU32 = AtomicU32::new(0);
+fn apipa_then_dhcp(name: &str) -> crate::net::PinnedLookup {
+    assert_eq!(name, "Ethernet", "only the pinned NIC is looked at");
+    if APIPA_THEN_DHCP_LOOKS.fetch_add(1, Ordering::SeqCst) < 2 {
+        crate::net::PinnedLookup::LinkLocalOnly(APIPA)
+    } else {
+        crate::net::PinnedLookup::Ready(DHCP)
+    }
+}
+
+fn link_local_forever(_name: &str) -> crate::net::PinnedLookup {
+    crate::net::PinnedLookup::LinkLocalOnly(APIPA)
+}
+
+fn never_looked_at(name: &str) -> crate::net::PinnedLookup {
+    panic!("the NIC {name} must not be looked at");
+}
+
+/// PTP flows (an allowed packet at `t`), joined on `ip` of the pinned `Ethernet`.
+fn joined(c: &mut TestController, pinned: bool, ip: Ipv4Addr, t: Instant) {
+    c.set_ptp_interface(pinned.then(|| "Ethernet".to_string()), "Ethernet", ip);
+    c.note_allowed_ptp_packet(t);
+}
+
+#[test]
+fn an_apipa_join_moves_to_the_dhcp_address_once_it_appears_191() {
+    let count = Arc::new(AtomicU32::new(0));
+    let (mut c, st) = controller(dhcp_network(count.clone()));
+    c.ptp_liveness.pinned_lookup = Some(apipa_then_dhcp);
+    let t0 = Instant::now();
+    joined(&mut c, true, APIPA, t0);
+    // Looks every 5 s: link-local, link-local, then DHCP -> one re-join, while PTP is NOT stale.
+    for (at, rejoins) in [(0, 0), (4_999, 0), (5_000, 0), (9_000, 0), (10_000, 1)] {
+        c.note_allowed_ptp_packet(t0 + ms(at));
+        c.maybe_leave_link_local(t0 + ms(at));
+        assert_eq!(count.load(Ordering::SeqCst), rejoins, "at {at} ms");
+    }
+    assert_eq!(
+        APIPA_THEN_DHCP_LOOKS.load(Ordering::SeqCst),
+        3,
+        "a look every 5 s only"
+    );
+    {
+        let st = st.read().expect("status");
+        assert_eq!(st.ptp_interface_ip.as_deref(), Some("10.77.7.108"));
+        assert_eq!(st.rejoin.last_ip, Some(DHCP));
+    }
+    // Joined on the routable address now: never looked at again.
+    c.ptp_liveness.pinned_lookup = Some(never_looked_at);
+    for at in [15_000, 60_000] {
+        c.note_allowed_ptp_packet(t0 + ms(at));
+        c.maybe_leave_link_local(t0 + ms(at));
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_segment_without_dhcp_stays_on_its_link_local_address_191() {
+    let count = Arc::new(AtomicU32::new(0));
+    let (mut c, _st) = controller(dhcp_network(count.clone()));
+    c.ptp_liveness.pinned_lookup = Some(link_local_forever);
+    let t0 = Instant::now();
+    joined(&mut c, true, APIPA, t0);
+    for at in (0..120_000).step_by(1_000) {
+        c.note_allowed_ptp_packet(t0 + ms(at));
+        c.maybe_leave_link_local(t0 + ms(at));
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_routable_or_unpinned_join_is_never_looked_at_191() {
+    let count = Arc::new(AtomicU32::new(0));
+    let t0 = Instant::now();
+    for (pinned, ip) in [(true, DHCP), (false, APIPA)] {
+        let (mut c, _st) = controller(dhcp_network(count.clone()));
+        c.ptp_liveness.pinned_lookup = Some(never_looked_at);
+        joined(&mut c, pinned, ip, t0);
+        c.maybe_leave_link_local(t0 + ms(5_000));
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_stale_link_local_join_is_left_to_the_stale_rejoin_191() {
+    let count = Arc::new(AtomicU32::new(0));
+    let (mut c, _st) = controller(dhcp_network(count.clone()));
+    c.ptp_liveness.pinned_lookup = Some(never_looked_at);
+    c.set_ptp_interface(Some("Ethernet".to_string()), "Ethernet", APIPA);
+    went_quiet(&mut c, 30);
+    c.maybe_leave_link_local(Instant::now());
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+}
