@@ -139,6 +139,56 @@ class CodeDebt(unittest.TestCase):
             self.assertTrue(w.code_debt(repo, "0.9.0", "1.0.1"), "an unknown tag is debt")
 
 
+class GmCheck(unittest.TestCase):
+    """#188: a node following a GM other than its expected audio grandmaster alarms once the
+    mismatch has held for GM_HOLD_S (dstack: more than a minute)."""
+
+    def test_the_expected_gm_needs_no_alarm_and_clears_the_timer(self):
+        self.assertEqual(w.gm_hold(with_(gm_source_ip="10.77.7.104"), "10.77.7.104", 100.0, 500.0),
+                         (None, None))
+
+    def test_a_mismatch_alarms_only_after_it_held_a_minute(self):
+        s = with_(gm_source_ip="10.77.9.230")
+        self.assertEqual(w.gm_hold(s, "10.77.7.104", None, 1000.0), (1000.0, None))
+        self.assertEqual(w.gm_hold(s, "10.77.7.104", 1000.0, 1059.0), (1000.0, None))
+        self.assertEqual(w.gm_hold(s, "10.77.7.104", 1000.0, 1061.0),
+                         (1000.0, "GM 10.77.9.230 != expected 10.77.7.104 for 61 s"))
+
+    def test_no_gm_at_all_is_a_mismatch(self):
+        self.assertEqual(w.gm_hold(with_(gm_source_ip=None), "10.77.7.104", 0.0, 120.0),
+                         (0.0, "GM none != expected 10.77.7.104 for 120 s"))
+
+    def test_a_node_without_an_expected_gm_or_status_is_not_checked(self):
+        self.assertEqual(w.gm_hold(with_(gm_source_ip="1.2.3.4"), None, 5.0, 500.0), (None, None))
+        self.assertEqual(w.gm_hold(None, "10.77.7.104", 5.0, 500.0), (None, None))
+
+    def test_the_config_is_read_from_a_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "watch.json")
+            with open(path, "w") as f:
+                f.write('{"expected_gm": {"mbc": "10.77.7.104"}}')
+            self.assertEqual(w.load_expected_gm(path), {"mbc": "10.77.7.104"})
+
+    def test_a_missing_or_malformed_config_fails_loud(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "watch.json")
+            with self.assertRaises(OSError):
+                w.load_expected_gm(path)
+            for bad in ("{", '{"expected_gm": ["mbc"]}', '{"expected_gm": {"mbc": 7}}', "{}"):
+                with self.subTest(bad=bad):
+                    with open(path, "w") as f:
+                        f.write(bad)
+                    with self.assertRaises(ValueError):
+                        w.load_expected_gm(path)
+
+    def test_the_gm_alarm_joins_the_grade(self):
+        self.assertEqual(w.with_gm_reason(("OK", []), "GM x != expected y for 61 s"),
+                         ("ALARM", ["GM x != expected y for 61 s"]))
+        self.assertEqual(w.with_gm_reason(("ALARM", ["not locked"]), "GM x"),
+                         ("ALARM", ["not locked", "GM x"]))
+        self.assertEqual(w.with_gm_reason(("SKIP", ["away"]), None), ("SKIP", ["away"]))
+
+
 class Dedup(unittest.TestCase):
     def test_the_key_holds_within_a_bucket_and_changes_on_the_next(self):
         t = 1_000_000 * 600.0
