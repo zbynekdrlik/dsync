@@ -46,6 +46,13 @@ pub(super) struct PtpLiveness {
     /// dsync#131: the pinned interface (`main`'s `set_ptp_interface`); `None` = not pinned.
     /// Any re-join failure of a pinned node is a fault of THAT interface: named, retried fast.
     pub(super) pinned: Option<String>,
+    /// dsync#191: the address PTP is joined on now (the startup join, then every re-join).
+    pub(super) joined_ip: Option<Ipv4Addr>,
+    /// dsync#191: the last look at a pinned NIC joined on a link-local address.
+    pub(super) last_link_local_look: Option<Instant>,
+    /// dsync#191: how the pinned NIC is looked at; `None` = the OS (`net::pinned_interface`).
+    /// A test sets its own so it never depends on the host's NICs.
+    pub(super) pinned_lookup: Option<fn(&str) -> crate::net::PinnedLookup>,
 }
 
 /// dsync#131 — while the pinned interface stays unusable, a fast look's two lines are WARN on
@@ -201,26 +208,10 @@ where
                 if waiting_for_pin {
                     warn!("{}", announce);
                 }
-                info!(
-                    "[NET] PTP multicast re-joined on {} ({}){}",
-                    outcome.iface,
-                    outcome.ip,
-                    if outcome.changed {
-                        " -- another interface than before"
-                    } else {
-                        ""
-                    }
-                );
-                self.ptp_liveness.rejoin.record(epoch_s, Ok(outcome));
+                self.note_rejoined(outcome, epoch_s);
                 if let Some(problem) = self.ptp_liveness.interface_problem.take() {
                     info!("[NET] {} -- resolved, PTP joined on it again", problem);
                 }
-                if let Ok(mut status) = self.status_shared.write() {
-                    status.ptp_interface = Some(outcome.iface.clone());
-                    status.ptp_interface_ip = Some(outcome.ip.to_string());
-                }
-                // dsync#129: the fallback socket joins again on the same interface.
-                self.fallback_rejoin(outcome.ip);
             }
             Err(e) => {
                 let text = format!("{e:#}");
@@ -267,10 +258,91 @@ where
         }
     }
 
+    /// A successful re-join (#112, #191): logged, recorded in `/status.rejoin`, the joined
+    /// interface published, and the fallback socket joined again on it (#129).
+    fn note_rejoined(&mut self, outcome: &crate::traits::RejoinOutcome, epoch_s: u64) {
+        info!(
+            "[NET] PTP multicast re-joined on {} ({}){}",
+            outcome.iface,
+            outcome.ip,
+            if outcome.changed {
+                " -- another interface than before"
+            } else {
+                ""
+            }
+        );
+        self.ptp_liveness.rejoin.record(epoch_s, Ok(outcome));
+        self.ptp_liveness.joined_ip = Some(outcome.ip);
+        if let Ok(mut status) = self.status_shared.write() {
+            status.ptp_interface = Some(outcome.iface.clone());
+            status.ptp_interface_ip = Some(outcome.ip.to_string());
+            status.rejoin = self.ptp_liveness.rejoin.clone();
+        }
+        self.fallback_rejoin(outcome.ip);
+    }
+
+    /// dsync#191 — every loop iteration: a PINNED NIC joined on a link-local address (startup
+    /// takes one after `PINNED_STARTUP_GRACE`, #131) is looked at every [`PINNED_WAIT_RETRY`]
+    /// while PTP flows; once it carries a routable IPv4 (DHCP answered after the grace), PTP is
+    /// re-joined on it through `PtpNetwork::rejoin` (the receive path only, #112). A segment
+    /// without DHCP keeps its link-local address and is never re-joined. A stale PTP is
+    /// `maybe_rejoin_ptp`'s.
+    pub(super) fn maybe_leave_link_local(&mut self, now: Instant) {
+        let (Some(name), Some(ip)) = (
+            self.ptp_liveness.pinned.clone(),
+            self.ptp_liveness.joined_ip,
+        ) else {
+            return;
+        };
+        if !ip.is_link_local() || self.ptp_stale_at(now) {
+            return;
+        }
+        if self
+            .ptp_liveness
+            .last_link_local_look
+            .is_some_and(|t| now.saturating_duration_since(t) < PINNED_WAIT_RETRY)
+        {
+            return;
+        }
+        self.ptp_liveness.last_link_local_look = Some(now);
+        let lookup = self
+            .ptp_liveness
+            .pinned_lookup
+            .unwrap_or(crate::net::pinned_interface);
+        let crate::net::PinnedLookup::Ready(routable) = lookup(&name) else {
+            return;
+        };
+        info!(
+            "[NET] pinned PTP interface {} now has {} (PTP is joined on the link-local {}) -- \
+             re-joining on it",
+            name, routable, ip
+        );
+        let epoch_s = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        match self.network.rejoin() {
+            Ok(outcome) => self.note_rejoined(&outcome, epoch_s),
+            Err(e) => {
+                let text = format!("{e:#}");
+                warn!(
+                    "[NET] re-join on {} ({}) failed: {} -- PTP stays on {}, next look in {}s",
+                    name,
+                    routable,
+                    text,
+                    ip,
+                    PINNED_WAIT_RETRY.as_secs()
+                );
+                self.ptp_liveness.rejoin.record(epoch_s, Err(text.as_str()));
+            }
+        }
+    }
+
     /// dsync#131 — the startup join (`main`): the pin (or `None`) and where PTP joined.
     /// Published at once in `/status`; each successful re-join updates the joined interface.
     pub fn set_ptp_interface(&mut self, configured: Option<String>, iface: &str, ip: Ipv4Addr) {
         self.ptp_liveness.pinned = configured.clone();
+        self.ptp_liveness.joined_ip = Some(ip);
         if let Ok(mut status) = self.status_shared.write() {
             status.ptp_interface_configured = configured;
             status.ptp_interface = Some(iface.to_string());

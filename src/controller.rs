@@ -2132,6 +2132,7 @@ where
         // #112: re-join the PTP multicast group while no allowed packet comes. Before the receive,
         // so a dead capture handle whose receive errors every iteration is still re-opened.
         self.maybe_rejoin_ptp(Instant::now());
+        self.maybe_leave_link_local(Instant::now());
 
         // #88: apply a coordinated date step the moment its instant arrives, and follow the
         // master's announce. Every iteration (1 ms / 50 µs), BEFORE the packet early-returns, so a
