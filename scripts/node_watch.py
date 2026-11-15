@@ -8,7 +8,10 @@ read each node's `http://<addr>:8898/status`, grade it, write the verdicts to
 The grade (`grade()`, pure, unit-tested in `test_node_watch.py`):
   ALARM  `is_locked` false; `mode` not NANO/LOCK; |`ptp_phase_error_us`| >= 50; `ntp_step_storm`;
          `version` older than the latest release whose CODE changed (upgrade debt, #169, #186);
-         `/status` unreadable.
+         `/status` unreadable;
+         `gm_source_ip` not the node's expected audio grandmaster for >= GM_HOLD_S (#188; the
+         expected GMs live in the private `~/.config/dsync/watch.json`, never in the repo, and an
+         unreadable config alarms on every node).
   SKIP   a traveling node (alex-nb, resolume-pp) while its :22 does not answer: it is away, and
          that is never an alarm (camera-box's rule for the same nodes, dstack 12.11.2026).
   OK     otherwise.
@@ -44,6 +47,8 @@ HTTP_TIMEOUT_S = 4.0
 SSH_PROBE_TIMEOUT_S = 2.0
 STATE_PATH = os.path.expanduser("~/.local/state/dsync-watch/last.json")
 AIRULESET = os.path.expanduser("~/devel/airuleset/airuleset.py")
+WATCH_CONFIG = os.path.expanduser("~/.config/dsync/watch.json")
+GM_HOLD_S = 60.0
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,56 @@ def grade(status: dict | None, latest: str, travel: bool, ssh_up: bool,
         elif not version or code_debt(version, latest):
             reasons.append(f"version {version or '<1.35'} < latest code {latest}")
     return ("ALARM" if reasons else "OK"), reasons
+
+
+def load_expected_gm(path: str) -> dict[str, str]:
+    """#188: the per-node expected GM address, `{"expected_gm": {"<node>": "<ip>", ...}}`.
+    Raises OSError when the file cannot be read and ValueError when it is not that shape."""
+    with open(path) as f:
+        data = json.load(f)
+    gms = data.get("expected_gm") if isinstance(data, dict) else None
+    if not isinstance(gms, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in gms.items()):
+        raise ValueError(f"{path}: expected {{\"expected_gm\": {{node: ip}}}}")
+    return gms
+
+
+def gm_hold(status: dict | None, expected: str | None, since: float | None,
+            now: float) -> tuple[float | None, str | None]:
+    """#188: (the new mismatch-start time, the alarm reason or None). A node without an expected
+    GM or without a readable `/status` is not checked and its timer clears."""
+    if expected is None or status is None:
+        return None, None
+    actual = status.get("gm_source_ip")
+    if actual == expected:
+        return None, None
+    since = now if since is None else since
+    held = now - since
+    if held < GM_HOLD_S:
+        return since, None
+    return since, f"GM {actual or 'none'} != expected {expected} for {held:.0f} s"
+
+
+def with_gm_reason(graded: tuple[str, list[str]], reason: str | None) -> tuple[str, list[str]]:
+    """Add the #188 GM reason to a grade: any reason makes it an ALARM."""
+    _, reasons = graded
+    if reason is None:
+        return graded
+    return "ALARM", [*reasons, reason]
+
+
+def _previous_gm_since(path: str) -> dict[str, float]:
+    """The mismatch start per node from the last pass's state file (none on a first pass)."""
+    try:
+        with open(path) as f:
+            nodes = json.load(f).get("nodes", [])
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        print(f"{path}: previous state unreadable, GM timers restart: {exc}", file=sys.stderr)
+        return {}
+    return {n["node"]: n["gm_mismatch_since"] for n in nodes
+            if isinstance(n, dict) and n.get("gm_mismatch_since") is not None}
 
 
 def _version_tuple(version: str) -> tuple[int, ...] | None:
@@ -263,16 +318,26 @@ def run(dry_run: bool) -> int:
     now = time.time()
     latest = latest_release()
     debt = _code_debt_or_plain
+    try:
+        expected_gm, config_error = load_expected_gm(WATCH_CONFIG), None
+    except (OSError, ValueError) as exc:
+        expected_gm, config_error = {}, f"expected GM config unreadable: {exc}"
+        print(config_error, file=sys.stderr)
+    previous = _previous_gm_since(STATE_PATH)
     results = []
     for node in ROSTER:
         status = fetch_status(node.addr)
         ssh_up = ssh_answers(node.addr) if (node.travel and status is None) else True
-        verdict, reasons = grade(status, latest, node.travel, ssh_up, debt)
+        graded = grade(status, latest, node.travel, ssh_up, debt)
+        since, gm_reason = gm_hold(status, expected_gm.get(node.name), previous.get(node.name), now)
+        verdict, reasons = with_gm_reason(graded, gm_reason or config_error)
         e = status.get("ptp_phase_error_us") if status else None
         print(f"{node.name}: {verdict} e={e} " + "; ".join(reasons))
         results.append({"node": node.name, "addr": node.addr, "verdict": verdict, "reasons": reasons,
                         "mode": status.get("mode") if status else None, "e_us": e,
-                        "version": status.get("version") if status else None})
+                        "version": status.get("version") if status else None,
+                        "gm": status.get("gm_source_ip") if status else None,
+                        "gm_mismatch_since": since})
         if verdict == "ALARM" and not dry_run:
             send_alert(alert_text(node, reasons), dedup_key(node.name, now))
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
