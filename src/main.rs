@@ -273,6 +273,7 @@ fn join_ptp_network(
         config_problem: config_state.alarm_reason(),
         notifier: dsync::clock_alarm::DesktopNotifier,
         running,
+        waiting: &mut |_, _| {},
     };
     let opened = wait.run(
         || net::pinned_interface(&name),

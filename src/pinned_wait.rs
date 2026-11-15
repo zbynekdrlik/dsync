@@ -47,6 +47,9 @@ pub struct PinnedWait<'a, N: ClockAlarmNotifier> {
     pub notifier: N,
     /// Cleared when the service stops: the wait gives up (`None`).
     pub running: &'a AtomicBool,
+    /// dsync#193: called on every look that did not open, with the NIC's current state, so the
+    /// bounded systemd READY of #164 is sent while the NIC is still missing.
+    pub waiting: &'a mut dyn FnMut(Instant, &str),
 }
 
 impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
