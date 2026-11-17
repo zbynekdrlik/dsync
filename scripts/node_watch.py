@@ -64,7 +64,7 @@ ROSTER = (
     Node("fohabl", "fohabl.lan"),
     Node("companion-snv", "companion-snv.lan"),
     Node("iemmixer", "iem-gen3.lan"),  # #183: the FOH rack's gen3 box (dstack #260)
-    Node("dsg", "10.77.7.108"),  # the owner's dsg PC (dstack 15.11), no DNS name
+    Node("dsg", "10.77.7.196"),  # the owner's dsg PC (dstack 15.11), no DNS name; DHCP moved it from .108 (#198)
     Node("alex-nb", "10.77.7.109", travel=True),
     Node("resolume-pp", "resolume-pp.lan", travel=True),
 )
