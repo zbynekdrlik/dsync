@@ -62,7 +62,6 @@ class Node:
 ROSTER = (
     Node("mbc", "mbc.lan"),
     Node("fohabl", "fohabl.lan"),
-    Node("iem-snv", "iem-snv.lan"),
     Node("companion-snv", "companion-snv.lan"),
     Node("iemmixer", "iem-gen3.lan"),  # #183: the FOH rack's gen3 box (dstack #260)
     Node("dsg", "10.77.7.108"),  # the owner's dsg PC (dstack 15.11), no DNS name

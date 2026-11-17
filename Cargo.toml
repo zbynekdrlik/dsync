@@ -2,13 +2,15 @@
 clap = { version = "4.4", features = ["derive"] }
 anyhow = "1.0"
 log = "0.4"
-env_logger = "0.10"
+env_logger = "0.11"
 socket2 = "0.5"
 if-addrs = "0.10"
 byteorder = "1.5"
 uuid = { version = "1.0", features = ["v4"] }
-rsntp = "4.0"
-chrono = "0.4"
+# #197: no default features: only the blocking SntpClient is used; this drops chrono (RUSTSEC-2026-0543) and tokio.
+rsntp = { version = "4.0", default-features = false }
+# #197: date/time through jiff (also env_logger 0.11's), chrono is unmaintained.
+jiff = "0.2"
 ctrlc = { version = "3.4", features = ["termination"] }
 nix = { version = "0.27", features = ["socket", "net", "uio", "fs", "ioctl"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -18,7 +20,7 @@ dsync-ptp = { path = "crates/dsync-ptp", version = "1.27.3" }
 
 [package]
 name = "dsync"
-version = "1.35.7"
+version = "1.35.8"
 edition = "2021"
 description = "High-precision PTPv1 synchronization for audio networks"
 license = "MIT"
