@@ -276,7 +276,7 @@ impl ClockAlarmNotifier for DesktopNotifier {
 pub const CLOCK_ALARM_TITLE: &str = "dsync — NO PTP CLOCK";
 
 /// Compose the operator-facing message. `since_epoch` is rendered to local HH:MM
-/// (via the crate's existing `chrono` dependency); an absent/unformattable epoch
+/// (through jiff, #197); an absent/unformattable epoch
 /// degrades to "just now" rather than printing a raw number.
 pub fn compose_message(reason: &str, since_epoch: Option<u64>) -> String {
     let since_str = since_epoch
@@ -286,11 +286,15 @@ pub fn compose_message(reason: &str, since_epoch: Option<u64>) -> String {
 }
 
 fn format_hhmm_local(epoch: u64) -> Option<String> {
-    use chrono::{Local, TimeZone};
-    match Local.timestamp_opt(epoch as i64, 0) {
-        chrono::LocalResult::Single(dt) => Some(dt.format("%H:%M").to_string()),
-        _ => None,
-    }
+    format_hhmm(epoch, &jiff::tz::TimeZone::system())
+}
+
+/// `epoch` (Unix seconds) as HH:MM in `zone`; `None` when it is out of range (#197: jiff, not
+/// the unmaintained chrono).
+fn format_hhmm(epoch: u64, zone: &jiff::tz::TimeZone) -> Option<String> {
+    let seconds = i64::try_from(epoch).ok()?;
+    let at = jiff::Timestamp::from_second(seconds).ok()?;
+    Some(at.to_zoned(zone.clone()).strftime("%H:%M").to_string())
 }
 
 /// The SINGLE emission seam: advance the alarm, then perform the side effects the
@@ -638,9 +642,15 @@ mod tests {
     /// 1_700_000_000 = 2023-11-14 22:13:20 UTC = 23:13 in Bratislava (CET).
     #[test]
     fn hhmm_is_the_wall_time_of_the_epoch_in_the_zone_197() {
-        assert_eq!(format_hhmm(1_700_000_000, &jiff::tz::TimeZone::UTC).as_deref(), Some("22:13"));
+        assert_eq!(
+            format_hhmm(1_700_000_000, &jiff::tz::TimeZone::UTC).as_deref(),
+            Some("22:13")
+        );
         let bratislava = jiff::tz::TimeZone::get("Europe/Bratislava").unwrap();
-        assert_eq!(format_hhmm(1_700_000_000, &bratislava).as_deref(), Some("23:13"));
+        assert_eq!(
+            format_hhmm(1_700_000_000, &bratislava).as_deref(),
+            Some("23:13")
+        );
         assert_eq!(format_hhmm(u64::MAX, &jiff::tz::TimeZone::UTC), None);
     }
 
