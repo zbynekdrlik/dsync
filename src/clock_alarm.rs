@@ -634,6 +634,16 @@ mod tests {
         assert!(none.ends_with("since just now"));
     }
 
+    /// #197: HH:MM in a given zone, through jiff (chrono is unmaintained, RUSTSEC-2026-0543).
+    /// 1_700_000_000 = 2023-11-14 22:13:20 UTC = 23:13 in Bratislava (CET).
+    #[test]
+    fn hhmm_is_the_wall_time_of_the_epoch_in_the_zone_197() {
+        assert_eq!(format_hhmm(1_700_000_000, &jiff::tz::TimeZone::UTC).as_deref(), Some("22:13"));
+        let bratislava = jiff::tz::TimeZone::get("Europe/Bratislava").unwrap();
+        assert_eq!(format_hhmm(1_700_000_000, &bratislava).as_deref(), Some("23:13"));
+        assert_eq!(format_hhmm(u64::MAX, &jiff::tz::TimeZone::UTC), None);
+    }
+
     #[test]
     fn clock_alarm_status_serde_roundtrip() {
         let s = ClockAlarmStatus {
