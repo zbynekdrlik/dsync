@@ -200,13 +200,13 @@ class Dedup(unittest.TestCase):
 class Roster(unittest.TestCase):
     def test_the_roster_is_the_seven_dsync_nodes_and_only_two_travel(self):
         """#183: the iemmixer box (iem-gen3.lan, FOH rack, fixed) is dsync's too; dstack 15.11:
-        so is the owner's dsg (10.77.7.108, no DNS name), fixed. #195: iem-snv was sold
-        (17.11.2026) and is no longer watched."""
+        so is dsg (dasio's test PC), fixed; #198: its DHCP lease moved it off 10.77.7.108, so
+        it now has a static lease and the name dsg.lan (network#10). #195: iem-snv was sold (17.11.2026) and is no longer watched."""
         self.assertEqual([n.name for n in w.ROSTER],
                          ["mbc", "fohabl", "companion-snv", "iemmixer", "dsg",
                           "alex-nb", "resolume-pp"])
         self.assertEqual(w.ROSTER[3].addr, "iem-gen3.lan")
-        self.assertEqual(w.ROSTER[4].addr, "10.77.7.108")
+        self.assertEqual(w.ROSTER[4].addr, "dsg.lan")
         self.assertEqual({n.name for n in w.ROSTER if n.travel}, {"alex-nb", "resolume-pp"})
 
     def test_the_alert_names_node_address_and_reasons(self):
