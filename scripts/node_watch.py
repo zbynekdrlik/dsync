@@ -67,6 +67,7 @@ ROSTER = (
     Node("dsg", "dsg.lan"),  # dasio's test PC: static lease 10.77.7.196 + DNS name (network#10, #198)
     Node("alex-nb", "10.77.7.109", travel=True),
     Node("resolume-pp", "resolume-pp.lan", travel=True),
+    Node("linux-pp", "linux-pp.lan"),  # #202: PP's presenter (companion-snv's twin), dsync since 18.11
 )
 
 
