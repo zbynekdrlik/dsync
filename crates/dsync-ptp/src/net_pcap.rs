@@ -361,8 +361,11 @@ fn open_ptp_capture(device: Device, iface_ip: Ipv4Addr) -> Result<PtpCapture> {
     // above binds an ephemeral port, not 319/320, so DVS keeps exclusive
     // ownership of both PTP ports (dsync#109); this filter only scopes
     // which packets pcap decodes and never claims a port.
-    let ptp_filter = "udp and dst host 224.0.1.129 and (dst port 319 or dst port 320)";
-    let capture = open_hiprec_capture(&device, ptp_filter)?;
+    // dsync#200: and in its 802.1Q-tagged form (a VLAN virtual adapter, dsg's `Dante70`).
+    let ptp_filter = crate::frame::vlan_aware_filter(
+        "udp and dst host 224.0.1.129 and (dst port 319 or dst port 320)",
+    );
+    let capture = open_hiprec_capture(&device, &ptp_filter)?;
 
     Ok(PtpCapture {
         capture,

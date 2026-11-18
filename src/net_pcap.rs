@@ -110,7 +110,11 @@ impl PcapNtpTransport {
         let device = find_device_for_ntp_server(server_ip)?;
         let local_ip = device_ipv4(&device)?;
 
-        let filter = format!("udp and host {} and port {}", server_ip, NTP_PORT);
+        // dsync#200: also in the 802.1Q-tagged form a VLAN virtual adapter delivers.
+        let filter = dsync_ptp::frame::vlan_aware_filter(&format!(
+            "udp and host {} and port {}",
+            server_ip, NTP_PORT
+        ));
         let capture = open_hiprec_capture(&device, &filter)?;
 
         // A plain socket only to SEND the request -- Npcap sees the packet
