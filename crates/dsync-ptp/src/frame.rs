@@ -14,23 +14,33 @@ use std::net::Ipv4Addr;
 /// payload.
 pub fn parse_udp_frame(data: &[u8]) -> Option<(Ipv4Addr, u16, &[u8])> {
     const ETH_IP_UDP_HEADER: usize = 42;
-    if data.len() < ETH_IP_UDP_HEADER {
+    // dsync#200: Npcap on a Windows VLAN virtual adapter (a Realtek "Virtual Adapter" with a
+    // VLAN id) hands over every frame with its 802.1Q tag; skip one tag before the EtherType.
+    let tag = if data.len() >= 14 && data[12] == 0x81 && data[13] == 0x00 {
+        4
+    } else {
+        0
+    };
+    if data.len() < ETH_IP_UDP_HEADER + tag {
         return None;
     }
-    if data[12] != 0x08 || data[13] != 0x00 {
+    let d = &data[tag..];
+    if d[12] != 0x08 || d[13] != 0x00 {
         return None; // not IPv4
     }
-    if data[23] != 17 {
+    if d[23] != 17 {
         return None; // not UDP
     }
-    let src_ip = Ipv4Addr::new(data[26], data[27], data[28], data[29]);
-    let dst_port = ((data[36] as u16) << 8) | data[37] as u16;
-    Some((src_ip, dst_port, &data[ETH_IP_UDP_HEADER..]))
+    let src_ip = Ipv4Addr::new(d[26], d[27], d[28], d[29]);
+    let dst_port = ((d[36] as u16) << 8) | d[37] as u16;
+    Some((src_ip, dst_port, &d[ETH_IP_UDP_HEADER..]))
 }
 
 /// dsync#200: a BPF filter that also matches its frames when they carry one 802.1Q tag.
+/// The BPF `vlan` keyword shifts the offsets of every primitive after it by the 4-byte tag,
+/// so the untagged form is tried first and the tagged one second (the libpcap idiom).
 pub fn vlan_aware_filter(filter: &str) -> String {
-    filter.to_string()
+    format!("({filter}) or (vlan and {filter})")
 }
 
 #[cfg(test)]
