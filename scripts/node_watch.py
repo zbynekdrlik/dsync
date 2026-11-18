@@ -64,7 +64,7 @@ ROSTER = (
     Node("fohabl", "fohabl.lan"),
     Node("companion-snv", "companion-snv.lan"),
     Node("iemmixer", "iem-gen3.lan"),  # #183: the FOH rack's gen3 box (dstack #260)
-    Node("dsg", "dsg.lan"),  # dasio's test PC: static lease 10.77.7.196 + DNS name (network#10, #198)
+    Node("dsg", "dsg.lan"),  # dasio's PC, at PP since 18.11 (SoundGrid<->Dante bridge): dsg.lan -> 10.76.8.118 (#198, #202)
     Node("alex-nb", "10.77.7.109", travel=True),
     Node("resolume-pp", "resolume-pp.lan", travel=True),
     Node("linux-pp", "linux-pp.lan"),  # #202: PP's presenter (companion-snv's twin), dsync since 18.11
