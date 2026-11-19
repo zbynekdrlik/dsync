@@ -525,6 +525,39 @@ mod tests {
         assert_eq!(net.factory.resolves, 0, "the resolver was not needed");
     }
 
+    /// dsync#206: a startup whose open failed starts UNOPENED: nothing is received and nothing is
+    /// open; the first re-join opens the pair on the startup interface (it carries the address)
+    /// through the same `open_pair`, and both sockets then receive.
+    #[test]
+    fn an_unopened_start_receives_nothing_and_the_first_rejoin_opens_it_206() {
+        let mut script = ScriptedSockets::default();
+        script.carrying.insert(ETH0, "eth0".to_string());
+        let mut net = UdpPtpNetwork::unopened(script, "eth0".to_string(), ETH0);
+        assert_eq!(net.interface(), None, "no sockets yet");
+        assert!(net.recv_packet().expect("no error").is_none());
+        assert!(net.factory.opened.is_empty());
+
+        let out = net.rejoin().expect("the first re-join opens it");
+        assert_eq!(
+            out,
+            RejoinOutcome {
+                iface: "eth0".to_string(),
+                ip: ETH0,
+                changed: false
+            },
+            "the startup interface, no change claimed"
+        );
+        assert_eq!(net.interface(), Some(("eth0", ETH0)));
+        let opened = addrs(&net);
+        assert_eq!(opened.len(), 2, "the event and the general socket");
+        for to in opened {
+            assert_eq!(
+                round_trip(&mut net, to, b"sync").as_deref(),
+                Some(&b"sync"[..])
+            );
+        }
+    }
+
     #[test]
     fn with_its_address_nowhere_the_re_join_falls_back_to_the_startup_resolver_112() {
         // A DHCP move: the old address is gone from every interface.
