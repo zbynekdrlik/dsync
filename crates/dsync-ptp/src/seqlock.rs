@@ -183,10 +183,15 @@ mod tests {
     fn concurrent_readers_never_see_a_torn_write() {
         let (lock, mut w) = SeqLock::new([0u64; 8]);
         let stop = Arc::new(AtomicBool::new(false));
+        // Readers that have completed at least one read. The writer keeps writing until every
+        // reader has, so a reader the scheduler starts late (a loaded CI runner, the 1.35.12
+        // Windows release build) still reads WHILE writes happen instead of after the stop.
+        let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let readers: Vec<_> = (0..3)
             .map(|_| {
                 let lock = Arc::clone(&lock);
                 let stop = Arc::clone(&stop);
+                let started = Arc::clone(&started);
                 std::thread::spawn(move || {
                     let mut reads = 0u64;
                     let mut last = 0u64;
@@ -199,19 +204,24 @@ mod tests {
                         );
                         assert!(words[0] >= last, "a read went back in time");
                         last = words[0];
+                        if reads == 0 {
+                            started.fetch_add(1, Ordering::Relaxed);
+                        }
                         reads += 1;
                     }
                     reads
                 })
             })
             .collect();
-        for i in 1..=200_000u64 {
+        let mut i = 0u64;
+        while i < 200_000 || started.load(Ordering::Relaxed) < 3 {
+            i += 1;
             w.write([i; 8]);
         }
         stop.store(true, Ordering::Relaxed);
         for r in readers {
             assert!(r.join().unwrap() > 0);
         }
-        assert_eq!(lock.read(), [200_000; 8]);
+        assert_eq!(lock.read(), [i; 8]);
     }
 }
