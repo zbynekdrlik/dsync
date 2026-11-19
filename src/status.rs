@@ -626,7 +626,17 @@ pub struct SyncStatus {
     /// pre-1.35 blob.
     #[serde(default)]
     pub version: String,
+
+    /// dsync#205: the version of this `/status` CONTRACT (not the release: that is `version`).
+    /// [`STATUS_SCHEMA`] on every live node; `0` in a pre-1.35.15 blob, which has no field. The
+    /// contract is additive only, so new fields do not move it; it moves only if a field ever
+    /// changes its meaning. A monitor reads `schema >= 1` as "the README's monitor fields hold".
+    #[serde(default)]
+    pub schema: u32,
 }
+
+/// dsync#205: the `/status` contract version published in [`SyncStatus::schema`].
+pub const STATUS_SCHEMA: u32 = 1;
 
 fn default_clock_alarm_interval_s() -> u64 {
     60
@@ -766,6 +776,8 @@ impl Default for SyncStatus {
             fallback_epoch: None,
             // #179: the publishing process's own version
             version: env!("CARGO_PKG_VERSION").to_string(),
+            // #205: the contract version
+            schema: STATUS_SCHEMA,
         }
     }
 }

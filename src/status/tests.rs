@@ -912,3 +912,27 @@ fn test_sync_status_phase_excursion_fields_are_additive_204() {
     assert_eq!(back.ptp_phase_excursion_boosts, 3);
     assert_eq!(back.ptp_phase_gain, Some(2.5));
 }
+
+/// dsync#205: `/status` carries its contract version. A live node publishes `"schema":1`; a
+/// pre-1.35.15 blob (a literal v1.35.14 `/status` subset, no `schema` key) still parses, as `0`.
+#[test]
+fn status_reports_the_contract_schema_205() {
+    let status = SyncStatus::default();
+    assert_eq!(STATUS_SCHEMA, 1);
+    assert_eq!(status.schema, STATUS_SCHEMA);
+    let json: serde_json::Value = serde_json::from_slice(&status.to_json_bytes().unwrap()).unwrap();
+    assert_eq!(json["schema"], 1);
+
+    let old_json = r#"{"offset_ns":-151700000,"drift_ppm":-6.1,"gm_uuid":[0,29,193,7,165,4],
+        "gm_source_ip":"10.77.7.106","settled":true,"updated_ts":1795000000,"is_locked":true,
+        "smoothed_rate_ppm":0.01,"ntp_offset_us":12,"mode":"LOCK","ntp_failed":false,
+        "accumulated_phase_us":0.0,"ptp_phase_locked":true,"ptp_phase_error_us":1.5,
+        "last_ptp_rx_age_s":0,"ptp_rx_pps":16.0,"fallback_role":"off",
+        "ptp_interface_ip":"10.77.9.202","version":"1.35.14"}"#;
+    let restored: SyncStatus =
+        serde_json::from_str(old_json).expect("a pre-1.35.15 blob must still deserialize");
+    assert_eq!(restored.schema, 0);
+    assert_eq!(restored.version, "1.35.14");
+    assert_eq!(restored.mode, "LOCK");
+    assert_eq!(restored.ptp_phase_error_us, Some(1.5));
+}
