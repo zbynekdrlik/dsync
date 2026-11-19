@@ -110,17 +110,42 @@ Since 1.25 (#147) the state dir is `/etc/dsync` (`C:\ProgramData\dsync`). A box 
 1.25 keeps its old state dir in place until a deployer renames it; `/status.state_dir` names the one
 in use (`src/state_dir.rs`).
 
-`/status` on port 8898 (JSON):
-- `is_locked` / `mode`: the phase lock within 50 µs (DSYX [41]).
-- `ptp_phase_error_us`: the lock quality, ~0 when locked.
-- `offset_ns`: the raw offset to the grandmaster's PTPv1 time, which is the grandmaster's
-  device uptime. Its absolute value is arbitrary, the same on every box behind one grandmaster
-  port, and **not an error** (e.g. −151.7 ms on the SNV rig while locked).
-- `version`: the running build (since 1.35).
-
 Log files:
 - Linux: `/var/log/dsync/dsync.log`
 - Windows: `C:\ProgramData\dsync\dsync.log`
+
+## Monitoring `/status`
+
+Every node serves its clock state as JSON on `http://<node>:8898/status` (the port is
+`http_status.port` in `config.json`). The contract is **additive only**: fields are never renamed
+or removed, new fields are added, and a reader must ignore fields it does not know.
+
+`schema` is the contract version (since 1.35.15). It is `1` today and moves only if a field below
+ever changes its meaning; adding fields does not move it. A reply without `schema` comes from a
+build older than 1.35.15.
+
+The stable fields a monitor reads:
+
+| Field | Type / unit | Meaning |
+|---|---|---|
+| `version` | string | The running dsync release. Absent before 1.35. Not the contract version. |
+| `schema` | integer | The `/status` contract version, `1`. Absent before 1.35.15. |
+| `mode` | string | `"ACQ"` acquiring, `"PROD"`, `"LOCK"`, `"NANO"` locked, `"NTP-only"` (no PTP packet for 10 s), `"FALLBACK"` (on the dsync fallback time source). Only `LOCK` and `NANO` are healthy PTP states. |
+| `is_locked` | bool | The published lock. Under the default `ptp_phase_lock` discipline: the phase lock within 50 µs (DSYX [41]; it drops beyond 150 µs). `false` while PTP is stale. |
+| `ptp_phase_locked` | bool | The PTP phase lock owns the clock's frequency (engaged after acquisition). |
+| `ptp_phase_error_us` | number µs, or `null` | **The lock quality**: the phase error of the last PTP window against the fleet time line, ~0 when locked. `null` until anchored. |
+| `offset_ns` | integer ns | The raw offset to the grandmaster's PTPv1 time, which is the grandmaster's device UPTIME. **Not an error**: its absolute value is arbitrary and reads the same on every box behind one grandmaster port (e.g. −151.7 ms on the SNV rig while locked). Never alarm on it. |
+| `drift_ppm` | number ppm | The frequency correction applied to this box's clock now. |
+| `gm_uuid` | 6 bytes, or `null` | The grandmaster's clock UUID from the Sync messages (correct since 1.17). |
+| `gm_source_ip` | IPv4 string, or `null` | The address the grandmaster's Sync messages come from. |
+| `last_ptp_rx_age_s` | integer s, or `null` | Seconds since the last accepted PTP packet; `null` when none since start. Above 10 the node is PTP-stale. Read it before trusting any PTP field. |
+| `ptp_rx_pps` | number packets/s | Accepted PTP packets per second over the last 10 s (a grandmaster sends ~16). `0` while stale. |
+| `clock_alarm` | object `{active, since, reason}` | `active` true while the node is NOT PTP-locked to an allowed grandmaster; `since` the unix second the episode began (`null` when inactive); `reason` a human string (`""` when inactive). |
+| `fallback_role` | string, or `null` | The fallback time source role: `"off"`, `"candidate"`, `"follower"` or `"source"` (since 1.33). |
+| `ptp_interface_ip` | IPv4 string, or `null` | The IPv4 of the interface the PTP receive path joined; `null` until joined. |
+
+A healthy node: `mode` is `LOCK` or `NANO`, `is_locked` is true, `|ptp_phase_error_us|` is well
+under 50, `last_ptp_rx_age_s` is at most a few seconds and `clock_alarm.active` is false.
 
 ## License
 MIT

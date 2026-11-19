@@ -106,3 +106,12 @@ target triple, and `pcap`/`windows-service`/`tray-icon`'s actual linking is stil
 it is free, fast, and catches the large majority of mistakes (wrong types, missing `?`, borrow
 errors, wrong trait bounds) that would otherwise only surface after pushing and waiting for the
 `build (windows-latest)` CI job.
+
+## Windows warnings vs Windows clippy (dsync#210, v1.35.15)
+
+- `cargo check --target x86_64-pc-windows-gnu --all-targets` is warning-free since 1.35.15. Keep
+  it so: an import used only by `#[cfg(unix)]` code gets the same `#[cfg(unix)]` (`main.rs`'s
+  `std::fs::File`), never an `#[allow]`.
+- CI's Lint job runs clippy on Linux only. `cargo clippy --target x86_64-pc-windows-gnu -- -D
+  warnings -A dead_code` still reports 10 pre-existing lints in `src/net_winsock.rs` (e.g.
+  `type_complexity`). They are not gated today; do not read them as a regression of your change.
