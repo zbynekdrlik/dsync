@@ -113,6 +113,9 @@ on either platform skips `publish` — no release with a missing asset).
   out, the rate servo decoupled from the phase lock's own deviation, the boot fit and its once-only
   re-seed, the whole-controller closed-loop sim) → `.claude/rules/clock-discipline-and-testing.md`
   (auto-loads on `crates/dsync-ptp/src/lock_gate.rs` / `crates/dsync-ptp/src/ptp_phase_lock/boot_fit.rs` / `controller/date_sync/lock_*`)
+- The excursion boost (#204, v1.35.12 — a local-oscillator ramp boosts the PI; every adaptive gain
+  continuous AND decided on a quantity the gain does not change; the two-core pair test) →
+  `.claude/rules/clock-discipline-and-testing.md` (auto-loads on `ptp_phase_lock/excursion.rs`)
 - Cold-boot acquisition + the drift file (#142, v1.22 — a window without a previous offset is not a
   measurement; `drift.json` saved only while LOCKED, the seed judged against the SEED itself on the
   first 4 measured windows; ctrlc `termination` so a systemd stop runs the shutdown save) →
@@ -136,7 +139,8 @@ on either platform skips `publish` — no release with a missing asset).
   re-plugged NIC's new ifindex loses to tailscale/docker in the listing order), the one
   `ptp::is_time_message` predicate for liveness / `gm_source_ip` / the home, the pure
   10→30→60→120→300 s schedule, the finding that `D` is anchored once per process, the
-  per-socket-loopback-address test trick) →
+  per-socket-loopback-address test trick; #206: a failed FIRST open starts the loop unopened,
+  the re-join opens it) →
   `.claude/rules/ptp-liveness-rejoin.md` (auto-loads on its `paths:`)
 - PTPv1 wire format + the grandmaster identity (#129 — the 40-byte header proven on real PTPv1
   bytes in `crates/dsync-ptp/tests/fixtures/ptpv1/`, the Follow_Up offset that was right only by accident, the
