@@ -628,7 +628,12 @@ impl crate::traits::PtpNetwork for WinsockPtpNetwork {
             "Winsock PTP network re-joined on {} ({}) (rejoin, ports 319, 320)",
             iface, ip
         );
-        Ok(crate::traits::RejoinOutcome { iface, ip, changed })
+        Ok(crate::traits::RejoinOutcome {
+            iface,
+            ip,
+            changed,
+            pinned_name: None,
+        })
     }
 }
 

@@ -296,30 +296,16 @@ fn select_ptp_device(
     Ok((device, iface_ip))
 }
 
-/// dsync#131 — the capture device of the PINNED interface `name` and its IPv4: the adapter
-/// `name` (friendly name or GUID) must be usable now (`net::pinned_interface`), and the device is
-/// the one carrying that address. Otherwise a [`crate::net::PinnedInterfaceUnavailable`] (the
-/// controller names the NIC in the alarm) — never another device, never the subnet rule.
-fn select_pinned_device(name: &str) -> Result<(Device, Ipv4Addr)> {
-    use crate::net::{PinnedInterfaceUnavailable, PinnedLookup};
-    let ip = match crate::net::pinned_interface(name) {
-        PinnedLookup::Ready(ip) | PinnedLookup::LinkLocalOnly(ip) => ip,
-        PinnedLookup::NoIpv4 => {
-            return Err(PinnedInterfaceUnavailable {
-                name: name.to_string(),
-                missing: false,
-            }
-            .into())
-        }
-        PinnedLookup::Missing => {
-            return Err(PinnedInterfaceUnavailable {
-                name: name.to_string(),
-                missing: true,
-            }
-            .into())
-        }
-    };
-    select_pinned_device_at(name, ip)
+/// dsync#131 / #212 — the capture device of the PINNED interface `spec` (one name or a list),
+/// its IPv4 and the listed name chosen: a listed adapter (friendly name or GUID) must be usable
+/// now (`net::pinned_choice`, the order starting after `after`, the listed name joined now), and
+/// the device is the one carrying that address. Otherwise a
+/// [`crate::net::PinnedInterfaceUnavailable`] (the controller names the NIC / the list in the
+/// alarm) — never another device, never the subnet rule.
+fn select_pinned_device(spec: &str, after: Option<&str>) -> Result<(Device, Ipv4Addr, String)> {
+    let (name, ip) = crate::net::pinned_choice(spec, after).usable()?;
+    let (device, ip) = select_pinned_device_at(&name, ip)?;
+    Ok((device, ip, name))
 }
 
 /// dsync#131 — the Npcap device of the pinned interface `name` at the IPv4 the caller already
@@ -391,17 +377,21 @@ pub struct NpcapPtpNetwork {
     /// message, `ptp::is_time_message`, arrives on a later capture): the device that carries it
     /// comes before the name fallback in a re-join.
     home_ip: Ipv4Addr,
-    /// dsync#131: the pinned interface; when set, the startup and every re-join use only its
-    /// device (`select_pinned_device`).
+    /// dsync#131: the pinned interface (#212: one name or a canonical list); when set, the
+    /// startup and every re-join use only a listed device (`select_pinned_device`).
     pinned: Option<String>,
+    /// dsync#212: the listed name the capture is joined on now (`RejoinOutcome::pinned_name`);
+    /// a re-join of a list starts after it. `None` when not pinned.
+    pinned_joined: Option<String>,
     /// dsync#161: a failing read (the adapter vanished) is reported and retried at a bounded
     /// rate, not on every 1 ms poll.
     recv_gate: crate::recv_errors::RecvErrorGate,
 }
 
 impl NpcapPtpNetwork {
-    /// `pinned` (dsync#131): the pinned interface and the IPv4 the startup approved for it;
-    /// it alone selects the device, now and at every re-join.
+    /// `pinned` (dsync#131): the pinned interface (#212: the canonical list) and the IPv4 the
+    /// startup approved for it; it alone selects the device, now and at every re-join. When
+    /// pinned, `interface_name` is the LISTED name the startup chose (`net::pinned_choice`).
     pub fn new(
         interface_name: &str,
         gm_allowlist: &crate::gm_filter::GmAllowlist,
@@ -412,7 +402,7 @@ impl NpcapPtpNetwork {
             interface_name, pinned
         );
         let (device, ip) = match &pinned {
-            Some((name, ip)) => select_pinned_device_at(name, *ip)?,
+            Some((_, ip)) => select_pinned_device_at(interface_name, *ip)?,
             None => select_ptp_device(interface_name, gm_allowlist, None)?,
         };
         let open = open_ptp_capture(device, ip)?;
@@ -434,6 +424,7 @@ impl NpcapPtpNetwork {
             gm_allowlist: gm_allowlist.clone(),
             last_join,
             home_ip: ip,
+            pinned_joined: pinned.as_ref().map(|_| interface_name.to_string()),
             pinned: pinned.map(|(name, _)| name),
             recv_gate: crate::recv_errors::RecvErrorGate::new(),
         })
@@ -460,6 +451,7 @@ impl NpcapPtpNetwork {
             last_join: (String::new(), ip),
             home_ip: ip,
             pinned: None,
+            pinned_joined: None,
             recv_gate: crate::recv_errors::RecvErrorGate::new(),
         }
     }
@@ -577,9 +569,9 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
     fn rejoin(&mut self) -> Result<crate::network::RejoinOutcome> {
         // dsync#131: a pinned interface alone selects the device; not usable now = a typed
         // error before the old capture is dropped.
-        if let Some(name) = self.pinned.clone() {
-            let (device, ip) = select_pinned_device(&name)?;
-            return self.reopen(device, ip);
+        if let Some(spec) = self.pinned.clone() {
+            let (device, ip, name) = select_pinned_device(&spec, self.pinned_joined.as_deref())?;
+            return self.reopen(device, ip, Some(name));
         }
         // A replaced NIC is another adapter under another name, so the name-based fallback
         // re-reads the default interface; the old hint stays when none resolves.
@@ -602,14 +594,20 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
         }
         // Select BEFORE dropping anything: a selection failure keeps the old capture.
         let (device, ip) = select_ptp_device(&self.hint, &self.gm_allowlist, Some(self.home_ip))?;
-        self.reopen(device, ip)
+        self.reopen(device, ip, None)
     }
 }
 
 impl NpcapPtpNetwork {
     /// Drop the old (possibly dead) handle and its IGMP membership, and open on the selected
     /// device. When the new capture cannot open, there is none until the next attempt.
-    fn reopen(&mut self, device: Device, ip: Ipv4Addr) -> Result<crate::network::RejoinOutcome> {
+    /// `pinned_name` (dsync#212): the listed name of a pinned re-join, `None` unpinned.
+    fn reopen(
+        &mut self,
+        device: Device,
+        ip: Ipv4Addr,
+        pinned_name: Option<String>,
+    ) -> Result<crate::network::RejoinOutcome> {
         self.open = None;
         let open = open_ptp_capture(device, ip)?;
         let (iface, ip) = (open.device_name.clone(), open.iface_ip);
@@ -621,7 +619,13 @@ impl NpcapPtpNetwork {
         self.open = Some(open);
         // dsync#161: a new handle is read at once.
         self.recv_gate = crate::recv_errors::RecvErrorGate::new();
-        Ok(crate::network::RejoinOutcome { iface, ip, changed })
+        self.pinned_joined = pinned_name.clone();
+        Ok(crate::network::RejoinOutcome {
+            iface,
+            ip,
+            changed,
+            pinned_name,
+        })
     }
 }
 

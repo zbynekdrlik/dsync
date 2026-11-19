@@ -77,7 +77,9 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(1);
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FollowerConfig {
     /// The interface the grandmaster is on (Linux: its name, `enp2s0`; Windows: the
-    /// adapter's friendly name or GUID). The follower uses only this NIC (dsync#131).
+    /// adapter's friendly name or GUID). The follower uses only this NIC (dsync#131). dsync#212:
+    /// or a comma-separated list (`"enp1s0,enp3s0"`): the listed NIC that has an IPv4, and a
+    /// stale re-join moves to the listed NIC the cable is in now; never an unlisted one.
     pub interface: String,
     /// Accept PTP only from these grandmaster sources (IPs, CIDRs, hostnames; empty = any), the
     /// service's `system.gm_allowlist`.
@@ -434,9 +436,19 @@ impl Receiver {
     }
 }
 
-/// The interface first (the most specific reason), then the platform's receive path.
-fn interface_ip(config: &FollowerConfig) -> std::result::Result<std::net::Ipv4Addr, FollowerError> {
-    pinned_ip(&config.interface).map_err(|cause| FollowerError::InterfaceNotFound {
+/// The pin of `config.interface` (dsync#212: the canonical list; a blank one stays as given,
+/// and no NIC answers to it).
+fn interface_spec(config: &FollowerConfig) -> String {
+    crate::net::canonical_interface_spec(&config.interface)
+        .unwrap_or_else(|| config.interface.clone())
+}
+
+/// The interface first (the most specific reason), then the platform's receive path: the
+/// listed name chosen (dsync#212) and its IPv4.
+fn interface_ip(
+    config: &FollowerConfig,
+) -> std::result::Result<(String, std::net::Ipv4Addr), FollowerError> {
+    pinned_ip(&interface_spec(config)).map_err(|cause| FollowerError::InterfaceNotFound {
         interface: config.interface.clone(),
         cause,
     })
@@ -447,40 +459,31 @@ fn open_network(
     config: &FollowerConfig,
 ) -> std::result::Result<impl PtpNetwork + Send + 'static, FollowerError> {
     use crate::net_linux::{KernelSockets, UdpPtpNetwork};
-    let ip = interface_ip(config)?;
-    let network = UdpPtpNetwork::join(KernelSockets, config.interface.clone(), ip)
-        .map_err(FollowerError::from_open)?;
-    Ok(network.pinned_to(Some(config.interface.clone())))
+    let (name, ip) = interface_ip(config)?;
+    let network = UdpPtpNetwork::join(KernelSockets, name, ip).map_err(FollowerError::from_open)?;
+    Ok(network.pinned_to(Some(interface_spec(config))))
 }
 
 #[cfg(windows)]
 fn open_network(
     config: &FollowerConfig,
 ) -> std::result::Result<impl PtpNetwork + Send + 'static, FollowerError> {
-    let ip = interface_ip(config)?;
+    let (name, ip) = interface_ip(config)?;
     crate::wpcap::available().map_err(|missing| FollowerError::NpcapMissing {
         detail: missing.detail,
     })?;
     crate::net_pcap::NpcapPtpNetwork::new(
-        &config.interface,
+        &name,
         &GmAllowlist::default(),
-        Some((config.interface.clone(), ip)),
+        Some((interface_spec(config), ip)),
     )
     .map_err(FollowerError::from_open)
 }
 
-/// The pinned interface's IPv4 now (a link-local one counts: an audio network segment without DHCP).
-fn pinned_ip(name: &str) -> Result<std::net::Ipv4Addr> {
-    use crate::net::PinnedLookup;
-    match crate::net::pinned_interface(name) {
-        PinnedLookup::Ready(ip) | PinnedLookup::LinkLocalOnly(ip) => Ok(ip),
-        other => Err(
-            match crate::net::PinnedInterfaceUnavailable::from_lookup(name, other) {
-                Some(unavailable) => unavailable.into(),
-                None => anyhow::anyhow!("interface {:?} has no usable IPv4", name),
-            },
-        ),
-    }
+/// The pinned interface's listed name and IPv4 now (a link-local one counts: an audio network
+/// segment without DHCP).
+fn pinned_ip(spec: &str) -> Result<(String, std::net::Ipv4Addr)> {
+    Ok(crate::net::pinned_choice(spec, None).usable()?)
 }
 
 #[cfg(test)]

@@ -51,11 +51,17 @@ pub struct SystemConfig {
     /// IPv4 and never joins another one (startup and every PTP re-join); a missing NIC raises the
     /// clock alarm with its name. `--interface` overrides it ([`SystemConfig::pinned_interface`]).
     ///
+    /// dsync#212: or a LIST, as a string with commas (`"enp1s0,enp3s0"`) or a JSON array
+    /// (`["enp1s0", "enp3s0"]`): dsync joins the listed NIC that carries an IPv4 (a cambox's
+    /// cable can be in either onboard port) and follows it to another listed NIC on the stale
+    /// re-join; never an unlisted one. Held in the canonical form `a,b` (trimmed, blanks
+    /// dropped), so a NIC name containing a comma cannot be pinned.
+    ///
     /// Unset (`null`, `""`, absent — every pre-1.21 file): the previous selection, with a startup
     /// warning that the interface is not pinned. A non-string value fails the parse, so the
     /// last-good config runs, loudly (dsync#116): a pin that silently became "unpinned" would
     /// bring back exactly the incident it exists for.
-    #[serde(default, deserialize_with = "optional_name")]
+    #[serde(default, deserialize_with = "optional_interface_list")]
     pub interface: Option<String>,
 
     /// dsync#97 — the phase-slew feature switch (default OFF, per-box canary opt-in).
@@ -120,11 +126,10 @@ pub struct SystemConfig {
 
 impl SystemConfig {
     /// dsync#131 — the PTP interface to pin: `--interface` (`cli`) over `system.interface`;
-    /// blank counts as unset.
+    /// blank counts as unset. dsync#212: either may be a comma-separated list; the result is its
+    /// canonical form (`dsync::net::canonical_interface_spec`).
     pub fn pinned_interface(&self, cli: Option<&str>) -> Option<String> {
-        cli.map(str::trim)
-            .filter(|n| !n.is_empty())
-            .map(str::to_string)
+        cli.and_then(crate::net::canonical_interface_spec)
             .or_else(|| self.interface.clone())
     }
 }
@@ -153,14 +158,23 @@ where
     })
 }
 
-/// dsync#131 — an optional interface name: trimmed, blank = `None`, `null` = `None`.
-fn optional_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+/// dsync#131 / #212 — an optional interface pin: one name or a list (a string with commas, or an
+/// array of strings), canonical `a,b`; blank / empty / `null` = `None`, anything else fails.
+fn optional_interface_list<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    Ok(Option::<String>::deserialize(deserializer)?
-        .map(|n| n.trim().to_string())
-        .filter(|n| !n.is_empty()))
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<Raw>::deserialize(deserializer)? {
+        None => None,
+        Some(Raw::One(spec)) => crate::net::canonical_interface_spec(&spec),
+        Some(Raw::Many(names)) => crate::net::canonical_interface_spec(&names.join(",")),
+    })
 }
 
 /// The `system.clock_discipline` value that selects the new default.

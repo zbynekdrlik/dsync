@@ -345,6 +345,22 @@ fn a_missing_interface_is_interface_not_found_naming_it_136() {
     }
 }
 
+/// dsync#212: a list where no listed NIC exists is `InterfaceNotFound` naming the list as given.
+#[test]
+fn a_list_of_missing_interfaces_is_interface_not_found_naming_it_212() {
+    let spec = "dsync-no-such-nic0, dsync-no-such-nic1";
+    match Follower::start(FollowerConfig::on_interface(spec)) {
+        Err(FollowerError::InterfaceNotFound { interface, cause }) => {
+            assert_eq!(interface, spec);
+            assert!(
+                format!("{cause:#}").contains("dsync-no-such-nic0,dsync-no-such-nic1"),
+                "{cause:#}"
+            );
+        }
+        other => panic!("expected InterfaceNotFound, got {:?}", other.err()),
+    }
+}
+
 #[test]
 fn a_refused_bind_anywhere_in_the_chain_is_permission_denied_136() {
     let io = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
@@ -405,6 +421,20 @@ fn binding_the_ptp_port_without_the_right_is_permission_denied_136() {
             Err(FollowerError::PermissionDenied { .. }) => {}
             other => panic!("expected PermissionDenied, got {:?}", other.err()),
         }
+    }
+}
+
+/// dsync#212 (Linux): a list whose FIRST name no NIC has still reaches the listed NIC that
+/// has an IPv4: past the interface judgement, so the start is the bind's verdict, never
+/// `InterfaceNotFound`.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_list_reaches_the_listed_nic_that_has_an_ipv4_212() {
+    let (name, _) = crate::net::get_default_interface().expect("an IPv4 NIC");
+    let spec = format!("dsync-no-such-nic0,{name}");
+    match Follower::start(FollowerConfig::on_interface(spec)) {
+        Ok(_) | Err(FollowerError::PermissionDenied { .. }) => {}
+        other => panic!("expected a start or PermissionDenied, got {:?}", other.err()),
     }
 }
 

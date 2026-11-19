@@ -821,6 +821,43 @@ fn the_interface_and_config_state_fields_are_additive_131_116() {
     assert_eq!(back.config_state, st.config_state);
 }
 
+/// dsync#212: the interface-list fields are additive — a 1.35.15 blob deserializes with them
+/// `null`, and they serialize as a list and a string.
+#[test]
+fn the_interface_list_fields_are_additive_212() {
+    let pre = r#"{"offset_ns":0,"drift_ppm":0.0,"gm_uuid":null,"gm_source_ip":null,
+        "settled":true,"updated_ts":1795600000,"is_locked":true,"smoothed_rate_ppm":0.1,
+        "ntp_offset_us":0,"mode":"LOCK","ntp_failed":false,"accumulated_phase_us":0.0,
+        "ntp_spread_us":0,"ntp_sample_count":0,"pcap_ntp_active":false,"schema":1,
+        "ptp_interface_configured":"enp3s0","ptp_interface":"enp3s0",
+        "ptp_interface_ip":"10.77.9.133"}"#;
+    let old: SyncStatus = serde_json::from_str(pre).expect("a 1.35.15 blob still deserializes");
+    assert_eq!(old.interfaces_configured, None);
+    assert_eq!(old.ptp_interface_name, None);
+    assert_eq!(old.ptp_interface_configured.as_deref(), Some("enp3s0"));
+
+    let st = SyncStatus {
+        ptp_interface_configured: Some("enp1s0,enp3s0".to_string()),
+        interfaces_configured: Some(vec!["enp1s0".to_string(), "enp3s0".to_string()]),
+        ptp_interface_name: Some("enp1s0".to_string()),
+        ..SyncStatus::default()
+    };
+    let v = serde_json::to_value(&st).expect("json");
+    assert_eq!(
+        v["interfaces_configured"],
+        serde_json::json!(["enp1s0", "enp3s0"])
+    );
+    assert_eq!(v["ptp_interface_name"], "enp1s0");
+    assert_eq!(v["ptp_interface_configured"], "enp1s0,enp3s0");
+    assert_eq!(
+        v["schema"], 1,
+        "additive: the contract version does not move"
+    );
+    let fresh = serde_json::to_value(SyncStatus::default()).expect("json");
+    assert!(fresh["interfaces_configured"].is_null());
+    assert!(fresh["ptp_interface_name"].is_null());
+}
+
 /// dsync#142: the frequency-seed fields are additive — a 1.21 blob deserializes with them
 /// `null`, and they round-trip.
 #[test]

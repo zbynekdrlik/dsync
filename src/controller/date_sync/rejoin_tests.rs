@@ -51,6 +51,7 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
                 iface: "enx002427159965".to_string(),
                 ip: std::net::Ipv4Addr::new(10, 77, 9, 202),
                 changed: false,
+                pinned_name: None,
             })
         });
         c.note_allowed_ptp_packet(Instant::now());

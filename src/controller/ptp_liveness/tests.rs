@@ -40,6 +40,7 @@ fn eth0() -> RejoinOutcome {
         iface: "enx002427159965".to_string(),
         ip: Ipv4Addr::new(10, 77, 9, 202),
         changed: false,
+        pinned_name: None,
     }
 }
 
@@ -618,6 +619,7 @@ fn dhcp_network(count: Arc<AtomicU32>) -> MockPtpNetwork {
             iface: "Ethernet".to_string(),
             ip: DHCP,
             changed: true,
+            pinned_name: None,
         })
     });
     net
@@ -780,4 +782,57 @@ fn a_receive_path_not_open_at_start_is_named_and_opened_by_the_rejoin_206() {
     assert!(!reason.contains("not open"), "joined: {reason:?}");
     let st = st.read().expect("status");
     assert_eq!(st.ptp_interface.as_deref(), Some("enx002427159965"));
+}
+
+/// dsync#212 — a pinned list is published as a list, the joined listed name with it, and a
+/// re-join onto the other listed port moves both `ptp_interface` and `ptp_interface_name`.
+#[test]
+fn a_pinned_list_and_the_listed_nic_joined_are_published_212() {
+    let mut net = MockPtpNetwork::new();
+    net.expect_rejoin().returning(|| {
+        Ok(RejoinOutcome {
+            iface: "enp1s0".to_string(),
+            ip: Ipv4Addr::new(10, 77, 9, 133),
+            changed: true,
+            pinned_name: Some("enp1s0".to_string()),
+        })
+    });
+    let (mut c, st) = controller(net);
+    c.set_ptp_interface(
+        Some("enp1s0,enp3s0".to_string()),
+        "enp3s0",
+        Ipv4Addr::new(10, 77, 9, 133),
+    );
+    c.set_ptp_interface_name(Some("enp3s0".to_string()));
+    {
+        let st = st.read().expect("status");
+        assert_eq!(
+            st.ptp_interface_configured.as_deref(),
+            Some("enp1s0,enp3s0")
+        );
+        assert_eq!(
+            st.interfaces_configured,
+            Some(vec!["enp1s0".to_string(), "enp3s0".to_string()])
+        );
+        assert_eq!(st.ptp_interface_name.as_deref(), Some("enp3s0"));
+    }
+    // The cable moved: PTP goes stale on enp3s0 and the re-join lands on enp1s0.
+    let t0 = Instant::now();
+    c.note_allowed_ptp_packet(t0);
+    c.maybe_rejoin_ptp(t0 + ms(10_500));
+    let st = st.read().expect("status");
+    assert_eq!(st.ptp_interface.as_deref(), Some("enp1s0"));
+    assert_eq!(st.ptp_interface_name.as_deref(), Some("enp1s0"));
+    assert_eq!(st.ptp_interface_ip.as_deref(), Some("10.77.9.133"));
+}
+
+/// dsync#212 — an unpinned node publishes no list and no listed name.
+#[test]
+fn an_unpinned_node_publishes_no_interface_list_212() {
+    let (mut c, st) = controller(MockPtpNetwork::new());
+    c.set_ptp_interface(None, "eth0", Ipv4Addr::new(10, 77, 9, 1));
+    c.set_ptp_interface_name(None);
+    let st = st.read().expect("status");
+    assert_eq!(st.interfaces_configured, None);
+    assert_eq!(st.ptp_interface_name, None);
 }

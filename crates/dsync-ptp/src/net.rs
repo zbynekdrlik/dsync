@@ -6,6 +6,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, UdpSocket};
 use nix::sys::socket::{setsockopt, sockopt};
 
 mod pinned_list;
+pub use pinned_list::{
+    canonical_interface_spec, choose_pinned, interface_names, is_interface_list, PinnedChoice,
+};
 
 pub fn get_default_interface() -> Result<(String, Ipv4Addr)> {
     let ifaces = if_addrs::get_if_addrs()?;
@@ -71,11 +74,28 @@ pub struct NicSnapshot {
     pub ipv4: Vec<Ipv4Addr>,
 }
 
-/// dsync#131 — classify the pinned NIC `name` among `nics` (pure). A routable IPv4 wins over
-/// a link-local one; loopback and 0.0.0.0 never count. Names compare exactly on Linux; on
-/// Windows ([`classify_pinned`]) case-insensitively, and a GUID matches with or without its
-/// braces or the Npcap `\Device\NPF_` prefix.
-pub fn classify_pinned_with(name: &str, nics: &[NicSnapshot], windows_names: bool) -> PinnedLookup {
+/// dsync#131 / #212 — classify the pin `spec` (one name, or a list: [`choose_pinned`]) among
+/// `nics` (pure). A routable IPv4 wins over a link-local one; loopback and 0.0.0.0 never count.
+/// Names compare exactly on Linux; on Windows ([`classify_pinned`]) case-insensitively, and a
+/// GUID matches with or without its braces or the Npcap `\Device\NPF_` prefix.
+pub fn classify_pinned_with(spec: &str, nics: &[NicSnapshot], windows_names: bool) -> PinnedLookup {
+    choose_pinned_with(spec, None, nics, windows_names).lookup
+}
+
+/// dsync#212 — [`choose_pinned`] among `nics` (pure): which listed NIC, and what it is.
+pub fn choose_pinned_with(
+    spec: &str,
+    after: Option<&str>,
+    nics: &[NicSnapshot],
+    windows_names: bool,
+) -> PinnedChoice {
+    choose_pinned(spec, after, |name| {
+        classify_one_with(name, nics, windows_names)
+    })
+}
+
+/// One pinned NIC `name` among `nics` (pure).
+fn classify_one_with(name: &str, nics: &[NicSnapshot], windows_names: bool) -> PinnedLookup {
     let matches = |candidate: &str| {
         if windows_names {
             normalize_windows_name(candidate).eq_ignore_ascii_case(normalize_windows_name(name))
@@ -133,10 +153,10 @@ pub fn usable_pinned_ip(lookup: PinnedLookup, waited: std::time::Duration) -> Op
     }
 }
 
-/// The NICs of this host now, for [`classify_pinned`] (Linux: `getifaddrs` plus `name` itself
-/// when the kernel knows it but it carries no address at all).
+/// The NICs of this host now, for [`classify_pinned`] (Linux: `getifaddrs` plus each listed
+/// name of `spec` the kernel knows but that carries no address at all).
 #[cfg(not(windows))]
-fn nic_snapshots(name: &str) -> Vec<NicSnapshot> {
+fn nic_snapshots(spec: &str) -> Vec<NicSnapshot> {
     let mut nics: Vec<NicSnapshot> = Vec::new();
     match if_addrs::get_if_addrs() {
         Ok(ifaces) => {
@@ -158,11 +178,13 @@ fn nic_snapshots(name: &str) -> Vec<NicSnapshot> {
         }
         Err(e) => log::warn!("[NET] cannot list the interfaces: {}", e),
     }
-    if !nics.iter().any(|n| n.names[0] == name) && nix::net::if_::if_nametoindex(name).is_ok() {
-        nics.push(NicSnapshot {
-            names: vec![name.to_string()],
-            ipv4: Vec::new(),
-        });
+    for name in interface_names(spec) {
+        if !nics.iter().any(|n| n.names[0] == name) && nix::net::if_::if_nametoindex(name).is_ok() {
+            nics.push(NicSnapshot {
+                names: vec![name.to_string()],
+                ipv4: Vec::new(),
+            });
+        }
     }
     nics
 }
@@ -170,7 +192,7 @@ fn nic_snapshots(name: &str) -> Vec<NicSnapshot> {
 /// The NICs of this host now, for [`classify_pinned`]: every adapter `GetAdaptersAddresses`
 /// lists (also one with no address), named by its friendly name and its GUID.
 #[cfg(windows)]
-fn nic_snapshots(_name: &str) -> Vec<NicSnapshot> {
+fn nic_snapshots(_spec: &str) -> Vec<NicSnapshot> {
     match windows_adapters() {
         Ok(nics) => nics,
         Err(e) => {
@@ -263,9 +285,15 @@ pub fn startup_wait_problem(
     }
 }
 
-/// dsync#131 — the pinned PTP interface `name` now.
-pub fn pinned_interface(name: &str) -> PinnedLookup {
-    classify_pinned(name, &nic_snapshots(name))
+/// dsync#131 / #212 — the pinned PTP interface `spec` (one name or a list) now.
+pub fn pinned_interface(spec: &str) -> PinnedLookup {
+    classify_pinned(spec, &nic_snapshots(spec))
+}
+
+/// dsync#212 — which listed NIC of the pin `spec` a join uses now ([`choose_pinned`]; `after`
+/// = the listed name joined now, `None` at startup).
+pub fn pinned_choice(spec: &str, after: Option<&str>) -> PinnedChoice {
+    choose_pinned_with(spec, after, &nic_snapshots(spec), cfg!(windows))
 }
 
 /// dsync#131 — the pinned PTP interface cannot be joined now. Returned (inside an `anyhow`
@@ -273,8 +301,10 @@ pub fn pinned_interface(name: &str) -> PinnedLookup {
 /// downcasts it into the clock alarm's reason and retries quickly while it lasts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinnedInterfaceUnavailable {
+    /// The pinned NIC, or the canonical list (`enp1s0,enp3s0`, #212) when none of it is usable.
     pub name: String,
-    /// `true` = no NIC of that name; `false` = it exists without a usable IPv4.
+    /// `true` = no NIC of that name (of a list: none exists); `false` = it exists without a
+    /// usable IPv4 (of a list: at least one exists, none has one).
     pub missing: bool,
 }
 
@@ -295,8 +325,18 @@ impl PinnedInterfaceUnavailable {
         }
     }
 
-    /// The clock alarm's reason, naming the NIC.
+    /// The clock alarm's reason, naming the NIC (or the whole list, #212).
     pub fn alarm_reason(&self) -> String {
+        if is_interface_list(&self.name) {
+            return if self.missing {
+                format!("none of the PTP interfaces {} exists", self.name)
+            } else {
+                format!(
+                    "none of the PTP interfaces {} has an IPv4 address",
+                    self.name
+                )
+            };
+        }
         if self.missing {
             format!("PTP interface {} is missing", self.name)
         } else {
@@ -307,6 +347,13 @@ impl PinnedInterfaceUnavailable {
 
 impl std::fmt::Display for PinnedInterfaceUnavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if is_interface_list(&self.name) {
+            return write!(
+                f,
+                "pinned list: {} -- waiting for one of them, never another NIC",
+                self.alarm_reason()
+            );
+        }
         write!(
             f,
             "pinned {} -- waiting for it, never another NIC",

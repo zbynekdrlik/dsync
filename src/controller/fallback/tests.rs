@@ -582,6 +582,7 @@ fn a_ptp_rejoin_reopens_the_fallback_socket_and_a_moved_address_renames_the_node
             iface: "enx0".to_string(),
             ip: moved,
             changed: true,
+            pinned_name: None,
         })
     });
     let (mut c, _old) = controller(net, MockSystemClock::new(), config(9));
@@ -625,6 +626,7 @@ fn a_failed_reopen_keeps_the_node_id_with_the_socket_in_use_129() {
             iface: "enx0".to_string(),
             ip: moved,
             changed: true,
+            pinned_name: None,
         })
     });
     let (mut c, transport) = controller(net, MockSystemClock::new(), config(9));

@@ -12,7 +12,7 @@
 //! new name); the kernel dropped the old socket's multicast membership with the old netdev, and
 //! before this nothing ever joined again (only a service restart recovered).
 
-use crate::net::{self, PinnedInterfaceUnavailable, PinnedLookup};
+use crate::net::{self, PinnedLookup};
 use crate::network::{PtpNetwork, RejoinOutcome};
 use crate::ptp::{PTP_EVENT_PORT, PTP_GENERAL_PORT};
 use anyhow::Result;
@@ -29,7 +29,8 @@ pub trait PtpSocketFactory {
     fn interface_carrying(&mut self, ip: Ipv4Addr) -> Option<String>;
     /// One non-blocking PTP socket bound to `port` and joined to the PTP multicast group on `ip`.
     fn open(&mut self, port: u16, ip: Ipv4Addr) -> Result<UdpSocket>;
-    /// dsync#131: what the pinned interface `name` is now.
+    /// dsync#131: what the pinned interface `name` is now (ONE name: a #212 list is walked by
+    /// the backend through `net::choose_pinned`).
     fn lookup_pinned(&mut self, name: &str) -> PinnedLookup;
 }
 
@@ -100,8 +101,9 @@ pub struct UdpPtpNetwork<F: PtpSocketFactory = KernelSockets> {
     /// message, `ptp::is_time_message`, arrives on a later join): the interface that carries it is
     /// where a re-join goes first.
     home_ip: Ipv4Addr,
-    /// dsync#131: the pinned interface (`system.interface` / `--interface`). When set, a
-    /// re-join joins only this NIC (no home address, no resolver) and waits for it otherwise.
+    /// dsync#131: the pinned interface (`system.interface` / `--interface`; #212: one name or
+    /// a canonical list `a,b`). When set, a re-join joins only a listed NIC (no home address, no
+    /// resolver) and waits for one otherwise.
     pinned: Option<String>,
 }
 
@@ -193,24 +195,17 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         // dsync#131: a PINNED interface is the only candidate. Not usable now (missing, no
         // IPv4) = a typed error BEFORE anything is closed: the controller names the NIC in the
         // clock alarm and looks again in seconds; another NIC is never joined.
+        //
+        // dsync#212: a pinned LIST takes the listed NIC that carries an IPv4 now, starting after
+        // the one joined last (`net::choose_pinned`): the cable moved to the other port.
         let (iface, ip) = match &self.pinned {
-            Some(name) => match self.factory.lookup_pinned(name) {
-                PinnedLookup::Ready(ip) | PinnedLookup::LinkLocalOnly(ip) => (name.clone(), ip),
-                PinnedLookup::NoIpv4 => {
-                    return Err(PinnedInterfaceUnavailable {
-                        name: name.clone(),
-                        missing: false,
-                    }
-                    .into())
-                }
-                PinnedLookup::Missing => {
-                    return Err(PinnedInterfaceUnavailable {
-                        name: name.clone(),
-                        missing: true,
-                    }
-                    .into())
-                }
-            },
+            Some(spec) => {
+                let factory = &mut self.factory;
+                let choice = net::choose_pinned(spec, Some(self.last_join.0.as_str()), |name| {
+                    factory.lookup_pinned(name)
+                });
+                choice.usable()?
+            }
             None => match self.factory.interface_carrying(self.home_ip) {
                 Some(name) => (name, self.home_ip),
                 None => self.factory.resolve_interface()?,
@@ -229,13 +224,20 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         let changed = self.last_join.0 != iface || self.last_join.1 != ip;
         self.joined = Some(joined);
         self.last_join = (iface.clone(), ip);
-        Ok(RejoinOutcome { iface, ip, changed })
+        let pinned_name = self.pinned.is_some().then(|| iface.clone());
+        Ok(RejoinOutcome {
+            iface,
+            ip,
+            changed,
+            pinned_name,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::PinnedInterfaceUnavailable;
     use anyhow::anyhow;
     use std::collections::{HashMap, VecDeque};
     use std::net::SocketAddr;
@@ -388,7 +390,8 @@ mod tests {
             RejoinOutcome {
                 iface: "eth1".to_string(),
                 ip: ETH1,
-                changed: true
+                changed: true,
+                pinned_name: None,
             }
         );
         assert_eq!(net.interface(), Some(("eth1", ETH1)));
@@ -428,7 +431,8 @@ mod tests {
             RejoinOutcome {
                 iface: "eth0".to_string(),
                 ip: ETH0,
-                changed: false
+                changed: false,
+                pinned_name: None,
             }
         );
         assert_eq!(net.factory.opened.len(), 4, "two new sockets all the same");
@@ -518,7 +522,8 @@ mod tests {
             RejoinOutcome {
                 iface: "enx002427159965".to_string(),
                 ip: ETH0,
-                changed: true
+                changed: true,
+                pinned_name: None,
             },
             "joined again where PTP was last received, under the NIC's new name"
         );
@@ -543,7 +548,8 @@ mod tests {
             RejoinOutcome {
                 iface: "eth0".to_string(),
                 ip: ETH0,
-                changed: false
+                changed: false,
+                pinned_name: None,
             },
             "the startup interface, no change claimed"
         );
@@ -693,7 +699,8 @@ mod tests {
             RejoinOutcome {
                 iface: "enp56s0".to_string(),
                 ip: new_rig,
-                changed: true
+                changed: true,
+                pinned_name: Some("enp56s0".to_string()),
             }
         );
         assert_eq!(

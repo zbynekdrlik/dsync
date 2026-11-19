@@ -354,3 +354,77 @@ fn a_nic_present_within_the_bound_leaves_ready_to_the_wall_193() {
         Some(ReadyReason::TimedOut(_))
     ));
 }
+
+/// dsync#212 — a pinned LIST: the startup waits until a LISTED NIC has an IPv4 (the alarm
+/// names the list meanwhile), opens on THAT listed name, and publishes the list.
+#[test]
+fn a_pinned_list_opens_on_the_listed_nic_that_got_the_ipv4_212() {
+    let status = RwLock::new(SyncStatus::default());
+    let running = AtomicBool::new(true);
+    let seconds = Cell::new(0u64);
+    let base = Instant::now();
+    let opened_on = RefCell::new(Vec::new());
+    let reasons = RefCell::new(Vec::new());
+    let spec = "enp1s0,enp3s0";
+    let wait = PinnedWait {
+        name: spec,
+        status: &status,
+        alarm_interval_s: 60,
+        config_problem: None,
+        notifier: Counting::default(),
+        running: &running,
+        waiting: &mut |_, _| {},
+    };
+    let opened = wait.run_list(
+        || {
+            // Neither port has an address for 12 s (past the grace), then the cable's port does.
+            let choice = if seconds.get() < 12 {
+                PinnedChoice {
+                    name: spec.to_string(),
+                    lookup: PinnedLookup::NoIpv4,
+                }
+            } else {
+                PinnedChoice {
+                    name: "enp3s0".to_string(),
+                    lookup: PinnedLookup::Ready(RIG),
+                }
+            };
+            reasons.borrow_mut().push(
+                status
+                    .read()
+                    .expect("status")
+                    .clock_alarm
+                    .active
+                    .then(|| status.read().expect("status").clock_alarm.reason.clone()),
+            );
+            choice
+        },
+        |name, ip| {
+            opened_on.borrow_mut().push((name.to_string(), ip));
+            Ok(5u32)
+        },
+        || seconds.set(seconds.get() + 1),
+        || base + Duration::from_secs(seconds.get()),
+    );
+    assert_eq!(opened, Some((5, "enp3s0".to_string(), RIG)));
+    assert_eq!(*opened_on.borrow(), vec![("enp3s0".to_string(), RIG)]);
+    let reasons = reasons.into_inner();
+    assert!(
+        reasons
+            .iter()
+            .flatten()
+            .all(|r| r.contains("none of the PTP interfaces enp1s0,enp3s0 has an IPv4 address")),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons.iter().any(Option::is_some),
+        "the alarm named the list past the grace"
+    );
+    let st = status.read().expect("status");
+    assert!(!st.clock_alarm.active, "cleared once open");
+    assert_eq!(st.ptp_interface_configured.as_deref(), Some(spec));
+    assert_eq!(
+        st.interfaces_configured,
+        Some(vec!["enp1s0".to_string(), "enp3s0".to_string()])
+    );
+}

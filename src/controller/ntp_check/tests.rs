@@ -416,6 +416,7 @@ fn the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136() {
             iface: "eth0".to_string(),
             ip: Ipv4Addr::new(192, 0, 2, 10),
             changed: false,
+            pinned_name: None,
         })
     });
     // The controller and its thread share one client, as in `main`.

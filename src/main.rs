@@ -122,14 +122,17 @@ type PlatformNetwork = net_pcap::NpcapPtpNetwork;
 struct StartupJoin {
     network: PlatformNetwork,
     pinned: Option<String>,
+    /// dsync#212: the listed name joined (`None` when not pinned).
+    pinned_name: Option<String>,
     iface: String,
     ip: std::net::Ipv4Addr,
     /// dsync#206: why the receive path is not open yet (`None` = open).
     not_open: Option<String>,
 }
 
-/// Open the PTP receive path for `iface_name` / `iface_ip` (the startup choice). `pinned`
-/// (dsync#131) is the only interface the backend may use from now on, re-joins included.
+/// Open the PTP receive path for `iface_name` / `iface_ip` (the startup choice; pinned: the
+/// listed name chosen). `pinned` (dsync#131; #212: the canonical list) names the only
+/// interfaces the backend may use from now on, re-joins included.
 fn open_ptp_network(
     iface_name: &str,
     iface_ip: std::net::Ipv4Addr,
@@ -293,6 +296,7 @@ fn join_ptp_network(
         return Ok(Some(StartupJoin {
             network,
             pinned: None,
+            pinned_name: None,
             iface,
             ip,
             not_open: opened.not_open,
@@ -301,7 +305,7 @@ fn join_ptp_network(
     info!(
         "[NET] PTP interface pinned to {} ({})",
         name,
-        if cli.is_some() {
+        if cli.and_then(net::canonical_interface_spec).is_some() {
             "--interface"
         } else {
             "system.interface"
@@ -323,15 +327,17 @@ fn join_ptp_network(
             )
         },
     };
-    let opened = wait.run(
-        || net::pinned_interface(&name),
-        |ip| open_ptp_network(&name, ip, Some(name.clone()), system_config),
+    // dsync#212: a list joins the listed NIC that carries an IPv4 now.
+    let opened = wait.run_list(
+        || net::pinned_choice(&name, None),
+        |chosen, ip| open_ptp_network(chosen, ip, Some(name.clone()), system_config),
         || thread::sleep(dsync::pinned_wait::LOOK_EVERY),
         Instant::now,
     );
-    Ok(opened.map(|((network, iface, ip), _)| StartupJoin {
+    Ok(opened.map(|((network, iface, ip), chosen, _)| StartupJoin {
         network,
         pinned: Some(name.clone()),
+        pinned_name: Some(chosen),
         iface,
         ip,
         not_open: None,
@@ -388,6 +394,9 @@ fn resolve_ntp_server(cli_ntp: &Option<String>, config: &Config) -> String {
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// The PTP interface to pin (dsync#131): one NIC name, or several separated by commas
+    /// (dsync#212, `enp1s0,enp3s0`: the listed NIC that has an IPv4). Overrides
+    /// `system.interface`.
     #[arg(short, long)]
     interface: Option<String>,
 
@@ -814,6 +823,7 @@ fn run_sync_loop(
     let Some(StartupJoin {
         network,
         pinned,
+        pinned_name,
         iface: joined_iface,
         ip: joined_ip,
         not_open,
@@ -854,6 +864,7 @@ fn run_sync_loop(
     controller.open_drift_file(&state_dir().drift_path());
     // dsync#131 / #116: /status names the pin, the joined interface and the config source.
     controller.set_ptp_interface(pinned, &joined_iface, joined_ip);
+    controller.set_ptp_interface_name(pinned_name);
     // dsync#206: no receive path yet: the alarm names why, the #112 re-join opens it.
     if let Some(why) = not_open {
         controller.note_ptp_not_open(&why);

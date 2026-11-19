@@ -345,6 +345,7 @@ mod tests {
             iface: "enx002427159965".to_string(),
             ip: Ipv4Addr::new(10, 77, 9, 202),
             changed: false,
+            pinned_name: None,
         };
         let mut st = RejoinStatus::default();
         st.record(1_790_000_000, Err("no suitable IPv4 interface"));

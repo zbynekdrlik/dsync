@@ -14,6 +14,10 @@ pub struct RejoinOutcome {
     pub ip: Ipv4Addr,
     /// The interface or the address differs from the previous successful join.
     pub changed: bool,
+    /// dsync#212: the PINNED name joined (one entry of the `system.interface` list, as the
+    /// operator wrote it); `None` when the node is not pinned. On Windows `iface` is the Npcap
+    /// device, so this is the only place the listed name is.
+    pub pinned_name: Option<String>,
 }
 
 #[cfg_attr(any(test, feature = "mock"), mockall::automock)]

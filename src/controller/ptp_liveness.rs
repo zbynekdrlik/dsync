@@ -295,6 +295,8 @@ where
         if let Ok(mut status) = self.status_shared.write() {
             status.ptp_interface = Some(outcome.iface.clone());
             status.ptp_interface_ip = Some(outcome.ip.to_string());
+            // dsync#212: the listed NIC it joined (the cable may have moved to another one).
+            status.ptp_interface_name = outcome.pinned_name.clone();
             status.rejoin = self.ptp_liveness.rejoin.clone();
         }
         self.fallback_rejoin(outcome.ip);
@@ -359,13 +361,27 @@ where
 
     /// dsync#131 — the startup join (`main`): the pin (or `None`) and where PTP joined.
     /// Published at once in `/status`; each successful re-join updates the joined interface.
+    /// dsync#212: the pin may be a canonical list (`a,b`), published as `interfaces_configured`.
     pub fn set_ptp_interface(&mut self, configured: Option<String>, iface: &str, ip: Ipv4Addr) {
         self.ptp_liveness.pinned = configured.clone();
         self.ptp_liveness.joined_ip = Some(ip);
         if let Ok(mut status) = self.status_shared.write() {
+            status.interfaces_configured = configured.as_deref().map(|spec| {
+                crate::net::interface_names(spec)
+                    .map(str::to_string)
+                    .collect()
+            });
             status.ptp_interface_configured = configured;
             status.ptp_interface = Some(iface.to_string());
             status.ptp_interface_ip = Some(ip.to_string());
+        }
+    }
+
+    /// dsync#212 — the listed name the startup joined (`None` when not pinned):
+    /// `/status.ptp_interface_name`. Each successful re-join updates it.
+    pub fn set_ptp_interface_name(&mut self, name: Option<String>) {
+        if let Ok(mut status) = self.status_shared.write() {
+            status.ptp_interface_name = name;
         }
     }
 
@@ -377,6 +393,7 @@ where
         if let Ok(mut status) = self.status_shared.write() {
             status.ptp_interface = None;
             status.ptp_interface_ip = None;
+            status.ptp_interface_name = None;
         }
     }
 

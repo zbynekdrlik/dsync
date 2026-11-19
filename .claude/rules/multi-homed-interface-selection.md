@@ -3,6 +3,8 @@ paths:
   - "src/pinned_wait.rs"
   - "src/boot_ready.rs"
   - "crates/dsync-ptp/src/net.rs"
+  - "crates/dsync-ptp/src/net/pinned_list.rs"
+  - "crates/dsync-ptp/src/net/pinned_list/tests.rs"
   - "crates/dsync-ptp/src/net_linux.rs"
   - "src/net_pcap.rs"
   - "crates/dsync-ptp/src/net_pcap.rs"
@@ -50,6 +52,29 @@ NIC (VBAN leg) got its /32 before the rig NIC at boot and was first in `getifadd
   successful join).
 - The old stance in this file ("do not add a config field pinning the interface — the allowlist
   IS the signal") is SUPERSEDED by the ruling. The subnet rule remains the unpinned fallback.
+
+## A pinned LIST (#212, v1.35.16, camera-box#1545)
+
+Every SNV/PP cambox has two onboard ports; with `enp3s0` pinned and the cable in `enp1s0`, cam3
+ran the 19.11.2026 service on NTP. `system.interface` / `--interface` may now name several NICs.
+
+- The pin stays ONE `Option<String>` everywhere, the CANONICAL spec `a,b` (split on `,`, trimmed,
+  blanks dropped: `net::canonical_interface_spec`). Config: a string with commas or a JSON array
+  of strings (`optional_interface_list`); a non-string element fails the parse (#116 last-good).
+  A single name is byte-identical to the #131 pin (same messages, same choice).
+- `net::choose_pinned(spec, after, look)` is the ONE decision: the first listed `Ready`, else the
+  first `LinkLocalOnly`, else `NoIpv4` (any listed NIC exists), else `Missing` — the last two name
+  the whole list. `after` = the listed name joined now: a re-join starts AFTER it (wraps), so two
+  ports that both keep an IPv4 (static address without carrier) alternate on each stale re-join
+  instead of re-joining the silent one for ever. Every consumer goes through it:
+  `net::pinned_choice` (startup `pinned_wait::run_list`, Npcap `select_pinned_device`, the
+  follower), the Linux re-join walks its `PtpSocketFactory::lookup_pinned(name)` per listed name.
+- A move = the #112 path: the old port goes silent, stale at 10 s, `rejoin` picks the listed NIC
+  that has the IPv4 now; none has one = `PinnedInterfaceUnavailable { name: "a,b" }`, the 5 s
+  cadence, alarm "none of the PTP interfaces a,b has an IPv4 address" / "... exists".
+- `RejoinOutcome::pinned_name` carries the listed name (on Windows `iface` is the Npcap device);
+  `/status.interfaces_configured` (list) + `ptp_interface_name` (additive, schema stays 1).
+- A NIC name containing a comma cannot be pinned (none on the fleet).
 
 On a DUAL-HOMED box (e.g. the stream box: rig `Ethernet` 10.77.9.204/24 + mbc `Ethernet 2`
 10.77.7.204/24) the PTP receive path must attach BOTH the pcap capture AND the IGMP `224.0.1.129`

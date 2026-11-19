@@ -118,3 +118,88 @@ fn the_alarm_names_the_whole_list_when_none_is_usable_212() {
         "PTP interface enp3s0 has no IPv4 address"
     );
 }
+
+#[test]
+fn the_spec_is_canonical_and_a_blank_one_is_unset_212() {
+    use crate::net::{canonical_interface_spec, is_interface_list};
+    assert_eq!(
+        canonical_interface_spec(" enp1s0 , enp3s0 ,").as_deref(),
+        Some("enp1s0,enp3s0")
+    );
+    assert_eq!(
+        canonical_interface_spec("Ethernet 2").as_deref(),
+        Some("Ethernet 2")
+    );
+    assert_eq!(canonical_interface_spec(" , "), None);
+    assert_eq!(canonical_interface_spec(""), None);
+    assert!(is_interface_list("enp1s0,enp3s0"));
+    assert!(!is_interface_list("enp3s0"));
+    assert!(!is_interface_list("enp3s0,"));
+}
+
+#[test]
+fn a_rejoin_starts_after_the_listed_nic_joined_now_212() {
+    use crate::net::{choose_pinned, PinnedChoice};
+    let other = Ipv4Addr::new(10, 77, 9, 134);
+    let both = |name: &str| match name {
+        "enp1s0" => PinnedLookup::Ready(other),
+        "enp3s0" => PinnedLookup::Ready(CAM),
+        _ => PinnedLookup::Missing,
+    };
+    let at = |after| choose_pinned("enp1s0,enp3s0", after, both);
+    let ready = |name: &str, ip| PinnedChoice {
+        name: name.to_string(),
+        lookup: PinnedLookup::Ready(ip),
+    };
+    assert_eq!(at(None), ready("enp1s0", other), "startup: the list order");
+    assert_eq!(at(Some("enp1s0")), ready("enp3s0", CAM));
+    assert_eq!(at(Some("enp3s0")), ready("enp1s0", other), "wraps round");
+    assert_eq!(
+        at(Some("wg0")),
+        ready("enp1s0", other),
+        "an unlisted 'after' is ignored"
+    );
+    // A single name: always that one, today's #131 pin.
+    assert_eq!(
+        choose_pinned("enp3s0", Some("enp3s0"), both),
+        ready("enp3s0", CAM)
+    );
+    // Only listed names are ever looked at.
+    let mut looked = Vec::new();
+    choose_pinned("enp1s0,enp3s0", None, |n| {
+        looked.push(n.to_string());
+        PinnedLookup::NoIpv4
+    });
+    assert_eq!(looked, vec!["enp1s0", "enp3s0"]);
+}
+
+#[test]
+fn an_unusable_choice_is_the_typed_error_naming_the_list_212() {
+    use crate::net::{choose_pinned, PinnedChoice};
+    let none = choose_pinned("enp1s0,enp3s0", None, |_| PinnedLookup::NoIpv4);
+    assert_eq!(
+        none.clone().usable(),
+        Err(PinnedInterfaceUnavailable {
+            name: "enp1s0,enp3s0".to_string(),
+            missing: false
+        })
+    );
+    let gone = choose_pinned("enp1s0,enp3s0", None, |_| PinnedLookup::Missing);
+    assert_eq!(gone.usable().map_err(|e| e.missing), Err(true));
+    let e: anyhow::Error = none.usable().expect_err("unusable").into();
+    assert_eq!(
+        e.to_string(),
+        "pinned list: none of the PTP interfaces enp1s0,enp3s0 has an IPv4 address -- \
+         waiting for one of them, never another NIC"
+    );
+    let ll = Ipv4Addr::new(169, 254, 1, 1);
+    assert_eq!(
+        PinnedChoice {
+            name: "enp1s0".to_string(),
+            lookup: PinnedLookup::LinkLocalOnly(ll),
+        }
+        .usable(),
+        Ok(("enp1s0".to_string(), ll)),
+        "a re-join takes the NIC's link-local address"
+    );
+}
