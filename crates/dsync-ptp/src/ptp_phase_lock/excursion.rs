@@ -90,6 +90,15 @@ pub const EXCURSION_HOLDOFF_TAPER_S: f64 = 10.0;
 /// ±20 µs window noise at 50.9 µs p99 (51.7 max, 200 runs); 3 s holds it at 49.8 max.
 pub const EXCURSION_RAMP_IN_S: f64 = 3.0;
 
+/// Grandmaster seconds a start is remembered (linearly forgotten): a running boost holds only
+/// while it remembers one. A genuine ramp keeps starting (its unlearned frequency, read with the
+/// gains in force, stays ≳ ρ / K_P); after a finished one the boost lets go within this plus
+/// the hold and the return even when window noise keeps `needed` up (the third review: under ×4
+/// on ±35-50 µs windows `g²·mean` alone read past the bound and held the boost for ever). Widening
+/// the bound by the measured noise instead also delayed every start (6 ppm / 2 min at ±10 µs,
+/// 1 s windows: 49 → 53 µs) and was dropped.
+pub const EXCURSION_START_MEMORY_S: f64 = 600.0;
+
 /// The boost's exponent at which a start is counted and logged.
 pub const EXCURSION_REPORT_LEVEL: f64 = 0.25;
 
@@ -112,6 +121,10 @@ pub struct ExcursionArm {
 pub struct ExcursionBoost {
     /// Running mean (µs) of the tracked error; `None` until the first window of an engagement.
     mean_us: Option<f64>,
+    /// The memory of a start (0-1): `max(memory − dt/`[`EXCURSION_START_MEMORY_S`]`, start)`. A
+    /// running boost holds only while it remembers a start: the escape valve when window noise
+    /// keeps `needed` up after the ramp is gone.
+    start_memory: f64,
     /// The tracked errors of the last [`EXCURSION_RATE_WINDOW_S`] (`(s, µs)`), and the grandmaster
     /// seconds since the mean restarted.
     ring: VecDeque<(f64, f64)>,
@@ -171,6 +184,7 @@ impl ExcursionBoost {
     pub fn end(&mut self) {
         self.charge = 0.0;
         self.level = 0.0;
+        self.start_memory = 0.0;
         self.restart_mean();
     }
 
@@ -284,8 +298,9 @@ impl ExcursionBoost {
             }
             _ => 0.0,
         };
+        self.start_memory = (self.start_memory - dt / EXCURSION_START_MEMORY_S).max(start);
         let target = if armable {
-            needed * start.max(self.level)
+            needed * start.max(self.level.min(self.start_memory))
         } else {
             0.0
         };
