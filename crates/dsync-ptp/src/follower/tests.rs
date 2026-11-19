@@ -434,7 +434,10 @@ fn a_list_reaches_the_listed_nic_that_has_an_ipv4_212() {
     let spec = format!("dsync-no-such-nic0,{name}");
     match Follower::start(FollowerConfig::on_interface(spec)) {
         Ok(_) | Err(FollowerError::PermissionDenied { .. }) => {}
-        other => panic!("expected a start or PermissionDenied, got {:?}", other.err()),
+        other => panic!(
+            "expected a start or PermissionDenied, got {:?}",
+            other.err()
+        ),
     }
 }
 

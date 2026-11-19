@@ -19,7 +19,7 @@ use anyhow::Result;
 use log::info;
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, UdpSocket};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 /// The two OS boundaries of the Linux PTP receive path.
 pub trait PtpSocketFactory {
@@ -105,6 +105,10 @@ pub struct UdpPtpNetwork<F: PtpSocketFactory = KernelSockets> {
     /// a canonical list `a,b`). When set, a re-join joins only a listed NIC (no home address, no
     /// resolver) and waits for one otherwise.
     pinned: Option<String>,
+    /// dsync#212: when the grandmaster's time last arrived on the CURRENT join (`None` since
+    /// the join): a pinned re-join while it still flows stays on the listed NIC, a silent one
+    /// moves on in the list (`net::rejoin_order`).
+    last_time_message: Option<Instant>,
 }
 
 impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
@@ -122,6 +126,7 @@ impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
             last_join: (iface, ip),
             home_ip: ip,
             pinned: None,
+            last_time_message: None,
         })
     }
 
@@ -135,6 +140,7 @@ impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
             last_join: (iface, ip),
             home_ip: ip,
             pinned: None,
+            last_time_message: None,
         }
     }
 
@@ -172,6 +178,7 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         // stray datagram on a fallback join must not make that join the home.
         if crate::ptp::is_time_message(&buf[..size]) {
             self.home_ip = joined_ip;
+            self.last_time_message = Some(Instant::now());
         }
         Ok(Some((buf[..size].to_vec(), size, ts, source_ip)))
     }
@@ -196,15 +203,15 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         // IPv4) = a typed error BEFORE anything is closed: the controller names the NIC in the
         // clock alarm and looks again in seconds; another NIC is never joined.
         //
-        // dsync#212: a pinned LIST takes the listed NIC that carries an IPv4 now, starting after
-        // the one joined last (`net::choose_pinned`): the cable moved to the other port.
+        // dsync#212: a pinned LIST takes a listed NIC that carries an IPv4 now: the joined one
+        // again while PTP still flows on it, else the next listed one (`net::rejoin_order`):
+        // the cable moved to the other port.
         let (iface, ip) = match &self.pinned {
             Some(spec) => {
                 let factory = &mut self.factory;
-                let choice = net::choose_pinned(spec, Some(self.last_join.0.as_str()), |name| {
-                    factory.lookup_pinned(name)
-                });
-                choice.usable()?
+                let order =
+                    net::rejoin_order(&self.last_join.0, self.last_time_message, Instant::now());
+                net::choose_pinned(spec, order, |name| factory.lookup_pinned(name)).usable()?
             }
             None => match self.factory.interface_carrying(self.home_ip) {
                 Some(name) => (name, self.home_ip),
@@ -224,6 +231,7 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         let changed = self.last_join.0 != iface || self.last_join.1 != ip;
         self.joined = Some(joined);
         self.last_join = (iface.clone(), ip);
+        self.last_time_message = None;
         let pinned_name = self.pinned.is_some().then(|| iface.clone());
         Ok(RejoinOutcome {
             iface,
@@ -843,5 +851,27 @@ mod tests {
         assert_eq!((out.iface.as_str(), out.ip), ("enp1s0", other));
         let out = net.rejoin().expect("the re-join");
         assert_eq!((out.iface.as_str(), out.ip), ("enp3s0", RIG));
+    }
+
+    /// Review round 1 (#191 + #212): PTP still arrives on the joined port (its link-local
+    /// address became routable): the re-join stays on it, never hops to the other listed port.
+    #[test]
+    fn a_pinned_list_rejoin_while_ptp_flows_stays_on_the_joined_nic_212() {
+        let other = Ipv4Addr::new(10, 77, 9, 134);
+        let mut script = ScriptedSockets::default();
+        script
+            .pinned
+            .insert("enp1s0".to_string(), PinnedLookup::Ready(other));
+        script
+            .pinned
+            .insert("enp3s0".to_string(), PinnedLookup::Ready(RIG));
+        let mut net = pinned_cambox(script);
+        let a = addrs(&net);
+        assert!(round_trip(&mut net, a[0], &time_message()).is_some());
+        let out = net.rejoin().expect("the re-join");
+        assert_eq!((out.iface.as_str(), out.ip), ("enp3s0", RIG));
+        // The new join has received nothing yet: a later re-join moves on.
+        let out = net.rejoin().expect("the re-join");
+        assert_eq!((out.iface.as_str(), out.ip), ("enp1s0", other));
     }
 }

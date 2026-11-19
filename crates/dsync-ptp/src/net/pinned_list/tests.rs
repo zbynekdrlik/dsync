@@ -138,45 +138,131 @@ fn the_spec_is_canonical_and_a_blank_one_is_unset_212() {
 }
 
 #[test]
-fn a_rejoin_starts_after_the_listed_nic_joined_now_212() {
-    use crate::net::{choose_pinned, PinnedChoice};
+fn a_stale_rejoin_moves_on_to_the_next_usable_listed_nic_212() {
+    use crate::net::{choose_pinned, PinnedChoice, PinnedOrder};
     let other = Ipv4Addr::new(10, 77, 9, 134);
     let both = |name: &str| match name {
         "enp1s0" => PinnedLookup::Ready(other),
         "enp3s0" => PinnedLookup::Ready(CAM),
         _ => PinnedLookup::Missing,
     };
-    let at = |after| choose_pinned("enp1s0,enp3s0", after, both);
+    let at = |order| choose_pinned("enp1s0,enp3s0", order, both);
     let ready = |name: &str, ip| PinnedChoice {
         name: name.to_string(),
         lookup: PinnedLookup::Ready(ip),
     };
-    assert_eq!(at(None), ready("enp1s0", other), "startup: the list order");
-    assert_eq!(at(Some("enp1s0")), ready("enp3s0", CAM));
-    assert_eq!(at(Some("enp3s0")), ready("enp1s0", other), "wraps round");
     assert_eq!(
-        at(Some("wg0")),
+        at(PinnedOrder::Startup),
         ready("enp1s0", other),
-        "an unlisted 'after' is ignored"
+        "the list order"
+    );
+    assert_eq!(at(PinnedOrder::MoveOn("enp1s0")), ready("enp3s0", CAM));
+    assert_eq!(
+        at(PinnedOrder::MoveOn("enp3s0")),
+        ready("enp1s0", other),
+        "wraps round"
+    );
+    assert_eq!(
+        at(PinnedOrder::MoveOn("wg0")),
+        ready("enp1s0", other),
+        "an unlisted NIC is no position"
     );
     // A single name: always that one, today's #131 pin.
-    assert_eq!(
-        choose_pinned("enp3s0", Some("enp3s0"), both),
-        ready("enp3s0", CAM)
-    );
+    for order in [
+        PinnedOrder::Startup,
+        PinnedOrder::Stay("enp3s0"),
+        PinnedOrder::MoveOn("enp3s0"),
+    ] {
+        assert_eq!(choose_pinned("enp3s0", order, both), ready("enp3s0", CAM));
+    }
     // Only listed names are ever looked at.
     let mut looked = Vec::new();
-    choose_pinned("enp1s0,enp3s0", None, |n| {
+    choose_pinned("enp1s0,enp3s0", PinnedOrder::Startup, |n| {
         looked.push(n.to_string());
         PinnedLookup::NoIpv4
     });
     assert_eq!(looked, vec!["enp1s0", "enp3s0"]);
 }
 
+/// Review round 1: the cable is in a port on a segment without DHCP (link-local) and the other
+/// port keeps a static address without carrier. "Routable first" would hold the dead port for
+/// ever; a stale re-join takes the NEXT usable listed NIC, link-local or not.
+#[test]
+fn a_stale_rejoin_reaches_a_link_local_port_past_a_routable_dead_one_212() {
+    use crate::net::{choose_pinned, PinnedOrder};
+    let ll = Ipv4Addr::new(169, 254, 3, 7);
+    let look = |name: &str| match name {
+        "enp1s0" => PinnedLookup::Ready(CAM),
+        "enp3s0" => PinnedLookup::LinkLocalOnly(ll),
+        _ => PinnedLookup::Missing,
+    };
+    let silent_on_1 = choose_pinned("enp1s0,enp3s0", PinnedOrder::MoveOn("enp1s0"), look);
+    assert_eq!(
+        (silent_on_1.name.as_str(), silent_on_1.lookup),
+        ("enp3s0", PinnedLookup::LinkLocalOnly(ll))
+    );
+    // Nothing usable after a move: the list is named.
+    let none = choose_pinned("enp1s0,enp3s0", PinnedOrder::MoveOn("enp1s0"), |_| {
+        PinnedLookup::NoIpv4
+    });
+    assert_eq!(
+        (none.name.as_str(), none.lookup),
+        ("enp1s0,enp3s0", PinnedLookup::NoIpv4)
+    );
+}
+
+/// Review round 1: PTP still flows on the joined NIC (the #191 link-local leave): the re-join
+/// stays on it while it is usable, never hops to another listed port.
+#[test]
+fn a_rejoin_while_ptp_flows_stays_on_the_joined_listed_nic_212() {
+    use crate::net::{choose_pinned, rejoin_order, PinnedOrder};
+    let look = |name: &str| match name {
+        "enp1s0" => PinnedLookup::Ready(Ipv4Addr::new(10, 77, 9, 134)),
+        "enp3s0" => PinnedLookup::Ready(CAM),
+        _ => PinnedLookup::Missing,
+    };
+    let stay = choose_pinned("enp1s0,enp3s0", PinnedOrder::Stay("enp3s0"), look);
+    assert_eq!(
+        (stay.name.as_str(), stay.lookup),
+        ("enp3s0", PinnedLookup::Ready(CAM))
+    );
+    // The joined NIC lost its address: the startup order.
+    let gone = choose_pinned("enp1s0,enp3s0", PinnedOrder::Stay("enp3s0"), |n| {
+        if n == "enp1s0" {
+            PinnedLookup::Ready(CAM)
+        } else {
+            PinnedLookup::NoIpv4
+        }
+    });
+    assert_eq!(gone.name, "enp1s0");
+
+    let now = std::time::Instant::now();
+    let s = std::time::Duration::from_secs;
+    assert_eq!(
+        rejoin_order("enp3s0", None, now),
+        PinnedOrder::MoveOn("enp3s0")
+    );
+    assert_eq!(
+        rejoin_order("enp3s0", now.checked_sub(s(3)), now),
+        PinnedOrder::Stay("enp3s0")
+    );
+    assert_eq!(
+        rejoin_order("enp3s0", now.checked_sub(s(10)), now),
+        PinnedOrder::Stay("enp3s0"),
+        "the staleness bound itself is not stale"
+    );
+    assert_eq!(
+        rejoin_order("enp3s0", now.checked_sub(s(11)), now),
+        PinnedOrder::MoveOn("enp3s0")
+    );
+}
+
 #[test]
 fn an_unusable_choice_is_the_typed_error_naming_the_list_212() {
-    use crate::net::{choose_pinned, PinnedChoice};
-    let none = choose_pinned("enp1s0,enp3s0", None, |_| PinnedLookup::NoIpv4);
+    use crate::net::{choose_pinned, PinnedChoice, PinnedOrder};
+    let none = choose_pinned("enp1s0,enp3s0", PinnedOrder::Startup, |_| {
+        PinnedLookup::NoIpv4
+    });
     assert_eq!(
         none.clone().usable(),
         Err(PinnedInterfaceUnavailable {
@@ -184,7 +270,9 @@ fn an_unusable_choice_is_the_typed_error_naming_the_list_212() {
             missing: false
         })
     );
-    let gone = choose_pinned("enp1s0,enp3s0", None, |_| PinnedLookup::Missing);
+    let gone = choose_pinned("enp1s0,enp3s0", PinnedOrder::Startup, |_| {
+        PinnedLookup::Missing
+    });
     assert_eq!(gone.usable().map_err(|e| e.missing), Err(true));
     let e: anyhow::Error = none.usable().expect_err("unusable").into();
     assert_eq!(

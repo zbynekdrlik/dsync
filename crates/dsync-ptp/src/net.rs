@@ -7,7 +7,8 @@ use nix::sys::socket::{setsockopt, sockopt};
 
 mod pinned_list;
 pub use pinned_list::{
-    canonical_interface_spec, choose_pinned, interface_names, is_interface_list, PinnedChoice,
+    canonical_interface_spec, choose_pinned, interface_names, is_interface_list, rejoin_order,
+    PinnedChoice, PinnedOrder,
 };
 
 pub fn get_default_interface() -> Result<(String, Ipv4Addr)> {
@@ -79,17 +80,17 @@ pub struct NicSnapshot {
 /// Names compare exactly on Linux; on Windows ([`classify_pinned`]) case-insensitively, and a
 /// GUID matches with or without its braces or the Npcap `\Device\NPF_` prefix.
 pub fn classify_pinned_with(spec: &str, nics: &[NicSnapshot], windows_names: bool) -> PinnedLookup {
-    choose_pinned_with(spec, None, nics, windows_names).lookup
+    choose_pinned_with(spec, PinnedOrder::Startup, nics, windows_names).lookup
 }
 
 /// dsync#212 — [`choose_pinned`] among `nics` (pure): which listed NIC, and what it is.
 pub fn choose_pinned_with(
     spec: &str,
-    after: Option<&str>,
+    order: PinnedOrder<'_>,
     nics: &[NicSnapshot],
     windows_names: bool,
 ) -> PinnedChoice {
-    choose_pinned(spec, after, |name| {
+    choose_pinned(spec, order, |name| {
         classify_one_with(name, nics, windows_names)
     })
 }
@@ -290,10 +291,10 @@ pub fn pinned_interface(spec: &str) -> PinnedLookup {
     classify_pinned(spec, &nic_snapshots(spec))
 }
 
-/// dsync#212 — which listed NIC of the pin `spec` a join uses now ([`choose_pinned`]; `after`
-/// = the listed name joined now, `None` at startup).
-pub fn pinned_choice(spec: &str, after: Option<&str>) -> PinnedChoice {
-    choose_pinned_with(spec, after, &nic_snapshots(spec), cfg!(windows))
+/// dsync#212 — which listed NIC of the pin `spec` a join uses now, looked at in `order`
+/// ([`choose_pinned`]).
+pub fn pinned_choice(spec: &str, order: PinnedOrder<'_>) -> PinnedChoice {
+    choose_pinned_with(spec, order, &nic_snapshots(spec), cfg!(windows))
 }
 
 /// dsync#131 — the pinned PTP interface cannot be joined now. Returned (inside an `anyhow`

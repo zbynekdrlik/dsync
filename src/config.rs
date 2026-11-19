@@ -170,10 +170,26 @@ where
         One(String),
         Many(Vec<String>),
     }
-    Ok(match Option::<Raw>::deserialize(deserializer)? {
+    use serde::de::Error;
+    let raw = Option::<Raw>::deserialize(deserializer).map_err(|e| {
+        D::Error::custom(format!(
+            "system.interface must be a NIC name, a comma-separated list or an array of names \
+             ({e})"
+        ))
+    })?;
+    Ok(match raw {
         None => None,
         Some(Raw::One(spec)) => crate::net::canonical_interface_spec(&spec),
-        Some(Raw::Many(names)) => crate::net::canonical_interface_spec(&names.join(",")),
+        Some(Raw::Many(names)) => {
+            // One array element is one NIC: a comma inside it would silently split it in two.
+            if let Some(bad) = names.iter().find(|n| n.contains(',')) {
+                return Err(D::Error::custom(format!(
+                    "system.interface: the array element {bad:?} holds a comma (one name per \
+                     element)"
+                )));
+            }
+            crate::net::canonical_interface_spec(&names.join(","))
+        }
     })
 }
 

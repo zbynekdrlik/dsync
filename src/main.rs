@@ -329,7 +329,7 @@ fn join_ptp_network(
     };
     // dsync#212: a list joins the listed NIC that carries an IPv4 now.
     let opened = wait.run_list(
-        || net::pinned_choice(&name, None),
+        || net::pinned_choice(&name, net::PinnedOrder::Startup),
         |chosen, ip| open_ptp_network(chosen, ip, Some(name.clone()), system_config),
         || thread::sleep(dsync::pinned_wait::LOOK_EVERY),
         Instant::now,

@@ -62,13 +62,24 @@ ran the 19.11.2026 service on NTP. `system.interface` / `--interface` may now na
   blanks dropped: `net::canonical_interface_spec`). Config: a string with commas or a JSON array
   of strings (`optional_interface_list`); a non-string element fails the parse (#116 last-good).
   A single name is byte-identical to the #131 pin (same messages, same choice).
-- `net::choose_pinned(spec, after, look)` is the ONE decision: the first listed `Ready`, else the
-  first `LinkLocalOnly`, else `NoIpv4` (any listed NIC exists), else `Missing` — the last two name
-  the whole list. `after` = the listed name joined now: a re-join starts AFTER it (wraps), so two
-  ports that both keep an IPv4 (static address without carrier) alternate on each stale re-join
-  instead of re-joining the silent one for ever. Every consumer goes through it:
-  `net::pinned_choice` (startup `pinned_wait::run_list`, Npcap `select_pinned_device`, the
-  follower), the Linux re-join walks its `PtpSocketFactory::lookup_pinned(name)` per listed name.
+- `net::choose_pinned(spec, order, look)` is the ONE decision, `PinnedOrder`:
+  - `Startup`: the list order, the first `Ready`, else the first `LinkLocalOnly` (a boot-time
+    link-local address may be a DHCP placeholder, #131's grace).
+  - `Stay(joined)` (a re-join while the backend still gets time messages on the joined NIC,
+    `net::rejoin_order`, ≤ 10 s): the joined NIC if usable — the #191 link-local leave must
+    never hop to another port.
+  - `MoveOn(joined)` (PTP went silent there): the NEXT usable listed NIC after it, wrapping,
+    routable and link-local ALIKE. Review round 1: "routable first" on a stale re-join held a
+    dead port with a static address for ever when the live port was link-local; two ports that
+    both keep an address alternate on each stale re-join (up to the #112 backoff to come back).
+  - Nothing usable: `NoIpv4` (any listed NIC exists) / `Missing`, naming the whole list.
+  Consumers: `net::pinned_choice` (startup `pinned_wait::run_list`, Npcap
+  `select_pinned_device`, the follower); the Linux re-join walks
+  `PtpSocketFactory::lookup_pinned(name)` per listed name. Both backends keep
+  `last_time_message` (reset by each join) for `rejoin_order`.
+- The controller's #191 link-local look asks ONLY the joined listed NIC
+  (`ptp_liveness.joined_name`, from `set_ptp_interface_name` / `RejoinOutcome::pinned_name`),
+  never the whole list: a routable address on the other port is no reason to leave.
 - A move = the #112 path: the old port goes silent, stale at 10 s, `rejoin` picks the listed NIC
   that has the IPv4 now; none has one = `PinnedInterfaceUnavailable { name: "a,b" }`, the 5 s
   cadence, alarm "none of the PTP interfaces a,b has an IPv4 address" / "... exists".

@@ -909,6 +909,21 @@ fn the_pinned_interface_takes_a_list_as_a_string_or_an_array_212() {
     );
 }
 
+/// dsync#212 review round 1: a malformed pin fails the parse naming `system.interface` (the
+/// #116 last-good path then says why), and an array element holding a comma is rejected rather
+/// than silently split into two NICs.
+#[test]
+fn a_malformed_interface_list_fails_naming_the_key_212() {
+    for bad in [
+        r#"{"interface": [1]}"#,
+        r#"{"interface": 3}"#,
+        r#"{"interface": ["enp1s0,enp3s0"]}"#,
+    ] {
+        let err = serde_json::from_str::<SystemConfig>(bad).expect_err(bad);
+        assert!(err.to_string().contains("system.interface"), "{bad}: {err}");
+    }
+}
+
 /// dsync#136: the in-process follower (`dsync_ptp::follower`) runs the service's sample
 /// windows, so its constants must be the service's defaults; and the crate is released with the
 /// service, under the same version (consumers pin the crate by the service's tag).

@@ -51,52 +51,105 @@ impl PinnedChoice {
     }
 }
 
-/// dsync#212 — choose among the listed NICs of `spec` (pure; `look` classifies ONE name).
-///
-/// The first listed NIC with a routable IPv4 wins, else the first with a link-local one, else
-/// `NoIpv4` when any listed NIC exists, else `Missing`. `after` is the listed name joined now: on
-/// a re-join the order starts AFTER it (wrapping round), so when both ports keep an IPv4 (a
-/// static address on a port without carrier) a stale re-join tries the other port instead of
-/// the silent one again. A single name is today's #131 pin. An unlisted NIC is never looked at.
+/// dsync#212 — in which order a join looks at the listed NICs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinnedOrder<'a> {
+    /// The startup: the list order, a routable IPv4 before a link-local one (a link-local
+    /// address at boot may be a placeholder until DHCP answers, #131).
+    Startup,
+    /// A re-join while PTP still arrives on the listed NIC `joined` (#191: its link-local
+    /// address became routable): that NIC again whenever it is usable, else the startup order.
+    Stay(&'a str),
+    /// A re-join after PTP went silent on the listed NIC `joined`: the NEXT usable listed NIC
+    /// after it (wrapping round, `joined` last), a routable or a link-local address alike. The
+    /// cable moved, or both ports keep an address (a static one without carrier, a segment
+    /// without DHCP): each stale re-join tries the next port, so the live one is reached and
+    /// the silent one is never re-joined for ever.
+    MoveOn(&'a str),
+}
+
+/// dsync#212 — choose among the listed NICs of `spec` in `order` (pure; `look` classifies ONE
+/// name). Nothing usable: `NoIpv4` when any listed NIC exists, else `Missing`, both naming the
+/// whole list. A single name is today's #131 pin whatever the order. An unlisted NIC is never
+/// looked at.
 pub fn choose_pinned(
     spec: &str,
-    after: Option<&str>,
+    order: PinnedOrder<'_>,
     mut look: impl FnMut(&str) -> PinnedLookup,
 ) -> PinnedChoice {
     let names: Vec<&str> = interface_names(spec).collect();
-    let start = after
-        .and_then(|joined| names.iter().position(|n| *n == joined))
-        .map_or(0, |i| i + 1);
-    let mut link_local: Option<(&str, Ipv4Addr)> = None;
+    let position = |joined: &str| names.iter().position(|n| *n == joined);
+    let chosen = |name: &str, lookup| PinnedChoice {
+        name: name.to_string(),
+        lookup,
+    };
+    let usable = |lookup| {
+        matches!(
+            lookup,
+            PinnedLookup::Ready(_) | PinnedLookup::LinkLocalOnly(_)
+        )
+    };
     let mut exists = false;
-    for &name in names.iter().cycle().skip(start).take(names.len()) {
-        match look(name) {
-            PinnedLookup::Ready(ip) => {
-                return PinnedChoice {
-                    name: name.to_string(),
-                    lookup: PinnedLookup::Ready(ip),
+    match order {
+        PinnedOrder::Stay(joined) if position(joined).is_some() => {
+            let lookup = look(joined);
+            if usable(lookup) {
+                return chosen(joined, lookup);
+            }
+            exists |= lookup == PinnedLookup::NoIpv4;
+        }
+        PinnedOrder::MoveOn(joined) => {
+            let start = position(joined).map_or(0, |i| i + 1);
+            for &name in names.iter().cycle().skip(start).take(names.len()) {
+                let lookup = look(name);
+                if usable(lookup) {
+                    return chosen(name, lookup);
                 }
+                exists |= lookup == PinnedLookup::NoIpv4;
             }
-            PinnedLookup::LinkLocalOnly(ip) => {
-                link_local.get_or_insert((name, ip));
+        }
+        _ => {}
+    }
+    let mut link_local: Option<(&str, Ipv4Addr)> = None;
+    if !matches!(order, PinnedOrder::MoveOn(_)) {
+        for &name in &names {
+            match look(name) {
+                PinnedLookup::Ready(ip) => return chosen(name, PinnedLookup::Ready(ip)),
+                PinnedLookup::LinkLocalOnly(ip) => {
+                    link_local.get_or_insert((name, ip));
+                }
+                PinnedLookup::NoIpv4 => exists = true,
+                PinnedLookup::Missing => {}
             }
-            PinnedLookup::NoIpv4 => exists = true,
-            PinnedLookup::Missing => {}
         }
     }
     match link_local {
-        Some((name, ip)) => PinnedChoice {
-            name: name.to_string(),
-            lookup: PinnedLookup::LinkLocalOnly(ip),
-        },
-        None => PinnedChoice {
-            name: names.join(","),
-            lookup: if exists {
+        Some((name, ip)) => chosen(name, PinnedLookup::LinkLocalOnly(ip)),
+        None => chosen(
+            &names.join(","),
+            if exists {
                 PinnedLookup::NoIpv4
             } else {
                 PinnedLookup::Missing
             },
-        },
+        ),
+    }
+}
+
+/// dsync#212 — the order of a pinned re-join from the listed NIC `joined`: [`PinnedOrder::Stay`]
+/// while the backend still receives the grandmaster's time on it (a time message within
+/// `ptp_rejoin::REJOIN_AFTER` before `now`: the #191 link-local leave, PTP flowing), else
+/// [`PinnedOrder::MoveOn`] (PTP went silent there: the cable moved).
+pub fn rejoin_order(
+    joined: &str,
+    last_time_message: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> PinnedOrder<'_> {
+    match last_time_message {
+        Some(at) if now.saturating_duration_since(at) <= crate::ptp_rejoin::REJOIN_AFTER => {
+            PinnedOrder::Stay(joined)
+        }
+        _ => PinnedOrder::MoveOn(joined),
     }
 }
 

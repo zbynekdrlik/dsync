@@ -836,3 +836,28 @@ fn an_unpinned_node_publishes_no_interface_list_212() {
     assert_eq!(st.interfaces_configured, None);
     assert_eq!(st.ptp_interface_name, None);
 }
+
+/// Review round 1 (#191 + #212): PTP flows on the listed port `enp3s0` with a link-local
+/// address; the OTHER listed port has a routable one (a static address without carrier). That is
+/// no reason to leave: only the joined listed NIC is looked at.
+#[test]
+fn a_link_local_join_of_a_list_looks_only_at_the_joined_nic_212() {
+    fn look(name: &str) -> crate::net::PinnedLookup {
+        match name {
+            "enp1s0" => crate::net::PinnedLookup::Ready(DHCP),
+            "enp3s0" => crate::net::PinnedLookup::LinkLocalOnly(APIPA),
+            other => panic!("looked at {other:?}, not a listed NIC"),
+        }
+    }
+    let count = Arc::new(AtomicU32::new(0));
+    let (mut c, _st) = controller(dhcp_network(count.clone()));
+    c.ptp_liveness.pinned_lookup = Some(look);
+    c.set_ptp_interface(Some("enp1s0,enp3s0".to_string()), "enp3s0", APIPA);
+    c.set_ptp_interface_name(Some("enp3s0".to_string()));
+    let t0 = Instant::now();
+    for at in (0..60_000).step_by(1_000) {
+        c.note_allowed_ptp_packet(t0 + ms(at));
+        c.maybe_leave_link_local(t0 + ms(at));
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 0, "never re-joined");
+}

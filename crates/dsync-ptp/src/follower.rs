@@ -483,7 +483,7 @@ fn open_network(
 /// The pinned interface's listed name and IPv4 now (a link-local one counts: an audio network
 /// segment without DHCP).
 fn pinned_ip(spec: &str) -> Result<(String, std::net::Ipv4Addr)> {
-    Ok(crate::net::pinned_choice(spec, None).usable()?)
+    Ok(crate::net::pinned_choice(spec, crate::net::PinnedOrder::Startup).usable()?)
 }
 
 #[cfg(test)]
