@@ -159,7 +159,8 @@ where
 }
 
 /// dsync#131 / #212 — an optional interface pin: one name or a list (a string with commas, or an
-/// array of strings), canonical `a,b`; blank / empty / `null` = `None`, anything else fails.
+/// array of strings), canonical `a,b`; a blank string / `null` = `None`; an empty array, a blank
+/// or comma-holding element, or a non-string fails.
 fn optional_interface_list<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -181,7 +182,19 @@ where
         None => None,
         Some(Raw::One(spec)) => crate::net::canonical_interface_spec(&spec),
         Some(Raw::Many(names)) => {
-            // One array element is one NIC: a comma inside it would silently split it in two.
+            // An array is an explicit pin: an empty one, or a blank element, must not quietly
+            // become "unpinned" (#116's silent-unpin class); one element is one NIC, so a comma
+            // inside it would silently split it in two.
+            if names.is_empty() {
+                return Err(D::Error::custom(
+                    "system.interface: an empty array pins nothing (use null to unpin)",
+                ));
+            }
+            if names.iter().any(|n| n.trim().is_empty()) {
+                return Err(D::Error::custom(
+                    "system.interface: an array element is blank (one NIC name per element)",
+                ));
+            }
             if let Some(bad) = names.iter().find(|n| n.contains(',')) {
                 return Err(D::Error::custom(format!(
                     "system.interface: the array element {bad:?} holds a comma (one name per \

@@ -94,6 +94,11 @@ offset `D` from its own NTP-stepped wall: 29.9.2026, −19.8 ms, every box stepp
   `net::PinnedInterfaceUnavailable` before closing anything when it is missing / has no IPv4;
   the controller names it in the alarm and retries every 5 s. The limits below apply only to an
   UNPINNED node — pinning is their fix (see `multi-homed-interface-selection.md`).
+  One limit DOES reach a pinned LIST (#212): the backend's `last_time_message` (which makes a
+  re-join `Stay` on the joined port, `net::rejoin_order`) counts every time message, also one
+  from a grandmaster the controller's `gm_allowlist` drops. A listed port carrying a FOREIGN
+  PTPv1 grandmaster therefore keeps every stale re-join there; it never moves on to the port with
+  the trusted one. Same root, same fix (the allowed-packet time in the backend).
 - **A failing Npcap read is reported and retried by `recv_errors::RecvErrorGate` (#161,
   v1.28.1).** A vanished adapter (iem-snv NIC driver swap) fails every read at once, and both
   receive loops poll every 1 ms: 2881 WARN lines a minute before. Now one WARN on the transition,

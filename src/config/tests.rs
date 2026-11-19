@@ -882,16 +882,12 @@ fn the_pinned_interface_takes_a_list_as_a_string_or_an_array_212() {
         r#"{"interface": "enp1s0,enp3s0"}"#,
         r#"{"interface": " enp1s0 , enp3s0 ,"}"#,
         r#"{"interface": ["enp1s0", "enp3s0"]}"#,
-        r#"{"interface": [" enp1s0", "", "enp3s0 "]}"#,
+        r#"{"interface": [" enp1s0", "enp3s0 "]}"#,
     ] {
         let c: SystemConfig = serde_json::from_str(json).expect("parses");
         assert_eq!(c.interface.as_deref(), Some("enp1s0,enp3s0"), "{json}");
     }
-    for unset in [
-        r#"{"interface": []}"#,
-        r#"{"interface": [" ", ""]}"#,
-        r#"{"interface": " , "}"#,
-    ] {
+    for unset in [r#"{"interface": " , "}"#, r#"{"interface": ",,"}"#] {
         let c: SystemConfig = serde_json::from_str(unset).expect("parses");
         assert_eq!(c.interface, None, "{unset}");
     }
@@ -918,6 +914,8 @@ fn a_malformed_interface_list_fails_naming_the_key_212() {
         r#"{"interface": [1]}"#,
         r#"{"interface": 3}"#,
         r#"{"interface": ["enp1s0,enp3s0"]}"#,
+        r#"{"interface": []}"#,
+        r#"{"interface": ["enp1s0", " "]}"#,
     ] {
         let err = serde_json::from_str::<SystemConfig>(bad).expect_err(bad);
         assert!(err.to_string().contains("system.interface"), "{bad}: {err}");
