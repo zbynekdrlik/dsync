@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use log::{error, info, warn};
+#[cfg(unix)]
 use std::fs::File;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};

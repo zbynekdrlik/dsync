@@ -657,7 +657,7 @@ impl<'s> Bench<'s> {
             // wall, so the phase lock never reads the deliberate slew as a phase error.
             let deslew = b.slew_displacement();
             let (rel_ppm, landing) = (b.rate_ppm - gm_ppm, b.last_landing);
-            let mut samples: Vec<i64> = (0..SAMPLES_PER_WINDOW)
+            let samples: Vec<i64> = (0..SAMPLES_PER_WINDOW)
                 .map(|_| {
                     let noise = b.rng.gauss() * PTP_NOISE_NS;
                     // #119 (1.11.1): a Windows box stamps each sample with its stepped clock at the
