@@ -350,6 +350,36 @@ mod tests {
         assert_eq!(b.arms(), 1);
     }
 
+    /// Review of #204: two followers on one PC read the same windows ± ~40 ns of conversion
+    /// residue (`.claude/rules/ptp-library.md`, #136/#170), so the boost must be CONTINUOUS in its
+    /// input: an all-or-nothing arm let them arm a window apart and split by ~1.2 µs. Sweep the
+    /// input in 1 ns steps across a whole arming and assert the gain trajectory never jumps.
+    #[test]
+    fn the_boost_is_continuous_in_its_input_204() {
+        let mut worst = 0.0f64;
+        let mut prev: Option<Vec<f64>> = None;
+        for k in 0..=3_000 {
+            let offset_us = k as f64 * 0.001;
+            let mut b = warmed();
+            let traj: Vec<f64> = (0..400)
+                .map(|n| {
+                    b.observe(0.5 * n as f64 * 0.5 + offset_us, 0.5, true);
+                    b.gain().unwrap_or(1.0)
+                })
+                .collect();
+            if let Some(p) = &prev {
+                for (a, c) in p.iter().zip(&traj) {
+                    worst = worst.max((a - c).abs());
+                }
+            }
+            prev = Some(traj);
+        }
+        assert!(
+            worst <= 0.01,
+            "the gain jumped by {worst} for a 1 ns input change"
+        );
+    }
+
     #[test]
     fn a_window_no_boot_fit_allows_arms_nothing_204() {
         let mut b = warmed();

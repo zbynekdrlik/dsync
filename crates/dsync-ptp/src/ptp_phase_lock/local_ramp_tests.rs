@@ -90,12 +90,24 @@ pub(super) fn ramp_run(
     seed: u64,
     secs: f64,
 ) -> (f64, PhaseLockCore) {
+    ramp_run_after(profile, sign, jitter_us, seed, secs, 2_000)
+}
+
+/// [`ramp_run`] with the load starting `settle` windows after the first (engaging) window.
+fn ramp_run_after(
+    profile: Profile,
+    sign: f64,
+    jitter_us: f64,
+    seed: u64,
+    secs: f64,
+    settle: usize,
+) -> (f64, PhaseLockCore) {
     let mut jitter = Jitter::new(seed, jitter_us);
     let mut c = PhaseLockCore::new();
     let osc0 = -3.8;
     let mut p = Plant::new(osc0, -osc0);
-    // Settle: the boot pull and the refinement are long done after 1000 s.
-    for _ in 0..2_000 {
+    // Settle (2000 windows: the boot pull and the refinement are long done after 1000 s).
+    for _ in 0..settle {
         let out = c.on_window(D + (p.e_ns + jitter.next()).round() as i64, true, -osc0, DT);
         p.advance(out.freq_ppm.expect("engaged"), DT);
     }
@@ -142,6 +154,79 @@ fn a_local_oscillator_ramp_of_6_ppm_keeps_the_phase_within_50_us_204() {
     }
     eprintln!(
         "dsync#204 local ramp, worst |e|:\n  {}",
+        report.join("\n  ")
+    );
+    assert!(fails.is_empty(), "|e| ≥ 50 µs: {fails:?}");
+}
+
+/// Review of #204: a plain path-delay LEVEL SHIFT (a path change, or an absorb of up to 100 µs into
+/// `D`) is retired by the plain PI at `−K_P·e`; it is no frequency the loop is behind on, and
+/// boosting it is only a 4× word swing (40 µs armed ×4: 2.7 ppm against 0.8).
+#[test]
+fn a_path_delay_level_shift_or_an_absorb_never_boosts_204() {
+    for (case, shift_us, absorb) in [
+        ("path +40 us", 40.0, false),
+        ("path -60 us", -60.0, false),
+        ("path +100 us", 100.0, false),
+        ("absorb 60 us", 60.0, true),
+        ("absorb -100 us", -100.0, true),
+    ] {
+        let mut jitter = Jitter::new(0x204_5417, 10.0);
+        let mut c = PhaseLockCore::new();
+        let osc0 = -3.8;
+        let mut p = Plant::new(osc0, -osc0);
+        for _ in 0..2_000 {
+            let out = c.on_window(D + (p.e_ns + jitter.next()).round() as i64, true, -osc0, DT);
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+        }
+        let shift_ns = if absorb {
+            // `D` moves by the absorb with no wall move: `e` shifts by minus it.
+            let anchor = c.anchor_ns().expect("anchored");
+            c.set_anchor(anchor + (shift_us * 1_000.0) as i64);
+            0.0
+        } else {
+            shift_us * 1_000.0
+        };
+        let mut max_gain = 1.0f64;
+        for _ in 0..1_600 {
+            let out = c.on_window(
+                D + (p.e_ns + shift_ns + jitter.next()).round() as i64,
+                true,
+                -osc0,
+                DT,
+            );
+            p.advance(out.freq_ppm.expect("engaged"), DT);
+            max_gain = max_gain.max(c.gain_factor());
+        }
+        assert!(
+            max_gain <= 1.05,
+            "{case}: the shift boosted the PI (gain x{max_gain:.2})"
+        );
+    }
+}
+
+/// Review of #204: a PC that starts its load soon after the lock (a boot, then the show's apps)
+/// ramps right after the engagement. The load starts 60 s after the first window.
+#[test]
+fn a_ramp_soon_after_the_engagement_keeps_the_phase_within_50_us_204() {
+    let mut report = Vec::new();
+    let mut fails = Vec::new();
+    for (name, profile) in PROFILES {
+        for sign in [1.0, -1.0] {
+            let mut worst = 0.0f64;
+            for seed in [0x204_e001_u64, 0x204_e011, 0x204_e021] {
+                let (w, _) = ramp_run_after(profile, sign, 10.0, seed, 900.0, 120);
+                worst = worst.max(w);
+            }
+            let line = format!("{name} {sign:+}: {worst:.1} µs");
+            if worst >= 50.0 {
+                fails.push(line.clone());
+            }
+            report.push(line);
+        }
+    }
+    eprintln!(
+        "dsync#204 ramp 60 s after the engagement, worst |e|:\n  {}",
         report.join("\n  ")
     );
     assert!(fails.is_empty(), "|e| ≥ 50 µs: {fails:?}");

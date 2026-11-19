@@ -1290,10 +1290,16 @@ fn a_local_oscillator_ramp_keeps_the_follower_within_50_us_and_locked_204() {
     let mut report = Vec::new();
     let mut fails = Vec::new();
     for (name, profile) in profiles {
-        for (world_name, mut world) in [
-            ("quiet", World::new(0x5eed_0204, 5_000.0)),
-            ("mbc", mbc_world(0x5eed_0214)),
-        ] {
+        // A statistic of seeded noise: three seeds per world, the worst judged.
+        for (world_name, mut world) in [0x5eed_0204_u64, 0x5eed_0224, 0x5eed_0244]
+            .into_iter()
+            .flat_map(|seed| {
+                [
+                    ("quiet", World::new(seed, 5_000.0)),
+                    ("mbc", mbc_world(seed ^ 0x10)),
+                ]
+            })
+        {
             let mut core = new_core(&world);
             run_to_lock(&mut world, &mut core, 120);
             // Settled: the boot pull and the refinement are done; the line held before the load.
