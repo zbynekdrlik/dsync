@@ -60,6 +60,11 @@ pub(super) struct PtpLiveness {
     pub(super) not_open: Option<String>,
 }
 
+/// dsync#206: the clock alarm's reason while the receive path has not opened since the start.
+fn not_open_reason(why: &str) -> String {
+    format!("the PTP receive path is not open (it could not be opened since the start): {why}")
+}
+
 /// dsync#131 — while the pinned interface stays unusable, a fast look's two lines are WARN on
 /// a changed reason and every this many looks (5 min at [`PINNED_WAIT_RETRY`]), DEBUG between.
 /// The first failure is a normal scheduled attempt (WARN). The clock alarm keeps its own cadence.
@@ -164,6 +169,7 @@ where
         self.last_ptp_packet = now;
         self.ptp_liveness.rx.record(now);
         self.ptp_liveness.interface_problem = None;
+        self.ptp_liveness.not_open = None;
         let attempts = self.ptp_liveness.schedule.reset();
         if attempts > 0 {
             info!(
@@ -217,6 +223,10 @@ where
                 if let Some(problem) = self.ptp_liveness.interface_problem.take() {
                     info!("[NET] {} -- resolved, PTP joined on it again", problem);
                 }
+                // dsync#206: the path that did not open at start is open now.
+                if let Some(problem) = self.ptp_liveness.not_open.take() {
+                    info!("[NET] {} -- resolved, PTP joined", problem);
+                }
             }
             Err(e) => {
                 let text = format!("{e:#}");
@@ -232,6 +242,10 @@ where
                     }
                     (None, None) => None,
                 };
+                // dsync#206: still not open since the start: the alarm names the newest error.
+                if self.ptp_liveness.not_open.is_some() {
+                    self.ptp_liveness.not_open = Some(not_open_reason(&text));
+                }
                 let changed = problem != self.ptp_liveness.interface_problem;
                 self.ptp_liveness.interface_problem = problem;
                 let next_s = if self.ptp_liveness.interface_problem.is_some() {
@@ -358,7 +372,12 @@ where
     /// dsync#206: the startup could not open the PTP receive path (`why`): the loop runs with
     /// none, NTP-only once stale, and the #112 re-join opens it on its schedule.
     pub fn note_ptp_not_open(&mut self, why: &str) {
-        let _ = why;
+        self.ptp_liveness.not_open = Some(not_open_reason(why));
+        self.ptp_liveness.joined_ip = None;
+        if let Ok(mut status) = self.status_shared.write() {
+            status.ptp_interface = None;
+            status.ptp_interface_ip = None;
+        }
     }
 
     /// `/status`'s liveness fields at `now`: the packet age, the receive rate, the re-joins.
