@@ -1169,6 +1169,7 @@ impl PhaseLockCore {
         armable: bool,
     ) -> (f64, Option<ExcursionArm>) {
         let tracked_us = (e_raw_us - self.pull_us).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+        let feed_forward = -self.pull_us / FSTEP_PULL_TAU_S;
         let f = if late {
             self.late_held += 1;
             self.late_windows = self.late_windows.saturating_add(1);
@@ -1193,8 +1194,11 @@ impl PhaseLockCore {
             self.excursion.advance(dt);
             None
         } else {
-            self.excursion
-                .set_gm_gain(boosted_gains(self.boost_s).0 / K_P_PER_S);
+            self.excursion.set_loop_word(excursion::LoopWord {
+                corr_ppm: f - feed_forward,
+                i_ppm: self.i_ppm,
+                k_i: self.gains().1,
+            });
             self.excursion.observe(tracked_us, dt, armable)
         };
         // dsync#166: the boost's clock is the engaged windows' grandmaster time (late ones
