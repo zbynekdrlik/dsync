@@ -417,6 +417,35 @@ mod tests {
         );
     }
 
+    /// Re-review of #204: the continuity sweep proves nothing unless it crosses a whole boost.
+    #[test]
+    fn the_continuity_sweep_crosses_a_full_boost_204() {
+        let mut b = warmed();
+        let max = (0..400)
+            .map(|n| {
+                b.observe(0.5 * n as f64 * 0.5, 0.5, true);
+                b.gain().unwrap_or(1.0)
+            })
+            .fold(1.0, f64::max);
+        assert!(max > 3.9, "the sweep's input never boosted fully: x{max}");
+    }
+
+    /// Re-review of #204: a late window's seconds count on the detector's own clock too, or the
+    /// next rate is fitted over a ring whose times lost them.
+    #[test]
+    fn a_late_window_counts_on_the_detectors_clock_204() {
+        let mut b = warmed();
+        let before = b.clock_s;
+        b.advance(0.5);
+        b.advance(0.5);
+        b.observe(0.0, 0.5, true);
+        assert!(
+            (b.clock_s - before - 1.5).abs() < 1e-9,
+            "{}",
+            b.clock_s - before
+        );
+    }
+
     #[test]
     fn a_window_no_boot_fit_allows_starts_nothing_204() {
         let mut b = warmed();

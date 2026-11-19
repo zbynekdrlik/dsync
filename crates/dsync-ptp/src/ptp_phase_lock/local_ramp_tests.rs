@@ -231,3 +231,58 @@ fn a_ramp_soon_after_the_engagement_keeps_the_phase_within_50_us_204() {
     );
     assert!(fails.is_empty(), "|e| ≥ 50 µs: {fails:?}");
 }
+
+/// Re-review of #204: two followers on one PC take the SAME windows ± ~40 ns of conversion
+/// residue (`.claude/rules/ptp-library.md`, the #170 bar: ≤ 1 µs apart). A boost that cycles in
+/// and out around its bound under a slow ramp amplified that residue to 25 µs. Every shape, both
+/// directions, a sweep of noise seeds; the worst split is judged.
+#[test]
+fn two_cores_fed_the_same_windows_agree_within_a_microsecond_through_a_ramp_204() {
+    let mut fails = Vec::new();
+    let mut worst_all = 0.0f64;
+    for (name, profile) in PROFILES {
+        for sign in [1.0, -1.0] {
+            for seed in 1..=24u64 {
+                let mut jitter = Jitter::new(seed * 977 + 13, 10.0);
+                let mut r1 = Jitter::new(seed * 31 + 1, 0.04);
+                let mut r2 = Jitter::new(seed * 57 + 3, 0.04);
+                let (mut c1, mut c2) = (PhaseLockCore::new(), PhaseLockCore::new());
+                let osc0 = -3.8;
+                let (mut p1, mut p2) = (Plant::new(osc0, -osc0), Plant::new(osc0, -osc0));
+                let settle = 1_000;
+                let mut worst = 0.0f64;
+                for n in 0..(settle + 1_800) {
+                    if n >= settle {
+                        let o = osc0 + sign * profile((n - settle) as f64 * DT);
+                        p1.osc_ppm = o;
+                        p2.osc_ppm = o;
+                    }
+                    let j = jitter.next();
+                    let o1 = c1.on_window(
+                        D + (p1.e_ns + j + r1.next()).round() as i64,
+                        true,
+                        -osc0,
+                        DT,
+                    );
+                    let o2 = c2.on_window(
+                        D + (p2.e_ns + j + r2.next()).round() as i64,
+                        true,
+                        -osc0,
+                        DT,
+                    );
+                    p1.advance(o1.freq_ppm.expect("engaged"), DT);
+                    p2.advance(o2.freq_ppm.expect("engaged"), DT);
+                    if n >= settle {
+                        worst = worst.max((p1.e_ns - p2.e_ns).abs());
+                    }
+                }
+                worst_all = worst_all.max(worst);
+                if worst > 1_000.0 {
+                    fails.push(format!("{name} {sign:+} seed {seed}: {worst:.0} ns"));
+                }
+            }
+        }
+    }
+    eprintln!("dsync#204 pair split, worst {worst_all:.0} ns");
+    assert!(fails.is_empty(), "cores > 1 µs apart: {fails:?}");
+}
