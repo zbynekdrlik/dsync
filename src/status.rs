@@ -43,8 +43,10 @@ pub struct SyncStatus {
     // ========================================================================
     // Extended Status (new fields for tray app)
     // ========================================================================
-    /// True when frequency is locked (rate stable < 5us/s)
-    /// Used for icon badge color (green = locked)
+    /// The published lock (DSYX byte [41], dsync#146): under the default `ptp_phase_lock`
+    /// discipline the phase lock's gate (`lock_gate`: |e| ≤ 50 µs for 3 windows in, > 150 µs for
+    /// 4 out); under `"legacy"` the rate servo's lock (rate stable < 5 µs/s). False while PTP is
+    /// stale (dsync#112). Used for icon badge color (green = locked)
     pub is_locked: bool,
 
     /// Smoothed rate of offset change (us/s)

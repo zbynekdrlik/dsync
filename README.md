@@ -128,7 +128,7 @@ The stable fields a monitor reads:
 
 | Field | Type / unit | Meaning |
 |---|---|---|
-| `version` | string | The running dsync release (since 1.35; `""` before). Not the contract version. |
+| `version` | string | The running dsync release. Absent before 1.35. Not the contract version. |
 | `schema` | integer | The `/status` contract version, `1`. Absent before 1.35.15. |
 | `mode` | string | `"ACQ"` acquiring, `"PROD"`, `"LOCK"`, `"NANO"` locked, `"NTP-only"` (no PTP packet for 10 s), `"FALLBACK"` (on the dsync fallback time source). Only `LOCK` and `NANO` are healthy PTP states. |
 | `is_locked` | bool | The published lock. Under the default `ptp_phase_lock` discipline: the phase lock within 50 µs (DSYX [41]; it drops beyond 150 µs). `false` while PTP is stale. |

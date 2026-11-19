@@ -705,6 +705,11 @@ camera-box's dsync gate and `src/bin/tray.rs`'s own duplicate struct both parse 
 fields with `#[serde(default)]`, never rename or remove, and pin a
 `test_sync_status_pre_68_json_still_deserializes`-style test with a literal old blob.
 
+Since 1.35.15 (#205) `/status.schema` (`STATUS_SCHEMA`, 1) is the contract version for monitors
+(dcontroller via dstack). An added field never moves it; raise it only if a field ever changes
+its meaning, and then say so in the README. A field a monitor should read goes into the README's
+"Monitoring `/status`" table in the same change, with its unit and meaning.
+
 Two semantics worth preserving:
 
 - **"never measured" must not look like "measured just now".** `ntp_age_s` is `Option<u64>` so it
