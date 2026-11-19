@@ -1148,6 +1148,9 @@ impl PhaseLockCore {
 }
 
 #[cfg(test)]
+mod local_ramp_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
