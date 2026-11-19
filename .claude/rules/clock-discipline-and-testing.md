@@ -1644,6 +1644,11 @@ read +95 µs (a ramp ρ leaves ρ / K_I). `ptp_phase_lock/excursion.rs` drives t
   ρ / K_I at any gain in a steady ramp.
 - **…and `g²` multiplies the mean's noise.** A 10 s mean ×16 latched the boost on window noise
   (the two-clock bench's words left the truth by 0.63 ppm). The mean's τ is 10 s × g.
+- **A latch on a measured quantity needs an escape valve (the #76 lesson again).** Under ×4 on a
+  ±35-50 µs box `g²·mean` read noise past the bound for ever. A running boost holds only while it
+  remembers a START (10 min). Widening the bound by the measured noise also slowed every start.
+- **Test at the Dante cadence (~1 s windows), not only 0.5 s.** Fewer windows per τ means more
+  lag and noise: 6 ppm / 2 min at ±20 µs held at 0.5 s and reached 67 µs at 1 s.
 - **A level shift is not a ramp.** The PI retires a shift at `−K_P·e`, so the unlearned frequency
   `u = slope + K_P·value` (both from one LSQ line at the same instant; the lagging EMA mean read a
   retired shift as unlearned) is ~0. Judge u by a 25 % quantile over twice the rate ring, so a jump
