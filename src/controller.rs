@@ -2066,7 +2066,12 @@ where
             // initial boot acquisition window (never locked yet + within grace).
             in_acquisition: !self.ever_locked && self.started_at.elapsed() < ACQUISITION_GRACE,
             // #131: the pinned PTP interface is missing / without an IPv4 (from the re-join).
-            interface_problem: self.ptp_liveness.interface_problem.clone(),
+            // dsync#206: else the receive path that has not opened since the start.
+            interface_problem: self
+                .ptp_liveness
+                .interface_problem
+                .clone()
+                .or_else(|| self.ptp_liveness.not_open.clone()),
             // #116: config.json did not load (the last-good copy or the defaults run).
             config_problem: self
                 .config_state

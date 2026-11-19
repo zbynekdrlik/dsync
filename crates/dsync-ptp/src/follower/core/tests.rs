@@ -70,6 +70,12 @@ struct World {
     gm_profile: Option<fn(f64) -> f64>,
     gm_profile_t0: i64,
     gm_extra_ns: f64,
+    /// dsync#204: the PC's raw counter's rate MOVING (a load warming the crystal) — an extra
+    /// rate (ppm) on top of `pc_ppm`, a function of the seconds since `pc_profile_t0`,
+    /// accumulated per tick into `pc_extra_ns`.
+    pc_profile: Option<fn(f64) -> f64>,
+    pc_profile_t0: i64,
+    pc_extra_ns: f64,
 }
 
 impl World {
@@ -95,6 +101,9 @@ impl World {
             gm_profile: None,
             gm_profile_t0: 0,
             gm_extra_ns: 0.0,
+            pc_profile: None,
+            pc_profile_t0: 0,
+            pc_extra_ns: 0.0,
         }
     }
 
@@ -111,14 +120,24 @@ impl World {
         self.gm_base + t + (t as f64 * self.gm_ppm * 1e-6) as i64 + extra as i64
     }
 
+    /// dsync#204: the counter's extra rate (ppm) at true time `t`.
+    fn pc_extra_ppm(&self, t: i64) -> f64 {
+        self.pc_profile
+            .map_or(0.0, |f| f((t - self.pc_profile_t0) as f64 / 1e9))
+    }
+
     fn mono(&self, t: i64) -> i64 {
-        self.mono_base + t + (t as f64 * self.pc_ppm * 1e-6) as i64
+        // dsync#204: as the grandmaster's moving rate, accumulated up to the current tick and
+        // extended to `t` at the current extra rate.
+        let extra = self.pc_extra_ns + (t - self.t) as f64 * self.pc_extra_ppm(self.t) * 1e-6;
+        self.mono_base + t + (t as f64 * self.pc_ppm * 1e-6) as i64 + extra as i64
     }
 
     /// One Sync period: the Sync and its Follow_Up reach `core` (the same packets, each core with
     /// its own latency jitter, when there are several).
     fn tick(&mut self, cores: &mut [&mut FollowerCore]) {
         self.gm_extra_ns += self.sync_period_ns as f64 * self.gm_extra_ppm(self.t) * 1e-6;
+        self.pc_extra_ns += self.sync_period_ns as f64 * self.pc_extra_ppm(self.t) * 1e-6;
         self.t += self.sync_period_ns;
         self.seq = self.seq.wrapping_add(1);
         let t1 = self.gm_time(self.t);
@@ -1243,4 +1262,77 @@ fn a_continued_handover_within_the_settled_bound_never_unsettles_166() {
             "{jump_ns} ns: unsettled for {unsettled_s} s"
         );
     }
+}
+
+/// dsync#204 (resolume-pp, 19.11.2026): a load warmed the PC's crystal, its frequency moved ~6 ppm
+/// over minutes, and the service's phase lock read up to +95 µs for minutes in LOCK. The follower
+/// runs the same core on the raw counter, so it meets the same ramp. Judged against the line it
+/// held before the load (it trails the MEAN latency), on mbc's Windows-level world and a quiet one.
+fn linear_6_ppm_over_5_min(s: f64) -> f64 {
+    6.0 * (s / 300.0).clamp(0.0, 1.0)
+}
+
+fn linear_minus_6_ppm_over_2_min(s: f64) -> f64 {
+    -6.0 * (s / 120.0).clamp(0.0, 1.0)
+}
+
+fn thermal_6_ppm_tau_300_s(s: f64) -> f64 {
+    6.0 * (1.0 - (-s / 300.0).exp())
+}
+
+#[test]
+fn a_local_oscillator_ramp_keeps_the_follower_within_50_us_and_locked_204() {
+    let profiles: [(&str, fn(f64) -> f64); 3] = [
+        ("+6 ppm / 5 min linear", linear_6_ppm_over_5_min),
+        ("-6 ppm / 2 min linear", linear_minus_6_ppm_over_2_min),
+        ("+6 ppm thermal tau 300 s", thermal_6_ppm_tau_300_s),
+    ];
+    let mut report = Vec::new();
+    let mut fails = Vec::new();
+    for (name, profile) in profiles {
+        // A statistic of seeded noise: three seeds per world, the worst judged.
+        for (world_name, mut world) in [0x5eed_0204_u64, 0x5eed_0224, 0x5eed_0244]
+            .into_iter()
+            .flat_map(|seed| {
+                [
+                    ("quiet", World::new(seed, 5_000.0)),
+                    ("mbc", mbc_world(seed ^ 0x10)),
+                ]
+            })
+        {
+            let mut core = new_core(&world);
+            run_to_lock(&mut world, &mut core, 120);
+            // Settled: the boot pull and the refinement are done; the line held before the load.
+            for _ in 0..(240 * 1_000_000_000 / world.sync_period_ns) {
+                world.tick(&mut [&mut core]);
+            }
+            let mut sum = 0i64;
+            let n_before = 60 * 1_000_000_000 / world.sync_period_ns;
+            for _ in 0..n_before {
+                world.tick(&mut [&mut core]);
+                sum += world.error_ns(&core).expect("anchored");
+            }
+            let line = sum / n_before;
+            world.pc_profile = Some(profile);
+            world.pc_profile_t0 = world.t;
+            let mut worst = 0i64;
+            let mut lost_at = None;
+            let start = world.t;
+            while world.t < start + 900 * 1_000_000_000 {
+                world.tick(&mut [&mut core]);
+                worst = worst.max((world.error_ns(&core).expect("anchored") - line).abs());
+                if !core.model().locked && lost_at.is_none() {
+                    lost_at = Some((world.t - start) as f64 / 1e9);
+                }
+            }
+            let line_report =
+                format!("{name} {world_name}: worst {worst} ns, lock lost at {lost_at:?} s");
+            if worst >= LOCK_BOUND_NS || lost_at.is_some() {
+                fails.push(line_report.clone());
+            }
+            report.push(line_report);
+        }
+    }
+    eprintln!("dsync#204 follower, local ramp:\n  {}", report.join("\n  "));
+    assert!(fails.is_empty(), "{fails:?}");
 }

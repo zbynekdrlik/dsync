@@ -10,6 +10,8 @@ paths:
   - "crates/dsync-ptp/src/recv_errors.rs"
   - "src/net_winsock.rs"
   - "src/traits.rs"
+  - "src/startup_open.rs"
+  - "src/main.rs"
 ---
 
 # PTP liveness: the re-join and the honest `/status` while PTP is stale (dsync#112)
@@ -137,3 +139,19 @@ re-join exists.
   the current one and report a rate while stale.
 - The controller glue and the Windows backends compile only on CI: the RED push is the first
   compile. Check the RED run fails exactly the expected tests before writing GREEN.
+
+## dsync#206 (v1.35.12) — a failed FIRST open starts the loop without a path
+
+At boot mbc-snv's Npcap listed only `NPF_Loopback`. The unpinned startup's `?` ended
+`run_sync_loop` for good, while the process (HTTP, IPC) stayed up and served a stale `/status`.
+- `startup_open::open_unpinned` hands back the backend UNOPENED (`UdpPtpNetwork::unopened` /
+  `NpcapPtpNetwork::unopened`: the state a failed re-join leaves) and the reason. The loop runs:
+  NTP-only once stale, and the 31900 server answers. The #112 re-join opens the path on its
+  unpinned schedule through the same selection code.
+- `PtpController::note_ptp_not_open` puts the reason in `ClockHealth.interface_problem` (after a
+  pinned reason) via `ptp_liveness.not_open`, and sets `/status.ptp_interface` to null until a join.
+  It never switches to the pinned 5 s cadence.
+- A pinned startup still waits in `pinned_wait` (its open failures were already retried).
+- Any NEW startup `?` between the logger and the sync loop is the same class of bug. Ask: can it
+  fail for a boot race? If so, degrade and let a running loop retry.
+

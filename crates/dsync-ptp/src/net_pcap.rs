@@ -439,6 +439,31 @@ impl NpcapPtpNetwork {
         })
     }
 
+    /// dsync#206: the startup's open failed (at boot the Npcap device list can lag the adapter
+    /// list): NO capture yet, the state a failed re-join leaves. The controller's re-join (#112)
+    /// selects and opens on its schedule through the same `select_ptp_device` /
+    /// `open_ptp_capture`, `ip` (the default interface's) as the home it looks for after the
+    /// trusted-subnet rule. Unpinned only: a pinned startup waits in `pinned_wait`. Hostname
+    /// allowlist entries are not resolved here: every re-join resolves them before it selects.
+    pub fn unopened(
+        interface_name: &str,
+        ip: Ipv4Addr,
+        gm_allowlist: &crate::gm_filter::GmAllowlist,
+    ) -> Self {
+        NpcapPtpNetwork {
+            open: None,
+            using_hiprec: true,
+            hint: interface_name.to_string(),
+            gm_allowlist: gm_allowlist.clone(),
+            // No capture ever opened: the first re-join's `changed` is not claimed against a
+            // friendly name that is never a device name (`\Device\NPF_{GUID}`).
+            last_join: (String::new(), ip),
+            home_ip: ip,
+            pinned: None,
+            recv_gate: crate::recv_errors::RecvErrorGate::new(),
+        }
+    }
+
     /// The device and the IPv4 of the last capture that opened (`/status.ptp_interface`).
     pub fn joined(&self) -> (&str, Ipv4Addr) {
         (self.last_join.0.as_str(), self.last_join.1)
@@ -589,7 +614,9 @@ impl NpcapPtpNetwork {
         let open = open_ptp_capture(device, ip)?;
         let (iface, ip) = (open.device_name.clone(), open.iface_ip);
         info!("Npcap PTP capture re-opened on {} ({}) (rejoin)", iface, ip);
-        let changed = self.last_join.0 != iface || self.last_join.1 != ip;
+        // dsync#206: the first open of an unopened start is not a change of interface.
+        let changed =
+            !self.last_join.0.is_empty() && (self.last_join.0 != iface || self.last_join.1 != ip);
         self.last_join = (iface.clone(), ip);
         self.open = Some(open);
         // dsync#161: a new handle is read at once.

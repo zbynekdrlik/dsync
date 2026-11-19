@@ -6,6 +6,8 @@ paths:
   - "src/status.rs"
   - "crates/dsync-ptp/src/ptp_phase_lock.rs"
   - "crates/dsync-ptp/src/ptp_phase_lock/first_engagement.rs"
+  - "crates/dsync-ptp/src/ptp_phase_lock/excursion.rs"
+  - "crates/dsync-ptp/src/ptp_phase_lock/local_ramp_tests.rs"
   - "crates/dsync-ptp/src/phase_window.rs"
   - "crates/dsync-ptp/src/delay_floor.rs"
   - "src/date_offset.rs"
@@ -1622,3 +1624,39 @@ mechanism. What was learned:
 - **The replay as a regression pin:** `an_outage_then_a_double_flap_then_a_moving_rate_never_unlocks_182`
   passes on the current core (≤ 48 µs) and is RED with `GM_BOOST_GAIN = 1` (167 µs, 185 windows
   > 150 µs). That reproduces the rig's unlock.
+
+## dsync#204 (v1.35.12) — a local-oscillator ramp boosts the PI; the decision must not feed on itself
+
+resolume-pp (19.11.2026): a GPU/CPU load moved the crystal ~6 ppm over minutes and the plain PI
+read +95 µs (a ramp ρ leaves ρ / K_I). `ptp_phase_lock/excursion.rs` drives the #166 boost
+(×4, ζ = 1) from the tracked error. Three review rounds shaped it. Each lesson is a test now:
+
+- **Any adaptive gain on noisy input must be CONTINUOUS.** Two followers on one PC see the same
+  windows ± 40 ns. An all-or-nothing arm let them arm a window apart and split 1.2 µs. Write tapers,
+  max/min and quantiles, never thresholds. Pin it with a 1 ns input sweep
+  (`the_boost_is_continuous_in_its_input_204`) AND a two-core pair test over every input shape
+  (`two_cores_fed_the_same_windows_agree_within_a_microsecond_through_a_ramp_204`). The sweep alone
+  passed while the pair split 19 µs.
+- **"Continuous" is not "insensitive" when the gain feeds back into its own input.** Gating on
+  |e| made a cycle: the boost shrinks e below the bound, the return lets e grow back into it. Each
+  re-entry amplified the residue (19 µs on slow ramps; the 2 min ramp hid it). The decision must use a
+  quantity the boost does not change. `g²·|mean|` is the error the PLAIN PI would hold, and it is
+  ρ / K_I at any gain in a steady ramp.
+- **…and `g²` multiplies the mean's noise.** A 10 s mean ×16 latched the boost on window noise
+  (the two-clock bench's words left the truth by 0.63 ppm). The mean's τ is 10 s × g.
+- **A latch on a measured quantity needs an escape valve (the #76 lesson again).** Under ×4 on a
+  ±35-50 µs box `g²·mean` read noise past the bound for ever. A running boost holds only while it
+  remembers a START (10 min). Widening the bound by the measured noise also slowed every start.
+- **Test at the Dante cadence (~1 s windows), not only 0.5 s.** Fewer windows per τ means more
+  lag and noise: 6 ppm / 2 min at ±20 µs held at 0.5 s and reached 67 µs at 1 s.
+- **A level shift is not a ramp.** The PI retires a shift at `−K_P·e`, so the unlearned frequency
+  `u = slope + K_P·value` (both from one LSQ line at the same instant; the lagging EMA mean read a
+  retired shift as unlearned) is ~0. Judge u by a 25 % quantile over twice the rate ring, so a jump
+  crossing the ring cannot start a boost. u only STARTS one.
+- **Judge a sim tail by many seeds.** 3 seeds said 43 µs for 6 ppm / 2 min at ±20 µs. 200 runs said
+  51.7 max (ramp-in 5 s), and 49.8 with 3 s.
+- **A ring or window full by SPAN never fills on 1.016 s Dante windows** (the #136 lesson, hit
+  again): judge by the time since its restart.
+- Measuring before/after on one build: set the arm constant huge (`EXCURSION_ARM_US = 1e12`)
+  temporarily. That gives the plain-PI numbers without a second checkout.
+

@@ -144,6 +144,7 @@ mod tests {
             error_ns,
             event: AnchorEvent::None,
             freq_step: None,
+            excursion: None,
         }
     }
 

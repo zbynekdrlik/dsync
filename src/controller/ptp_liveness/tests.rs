@@ -717,3 +717,67 @@ fn a_stale_link_local_join_is_left_to_the_stale_rejoin_191() {
     c.maybe_leave_link_local(Instant::now());
     assert_eq!(count.load(Ordering::SeqCst), 0);
 }
+
+/// dsync#206 (mbc-snv, 19.11.2026 01:53): the startup could not open the receive path (Npcap
+/// listed only the loopback device). The loop runs with none: the clock alarm names why, the #112
+/// re-join opens it on its unpinned schedule (10 s, then 30 s ...), and the alarm reason ends with
+/// the join.
+#[test]
+fn a_receive_path_not_open_at_start_is_named_and_opened_by_the_rejoin_206() {
+    let calls = Arc::new(AtomicU32::new(0));
+    let seen = calls.clone();
+    let mut net = MockPtpNetwork::new();
+    net.expect_rejoin().returning(move || {
+        if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(anyhow::anyhow!(
+                "Interface '{{CC545DEA-6E37-4FF6-A98E-0297BB71B85A}}' not found. Available: \
+                 [NPF_Loopback]"
+            ))
+        } else {
+            Ok(eth0())
+        }
+    });
+    let (mut c, st) = controller(net);
+    let t0 = Instant::now();
+    c.last_ptp_packet = t0;
+    c.set_ptp_interface(None, "Ethernet 3", Ipv4Addr::new(10, 77, 7, 232));
+    c.note_ptp_not_open(
+        "Interface '{CC545DEA-6E37-4FF6-A98E-0297BB71B85A}' not found. Available: [NPF_Loopback]",
+    );
+    let reason = c.sample_clock_health().lost_reason().unwrap_or_default();
+    assert!(
+        reason.contains("not open") && reason.contains("CC545DEA"),
+        "the alarm names the missing device: {reason:?}"
+    );
+    {
+        let st = st.read().expect("status");
+        assert_eq!(st.ptp_interface, None, "nothing is joined");
+        assert_eq!(st.ptp_interface_ip, None);
+    }
+    c.maybe_rejoin_ptp(t0 + ms(9_500));
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "not before 10 s");
+    c.maybe_rejoin_ptp(t0 + ms(10_500));
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the first attempt at 10 s");
+    let reason = c.sample_clock_health().lost_reason().unwrap_or_default();
+    assert!(reason.contains("CC545DEA"), "still named: {reason:?}");
+    c.maybe_rejoin_ptp(t0 + ms(15_500));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the unpinned 30 s backoff, not 5 s"
+    );
+    assert_eq!(
+        c.ptp_liveness.interface_problem, None,
+        "no pinned-NIC reason"
+    );
+    c.maybe_rejoin_ptp(t0 + ms(40_600));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "the second attempt 30 s later"
+    );
+    let reason = c.sample_clock_health().lost_reason().unwrap_or_default();
+    assert!(!reason.contains("not open"), "joined: {reason:?}");
+    let st = st.read().expect("status");
+    assert_eq!(st.ptp_interface.as_deref(), Some("enx002427159965"));
+}

@@ -887,3 +887,28 @@ fn status_reports_the_running_version_179() {
     let restored: SyncStatus = serde_json::from_value(old).expect("a pre-1.35 blob parses");
     assert_eq!(restored.version, "");
 }
+
+/// dsync#204: the excursion-boost fields are additive. A pre-1.35.12 blob deserializes to "none
+/// yet, not engaged"; a boosted node round-trips them.
+#[test]
+fn test_sync_status_phase_excursion_fields_are_additive_204() {
+    let pre_204 = r#"{"offset_ns":0,"drift_ppm":0.0,"gm_uuid":null,"gm_source_ip":null,
+        "settled":true,"updated_ts":1786439763,"is_locked":true,"smoothed_rate_ppm":0.1,
+        "ntp_offset_us":0,"mode":"LOCK","ntp_failed":false,"accumulated_phase_us":0.0,
+        "freq_steps":1,"last_freq_step_ppm":25.0,"last_freq_step_ts":1786439000}"#;
+    let restored: SyncStatus =
+        serde_json::from_str(pre_204).expect("pre-#204 JSON must still deserialize");
+    assert_eq!(restored.ptp_phase_excursion_boosts, 0);
+    assert_eq!(restored.ptp_phase_gain, None);
+    assert_eq!(restored.freq_steps, 1);
+
+    let boosted = SyncStatus {
+        ptp_phase_excursion_boosts: 3,
+        ptp_phase_gain: Some(2.5),
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&boosted).expect("serialize failed");
+    let back: SyncStatus = serde_json::from_str(&json).expect("deserialize failed");
+    assert_eq!(back.ptp_phase_excursion_boosts, 3);
+    assert_eq!(back.ptp_phase_gain, Some(2.5));
+}
