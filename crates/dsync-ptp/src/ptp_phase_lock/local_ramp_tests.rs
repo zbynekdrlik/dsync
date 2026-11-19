@@ -286,3 +286,155 @@ fn two_cores_fed_the_same_windows_agree_within_a_microsecond_through_a_ramp_204(
     eprintln!("dsync#204 pair split, worst {worst_all:.0} ns");
     assert!(fails.is_empty(), "cores > 1 µs apart: {fails:?}");
 }
+
+/// One ramp on windows `dt` s apart: the worst true |e| (µs) during `secs`, the gain factor
+/// `quiet_s` later (the boost must have let go), and the core.
+fn ramp_on(
+    profile: Profile,
+    sign: f64,
+    jitter_us: f64,
+    seed: u64,
+    dt: f64,
+    secs: f64,
+    quiet_s: f64,
+) -> (f64, f64) {
+    let mut jitter = Jitter::new(seed, jitter_us);
+    let mut c = PhaseLockCore::new();
+    let osc0 = -3.8;
+    let mut p = Plant::new(osc0, -osc0);
+    for _ in 0..(1_000.0 / dt) as usize {
+        let out = c.on_window(D + (p.e_ns + jitter.next()).round() as i64, true, -osc0, dt);
+        p.advance(out.freq_ppm.expect("engaged"), dt);
+    }
+    let e_us = |c: &PhaseLockCore, p: &Plant| {
+        (p.e_ns - (c.anchor_ns().expect("anchored") - D) as f64) / 1_000.0
+    };
+    let mut worst = 0.0f64;
+    for n in 0..(secs / dt) as usize {
+        p.osc_ppm = osc0 + sign * profile(n as f64 * dt);
+        let out = c.on_window(D + (p.e_ns + jitter.next()).round() as i64, true, -osc0, dt);
+        p.advance(out.freq_ppm.expect("engaged"), dt);
+        worst = worst.max(e_us(&c, &p).abs());
+    }
+    for _ in 0..(quiet_s / dt) as usize {
+        let out = c.on_window(D + (p.e_ns + jitter.next()).round() as i64, true, -osc0, dt);
+        p.advance(out.freq_ppm.expect("engaged"), dt);
+    }
+    (worst, c.gain_factor())
+}
+
+/// Third review of #204: on a noisy box (±35-50 µs windows, 1 s Dante spacing) the boost's
+/// `g²·mean` read the window noise past its bound and held ×4 for good after the ramp was gone.
+/// The boost must let go within half an hour of the ramp's end.
+#[test]
+fn a_noisy_box_lets_the_boost_go_after_the_ramp_204() {
+    let mut stuck = Vec::new();
+    for jitter_us in [35.0, 50.0] {
+        for seed in 1..=6u64 {
+            let (_, gain) = ramp_on(
+                linear_6_ppm_over_5_min,
+                1.0,
+                jitter_us,
+                0x204_9000 + seed,
+                1.0,
+                900.0,
+                1_800.0,
+            );
+            if gain > 1.05 {
+                stuck.push(format!("±{jitter_us} µs seed {seed}: x{gain:.2}"));
+            }
+        }
+    }
+    assert!(stuck.is_empty(), "the boost held after the ramp: {stuck:?}");
+}
+
+/// Third review of #204: the Dante grandmaster's windows are ~1 s apart, not 0.5 s. The live
+/// shapes (6 ppm over 5 min, thermal τ 300 s) at ±10 µs window noise (resolume-pp's level: sd
+/// 3.5-5.3 µs) and the 5 min ramp at ±20 µs (mbc-snv's), and the 2.5× faster 6 ppm / 2 min ramp at
+/// ±10 µs, hold |e| < 50 µs. Measured limits (not pinned): thermal at ±20 µs reads up to 51.8 µs
+/// in 1 of 16 runs, the 2 min ramp at ±20 µs up to 67 µs.
+#[test]
+fn a_ramp_on_one_second_windows_keeps_the_phase_within_50_us_204() {
+    let cases: [(&str, Profile, f64); 4] = [
+        ("5 min ±10", linear_6_ppm_over_5_min, 10.0),
+        ("5 min ±20", linear_6_ppm_over_5_min, 20.0),
+        ("thermal ±10", thermal_6_ppm_tau_300_s, 10.0),
+        ("2 min ±10", linear_6_ppm_over_2_min, 10.0),
+    ];
+    let mut fails = Vec::new();
+    for (name, profile, jitter_us) in cases {
+        let mut worst = 0.0f64;
+        for sign in [1.0, -1.0] {
+            for seed in 1..=8u64 {
+                let (w, _) = ramp_on(
+                    profile,
+                    sign,
+                    jitter_us,
+                    0x204_1000 + seed * 7,
+                    1.0,
+                    900.0,
+                    0.0,
+                );
+                worst = worst.max(w);
+            }
+        }
+        if worst >= 50.0 {
+            fails.push(format!("{name}: {worst:.1} µs"));
+        }
+    }
+    assert!(fails.is_empty(), "|e| ≥ 50 µs on 1 s windows: {fails:?}");
+}
+
+/// Third review of #204: the pair test on the Dante grandmaster's 1 s windows (±10 µs window
+/// noise), the linear ramps. Measured limit (not pinned, a follow-up): the thermal ramp's release
+/// at 1 s windows splits two cores by up to 2.0 µs (3 of 24 runs at ±10 µs; 1.8 µs at ±20 µs),
+/// while each is within ~35 µs of the line; 0.5 s windows hold ≤ 110 ns
+/// (`two_cores_fed_the_same_windows_agree_within_a_microsecond_through_a_ramp_204`).
+#[test]
+fn two_cores_on_one_second_windows_agree_within_a_microsecond_204() {
+    let mut fails = Vec::new();
+    for (name, profile) in PROFILES.into_iter().take(2) {
+        for sign in [1.0, -1.0] {
+            for seed in 1..=12u64 {
+                let dt = 1.0;
+                let mut jitter = Jitter::new(seed * 7919 + 5, 10.0);
+                let mut r1 = Jitter::new(seed * 31 + 7, 0.04);
+                let mut r2 = Jitter::new(seed * 57 + 9, 0.04);
+                let (mut c1, mut c2) = (PhaseLockCore::new(), PhaseLockCore::new());
+                let osc0 = -3.8;
+                let (mut p1, mut p2) = (Plant::new(osc0, -osc0), Plant::new(osc0, -osc0));
+                let settle = 600;
+                let mut worst = 0.0f64;
+                for n in 0..(settle + 900) {
+                    if n >= settle {
+                        let o = osc0 + sign * profile((n - settle) as f64 * dt);
+                        p1.osc_ppm = o;
+                        p2.osc_ppm = o;
+                    }
+                    let j = jitter.next();
+                    let o1 = c1.on_window(
+                        D + (p1.e_ns + j + r1.next()).round() as i64,
+                        true,
+                        -osc0,
+                        dt,
+                    );
+                    let o2 = c2.on_window(
+                        D + (p2.e_ns + j + r2.next()).round() as i64,
+                        true,
+                        -osc0,
+                        dt,
+                    );
+                    p1.advance(o1.freq_ppm.expect("engaged"), dt);
+                    p2.advance(o2.freq_ppm.expect("engaged"), dt);
+                    if n >= settle {
+                        worst = worst.max((p1.e_ns - p2.e_ns).abs());
+                    }
+                }
+                if worst > 1_000.0 {
+                    fails.push(format!("{name} {sign:+} seed {seed}: {worst:.0} ns"));
+                }
+            }
+        }
+    }
+    assert!(fails.is_empty(), "cores > 1 µs apart: {fails:?}");
+}
