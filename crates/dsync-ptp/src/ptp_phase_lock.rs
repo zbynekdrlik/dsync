@@ -994,9 +994,13 @@ impl PhaseLockCore {
             && self
                 .last_taken_e_us
                 .is_some_and(|taken| (e_raw_us - taken).abs() > LATE_WINDOW_JUMP_US);
-        // dsync#204: the boot's own fits own the frequency while they run, and a followed step
-        // owns this window.
-        let armable = !self.boot_fit_open && self.refine.is_none() && freq_step.is_none();
+        // dsync#204: the boot's own fits own the frequency while they run, a followed step owns
+        // this window, and a #166 grandmaster-change boost owns its minutes (a schedule in
+        // grandmaster time).
+        let armable = !self.boot_fit_open
+            && self.refine.is_none()
+            && freq_step.is_none()
+            && self.boost_s.is_none();
         let (f, excursion) = self.pi_window(e_raw_us, dt, late, armable);
         self.fstep.note_word(f);
         self.last_freq_ppm = f;

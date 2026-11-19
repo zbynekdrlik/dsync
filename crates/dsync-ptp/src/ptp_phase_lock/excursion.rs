@@ -5,8 +5,12 @@
 //! resolume-pp (19.11.2026) went −3.8 → −9.6 ppm and read +95 µs for minutes while still in LOCK.
 //! The grandmaster-change boost (`K_P × 4`, `K_I × 16`, still ζ = 1, τ 25 s) cuts that error 16×,
 //! but only a time-base change armed it. Here the TRACKED error (`e` minus a running pull) drives
-//! the same boost when it is
-//! - beyond [`EXCURSION_ARM_US`] in its running mean (τ [`EXCURSION_TAU_S`]; its noise is a few µs),
+//! the same boost. It is NEEDED while the error the PLAIN PI would hold, `g²·|mean|` (the running
+//! mean, τ [`EXCURSION_TAU_S`], times the gain in force squared: the integrator learns
+//! `K_I·g²·e` per second, which in a steady ramp is `ρ` at any gain), is beyond
+//! [`EXCURSION_ARM_US`]. Judged on that, a running boost is no input to its own decision: it holds
+//! while the ramp lasts and lets go once (a boost that cycled around its bound amplified two
+//! followers' ns residue to 19 µs, the second review). A boost STARTS only when the error is also
 //! - carried by an UNLEARNED FREQUENCY `u` of its own sign ([`EXCURSION_UNLEARNED_PPM`]). The loop
 //!   is `d(e − r)/dt = u − K_P·(e − r)` (the plant, the PI and the pull's feed-forward), so
 //!   `u = d(tracked)/dt + K_P·tracked` with the `K_P` in force. A ramp the PI lags has
@@ -22,7 +26,7 @@
 //! **Every input enters continuously** (two followers on one PC read the same windows ± ~40 ns of
 //! conversion residue, `.claude/rules/ptp-library.md` #136/#170: an all-or-nothing arm let them
 //! arm a window apart and split ~1.2 µs). Each condition is a linear taper to a factor in [0, 1];
-//! their product `x` is the boost's TARGET. A charge `C = max(C − dt/T, x)` holds it
+//! the TARGET is `needed × max(start, level in force)`. A charge `C = max(C − dt/T, x)` holds it
 //! (`T` = [`GM_BOOST_HOLD_S`] + [`GM_BOOST_RAMP_S`]), its exponent `min(1, C·T/ramp)` is the #166
 //! schedule (full for the hold, then back geometrically over the ramp), and the exponent in force
 //! rises toward it by at most `dt / `[`EXCURSION_RAMP_IN_S`] (never a word step under a standing
@@ -80,10 +84,14 @@ pub const EXCURSION_SUSTAIN_QUANTILE: f64 = 0.25;
 pub const EXCURSION_ENGAGE_HOLDOFF_S: f64 = 30.0;
 pub const EXCURSION_HOLDOFF_TAPER_S: f64 = 10.0;
 
-/// Grandmaster seconds over which the boost's exponent may rise from 0 to 1 (`GAIN^(t/ramp)`): a
-/// `K_P` change of ≤ ~15 % per 0.5 s window, so under a 25 µs error the word moves ≤ ~0.08 ppm
-/// × the gain per window from the gain change itself, never a step.
-pub const EXCURSION_RAMP_IN_S: f64 = 5.0;
+/// Grandmaster seconds over which the boost's exponent may rise from 0 to 1 (`GAIN^(t/ramp)`):
+/// `K_P` grows by ≤ ~26 % per 0.5 s window, so under a 30 µs error the gain change itself moves
+/// the word by ≤ ~0.2 ppm × the gain per window, never a step. 5 s left a 6 ppm / 2 min ramp at
+/// ±20 µs window noise at 50.9 µs p99 (51.7 max, 200 runs); 3 s holds it at 49.8 max.
+pub const EXCURSION_RAMP_IN_S: f64 = 3.0;
+
+/// The boost's exponent at which a start is counted and logged.
+pub const EXCURSION_REPORT_LEVEL: f64 = 0.25;
 
 /// The charge's whole decay (s): the hold, then the return.
 const EXCURSION_CHARGE_S: f64 = GM_BOOST_HOLD_S + GM_BOOST_RAMP_S;
@@ -116,7 +124,7 @@ pub struct ExcursionBoost {
     charge: f64,
     /// The boost's exponent in force (0 = the normal gains, 1 = × [`GM_BOOST_GAIN`]).
     level: f64,
-    /// Boosts started from the normal gains since start.
+    /// Boosts that reached [`EXCURSION_REPORT_LEVEL`] since start.
     arms: u32,
 }
 
@@ -169,6 +177,9 @@ impl ExcursionBoost {
     /// The boost's clock runs `dt` with no new target (a late window: it says nothing about the
     /// clock, but every box that took the same windows runs the same schedule).
     pub fn advance(&mut self, dt: f64) {
+        if !self.ring.is_empty() {
+            self.clock_s += dt;
+        }
         self.charge = (self.charge - dt / EXCURSION_CHARGE_S).max(0.0);
         self.level = self.level.min(self.scheduled());
     }
@@ -197,7 +208,14 @@ impl ExcursionBoost {
     /// step was followed in this window. Returns the window where a boost starts from the normal
     /// gains.
     pub fn observe(&mut self, tracked_us: f64, dt: f64, armable: bool) -> Option<ExcursionArm> {
-        let alpha = 1.0 - (-dt / EXCURSION_TAU_S).exp();
+        // This boost's own gain. The mean's time constant grows with it: the error the plain PI
+        // would hold is `g²·|mean|`, and a 10 s mean × 16 read 1-3 µs of window noise as 16-48 µs
+        // and latched the boost (the bench caught it). Averaged g times longer the product's noise
+        // is g^1.5 × the 10 s mean's (8× at ×4: ~6 µs at a 5 µs window sd), and a finished ramp
+        // lets go within ~2-3 min (g² would hold it ~5 min). Continuous in the level.
+        let own = GM_BOOST_GAIN.powf(self.level);
+        let tau = EXCURSION_TAU_S * own;
+        let alpha = 1.0 - (-dt / tau).exp();
         let mean = match self.mean_us {
             Some(m) => m + alpha * (tracked_us - m),
             None => tracked_us * alpha,
@@ -217,11 +235,9 @@ impl ExcursionBoost {
         }
         // No line yet (too few windows since a restart): no target.
         let line = fit_line(self.ring.iter());
-        // The `K_P` of the PI WITHOUT this boost (the #166 schedule's): under this boost `u` then
-        // reads low (the boosted P term retires the lag), so a running boost never feeds its own
-        // target, a positive feedback that would make the gain steep in its input; the hold keeps
-        // it while the ramp lasts, and a ramp that outlasts it is met again.
-        let k_p = K_P_PER_S * self.gm_gain.max(1.0);
+        // The gain in force (the larger boost, as the core's `gains`).
+        let g = self.gm_gain.max(GM_BOOST_GAIN.powf(self.level)).max(1.0);
+        let k_p = K_P_PER_S * g;
         // The slope and the level at the same instant (the newest window): the running mean lags a
         // moving error by ~τ × its rate, which reads a retired level shift as unlearned.
         let unlearned = line.map(|l| l.slope_ppm + k_p * l.value_at(now));
@@ -240,13 +256,22 @@ impl ExcursionBoost {
         let sustained = (self.clock_s >= EXCURSION_SUSTAIN_S)
             .then(|| self.sustained_unlearned(mean.signum()))
             .flatten();
-        let target = match (unlearned, sustained) {
-            (Some(u), Some(u_low)) if armable => {
+        // What the PLAIN PI would hold: the integrator learns `K_I·g²·e` per second, which in a
+        // steady ramp is the ramp `ρ` itself at any gain, so `g²·|mean|` reads `ρ / K_I` whether
+        // a boost runs or not. Judged on it, a running boost is no input to its own decision:
+        // it holds while the ramp lasts and lets go once, never cycling around its bound (a
+        // cycle amplified two followers' ns residue to µs, the second review of #204).
+        let plain_equivalent_us = own * own * mean.abs();
+        let needed = taper(
+            plain_equivalent_us,
+            EXCURSION_ARM_US - EXCURSION_ARM_TAPER_US,
+            EXCURSION_ARM_US + EXCURSION_ARM_TAPER_US,
+        );
+        // Only a START needs the unlearned frequency (a ramp, not a level shift or a step);
+        // a running boost holds itself on `needed`.
+        let start = match (unlearned, sustained) {
+            (Some(u), Some(u_low)) => {
                 taper(
-                    mean.abs(),
-                    EXCURSION_ARM_US - EXCURSION_ARM_TAPER_US,
-                    EXCURSION_ARM_US + EXCURSION_ARM_TAPER_US,
-                ) * taper(
                     -u.abs(),
                     -(EXCURSION_MAX_RATE_PPM + 1.0),
                     -(EXCURSION_MAX_RATE_PPM - 1.0),
@@ -259,10 +284,17 @@ impl ExcursionBoost {
             }
             _ => 0.0,
         };
+        let target = if armable {
+            needed * start.max(self.level)
+        } else {
+            0.0
+        };
         self.charge = (self.charge - dt / EXCURSION_CHARGE_S).max(target);
         let before = self.level;
         self.level = self.scheduled().min(before + dt / EXCURSION_RAMP_IN_S);
-        if before == 0.0 && self.level > 0.0 {
+        // Counted and logged when it reaches a quarter (a ×1.4 boost): a target that only grazes
+        // the bound is not reported as a boost.
+        if before < EXCURSION_REPORT_LEVEL && self.level >= EXCURSION_REPORT_LEVEL {
             self.arms = self.arms.saturating_add(1);
             Some(ExcursionArm {
                 mean_us: mean,
