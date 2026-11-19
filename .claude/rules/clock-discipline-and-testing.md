@@ -7,6 +7,7 @@ paths:
   - "crates/dsync-ptp/src/ptp_phase_lock.rs"
   - "crates/dsync-ptp/src/ptp_phase_lock/first_engagement.rs"
   - "crates/dsync-ptp/src/ptp_phase_lock/excursion.rs"
+  - "crates/dsync-ptp/src/ptp_phase_lock/excursion/plain_mirror.rs"
   - "crates/dsync-ptp/src/ptp_phase_lock/local_ramp_tests.rs"
   - "crates/dsync-ptp/src/phase_window.rs"
   - "crates/dsync-ptp/src/delay_floor.rs"
@@ -1659,4 +1660,37 @@ read +95 µs (a ramp ρ leaves ρ / K_I). `ptp_phase_lock/excursion.rs` drives t
   again): judge by the time since its restart.
 - Measuring before/after on one build: set the arm constant huge (`EXCURSION_ARM_US = 1e12`)
   temporarily. That gives the plain-PI numbers without a second checkout.
+
+**v1.35.14 — decide on a mirror of the plain PI (`excursion/plain_mirror.rs`).** The PR #207
+review's two limits on 1.016 s windows turned out to be one design fault and one detection limit:
+
+- **`g²·mean` was not insensitive enough.** It is ρ / K_I only in a STEADY ramp. The gain moves
+  at once and the error over the loop's τ, so a gain step moved its own input (≈ ln16·g²·mean per
+  unit level, against a 0.1/µs taper: a loop gain ≫ 1). `u` with the `K_P` in force had the same
+  lag. The hold `needed × min(level, memory)` added a fork: `level` is 1.4 × the charge in the
+  return, so `needed > 0.71` re-raised a returning boost. Two cores took that fork ~60 s apart on
+  the thermal tail: 7.25 µs at 1.016 s (the review read 2.0 at 1.0 s).
+- **The fix is an input the gain cannot reach.** The mirror runs the plain PI on the open-loop
+  phase (tracked error − real correction + its own). Its integrator follows every re-seed of the
+  real one. Without that, a followed 25 ppm step read as unlearned and the bench's back-to-back
+  steps were followed at −23 ppm. The hold is `needed × max(start, min(memory, charge))`: gain
+  ≤ 1, and no revival from an old start once the charge is 0. Pairs are now ≤ 420 ns on every
+  shape at ±10 / ±20 µs (was 7.25 µs). Damping the old input (wider tapers, an EMA of `g²·e`)
+  only got to 1.9-6.3 µs.
+- **Read a worst run's per-window trace before tuning.** The 2 min tail was the STEP-RATE gate
+  (`|u| ≤ 3 ± 1` ppm): the plain PI lags a 2 min ramp by 3-4 ppm exactly when it should arm. It
+  now sits at the detector's own 6 ± 1 ppm. A second cause was the 25 % quantile of ~15 correlated
+  slopes waiting out a noise dip; it is 0.35 now (0.4 let a 40 µs path shift start a boost).
+- **What did NOT survive the pins** (each broke a level-shift test, the bench's 0.1 ppm/min wander
+  or an existing unit test): a 20-25 s sustain window, a lag-compensated mean, τ 5-7 s, a 12-13 s
+  ring, lower `u` bounds.
+- **The honest limit:** 6 ppm / 2 min at ±20 µs on 1.016 s windows is 54.2 µs max over the
+  committed 200 runs (v1.35.13: 64.1), and up to 57.5 on another seed set (v1.35.13: 78.4). A
+  boost that is ALWAYS on reads 38.9, so the gap is the detection, not the loop: a ramp must be
+  told from a 25-150 µs path shift before its error crosses ~25 µs. It is pinned as an envelope
+  (< 60 µs). Thermal and 5 min at ±20 µs are < 50 (40.6 / 45.0, were 46.0 / 50.1).
+- **An env-var knob per constant made the sweep cheap.** `par("NAME", CONST)` in scratch, a
+  release test binary and 200 runs per case: ~15 s per configuration. Run the crate tests and
+  the two-clock bench under the SAME env before choosing: a knob that only the ramp numbers
+  judge breaks a pin elsewhere. The env reads must never be committed.
 

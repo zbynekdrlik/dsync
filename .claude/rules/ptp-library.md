@@ -198,3 +198,9 @@ re-loads `active` after the slot read and retries when it moved. The regression 
 `a_stale_index_never_returns_a_complete_but_unpublished_write` drives that interleaving
 deterministically. The concurrent stress test only caught it on CI's slower Coverage runner; to
 reproduce locally, pin it to two cores (`taskset -c 0,1`) and loop it.
+
+A concurrency stress test must not assume a reader thread is scheduled before the writer
+finishes. v1.35.12's Windows release build failed `concurrent_readers_never_see_a_torn_write`
+with `r.join().unwrap() > 0` (run 44450603185). The writer now writes until every reader has read
+once (PR #208). It does not reproduce on Linux, even under `taskset -c 0` with CPU hogs: Windows
+thread start is slower than 200k writes.
