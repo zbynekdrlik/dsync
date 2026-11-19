@@ -953,3 +953,13 @@ canary evidence before continuing.
   nothing), stamps come from a thread blocked on the read (the Windows loop waits ~1 ms in Npcap
   with no PTP), service-only (the library follower serves Dante audio, which a no-PTP network
   does not carry). Playbook: `.claude/rules/fallback-time-source.md`.
+
+## 1.35.15 — #205 /status schema + monitor fields, #210 phase-lock split (19.11.2026)
+
+- #205: `SyncStatus.schema` = `STATUS_SCHEMA` (1), `#[serde(default)]` (0 in a pre-1.35.15 blob);
+  README "Monitoring `/status`" table of the 15 stable monitor fields. Commits `6cfaa99`, `8810e89`;
+  test `status_reports_the_contract_schema_205` (literal v1.35.14 blob). Bundled PR (see #205).
+- #210: `pi_window` / `pulled_word` moved byte-for-byte into `ptp_phase_lock/pi_window.rs` and
+  `pulled_word.rs`; unused Windows imports dropped (`SEND_RECV_FLAGS`, `File` now `#[cfg(unix)]`),
+  a needless `mut` in the bench. Commit `bbadcc4`; lib/bench 31/31/simulation_e2e/library_acceptance
+  unchanged, Windows gnu check 0 warnings.
