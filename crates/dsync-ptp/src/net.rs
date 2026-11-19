@@ -5,6 +5,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, UdpSocket};
 #[cfg(unix)]
 use nix::sys::socket::{setsockopt, sockopt};
 
+mod pinned_list;
+
 pub fn get_default_interface() -> Result<(String, Ipv4Addr)> {
     let ifaces = if_addrs::get_if_addrs()?;
 

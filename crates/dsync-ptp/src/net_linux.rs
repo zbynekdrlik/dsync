@@ -761,4 +761,80 @@ mod tests {
         net.factory.fail_port = fail;
         net
     }
+
+    /// dsync#212: a cambox with both onboard ports listed, joined at startup on `enp3s0`.
+    fn pinned_cambox(script: ScriptedSockets) -> UdpPtpNetwork<ScriptedSockets> {
+        UdpPtpNetwork::join(script, "enp3s0".to_string(), RIG)
+            .expect("the startup join")
+            .pinned_to(Some("enp1s0,enp3s0".to_string()))
+    }
+
+    #[test]
+    fn a_pinned_list_rejoins_the_listed_nic_the_cable_moved_to_212() {
+        let mut script = ScriptedSockets::default();
+        // A resolver that WOULD answer an unlisted NIC: it must not be used.
+        script.interfaces.push_back(Ok(("wg0".to_string(), USB)));
+        script
+            .pinned
+            .insert("enp3s0".to_string(), PinnedLookup::NoIpv4);
+        script
+            .pinned
+            .insert("enp1s0".to_string(), PinnedLookup::Ready(RIG));
+        let mut net = pinned_cambox(script);
+        let out = net.rejoin().expect("the cable is in enp1s0 now");
+        assert_eq!(
+            (out.iface.as_str(), out.ip, out.changed),
+            ("enp1s0", RIG, true)
+        );
+        assert_eq!(net.interface(), Some(("enp1s0", RIG)));
+
+        // ... and back.
+        net.factory
+            .pinned
+            .insert("enp1s0".to_string(), PinnedLookup::NoIpv4);
+        net.factory
+            .pinned
+            .insert("enp3s0".to_string(), PinnedLookup::Ready(RIG));
+        let out = net.rejoin().expect("the cable is back in enp3s0");
+        assert_eq!(
+            (out.iface.as_str(), out.ip, out.changed),
+            ("enp3s0", RIG, true)
+        );
+
+        // Neither port has an address: a typed error naming the list, nothing closed.
+        net.factory
+            .pinned
+            .insert("enp3s0".to_string(), PinnedLookup::NoIpv4);
+        let opened = net.factory.opened.len();
+        let err = net.rejoin().expect_err("no listed NIC has an IPv4");
+        assert_eq!(
+            err.downcast_ref::<PinnedInterfaceUnavailable>(),
+            Some(&PinnedInterfaceUnavailable {
+                name: "enp1s0,enp3s0".to_string(),
+                missing: false
+            })
+        );
+        assert_eq!(net.interface(), Some(("enp3s0", RIG)), "nothing closed");
+        assert_eq!(net.factory.opened.len(), opened);
+        assert_eq!(net.factory.resolves, 0, "never the listing-order resolver");
+    }
+
+    #[test]
+    fn when_both_listed_nics_keep_an_ipv4_a_stale_rejoin_tries_the_other_one_212() {
+        // A static address stays on a port without carrier: re-joining the silent port for
+        // ever would be the 19.11 outage again, so each stale re-join moves on in the list.
+        let other = Ipv4Addr::new(10, 77, 9, 134);
+        let mut script = ScriptedSockets::default();
+        script
+            .pinned
+            .insert("enp1s0".to_string(), PinnedLookup::Ready(other));
+        script
+            .pinned
+            .insert("enp3s0".to_string(), PinnedLookup::Ready(RIG));
+        let mut net = pinned_cambox(script);
+        let out = net.rejoin().expect("the re-join");
+        assert_eq!((out.iface.as_str(), out.ip), ("enp1s0", other));
+        let out = net.rejoin().expect("the re-join");
+        assert_eq!((out.iface.as_str(), out.ip), ("enp3s0", RIG));
+    }
 }
