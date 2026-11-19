@@ -467,7 +467,8 @@ fn dante_ramp_worst(profile: Profile, jitter_us: f64, seeds: u64) -> f64 {
 /// PR #207 review of #204: on the Dante cadence (1.016 s windows) at ±20 µs window noise (a USB
 /// Dante NIC's level), the live shapes (6 ppm thermal τ 300 s, 6 ppm over 5 min) keep |e| < 50 µs
 /// in every one of 64 runs per shape. v1.35.13 read 46.0 / 50.1 µs on these runs (on another
-/// 200-run seed set: 50.1 / 50.7 µs).
+/// 200-run seed set, a scratch sweep: 50.1 / 50.7 µs), so this test is RED there through the
+/// 5 min shape alone; the pair test below is the strong RED of the same fault.
 #[test]
 fn a_ramp_on_dante_windows_at_20_us_keeps_the_phase_within_50_us_204() {
     let mut fails = Vec::new();
@@ -487,9 +488,10 @@ fn a_ramp_on_dante_windows_at_20_us_keeps_the_phase_within_50_us_204() {
 /// PR #207 review of #204: the 2.5× faster 6 ppm / 2 min ramp at ±20 µs on Dante windows. Its
 /// MEASURED LIMIT is not < 50 µs: a ramp must be told from a 25-150 µs path shift (which must not
 /// boost) before its error crosses ~25 µs, and the plain PI's error then grows ~1.5 µs per window
-/// while a 15 s slope reads ±0.8 ppm of window noise. A boost that is ALWAYS on reads 38.9 µs,
-/// so the gap is the detection, not the loop. v1.35.13 read 64.1 µs on these 200 runs (on
-/// another 200-run seed set: p99 65.3, max 78.4 µs). The envelope pins the improvement.
+/// while a 15 s slope reads ±0.8 ppm of window noise. A boost that is ALWAYS on reads 38.9 µs
+/// (a scratch sweep), so the gap is the detection, not the loop. v1.35.13 read 64.1 µs on these
+/// 200 runs (on another 200-run seed set, a scratch sweep: p99 65.3, max 78.4 µs; v1.35.14 p99
+/// 54.6, max 57.5). The envelope pins the improvement; it is NOT the < 50 µs target.
 #[test]
 fn a_fast_ramp_on_dante_windows_at_20_us_stays_inside_its_measured_envelope_204() {
     let worst = dante_ramp_worst(PROFILES[1].1, 20.0, 100);
@@ -554,4 +556,44 @@ fn two_cores_on_dante_windows_agree_within_a_microsecond_through_every_ramp_204(
     }
     eprintln!("dsync#204 pair split on Dante windows, worst {worst_all:.0} ns");
     assert!(fails.is_empty(), "cores > 1 µs apart: {fails:?}");
+}
+
+/// Review of v1.35.14 (#204): the core hands the mirror the correction that acted on the TRACKED
+/// error, the word minus the pull's feed-forward. Through a pull's whole retirement, with the
+/// plain gains and a plant that applies each word over the next interval, the mirror's error
+/// must equal the tracked error (the real loop IS the plain PI). Handing it the word with the
+/// feed-forward in it walked the mirror off by the pull it retired.
+#[test]
+fn the_mirror_follows_the_tracked_error_through_a_pull_204() {
+    let dt = DANTE_DT;
+    let mut c = PhaseLockCore::new();
+    let osc0 = -3.8;
+    let mut e_ns = 0.0f64;
+    for _ in 0..(1_000.0 / dt) as usize {
+        let out = c.on_window(D + e_ns.round() as i64, true, -osc0, dt);
+        e_ns += (osc0 + out.freq_ppm.expect("engaged")) * dt * 1_000.0;
+    }
+    // A pull of 100 µs (a followed step's left phase): the tracked error moves by minus it.
+    c.pull_us = 100.0;
+    let mut worst = 0.0f64;
+    let mut pulled = 0;
+    for _ in 0..(300.0 / dt) as usize {
+        let pull_before = c.pull_us;
+        let input = D + e_ns.round() as i64;
+        let out = c.on_window(input, true, -osc0, dt);
+        let e_raw = (input - c.anchor_ns().expect("anchored")) as f64 / 1_000.0;
+        let tracked = e_raw - pull_before;
+        let mirror = c.excursion.plain_error_us().expect("a mirror");
+        if pull_before != 0.0 {
+            pulled += 1;
+        }
+        assert_eq!(c.gain_factor(), 1.0, "the plain gains");
+        worst = worst.max((mirror - tracked).abs());
+        e_ns += (osc0 + out.freq_ppm.expect("engaged")) * dt * 1_000.0;
+    }
+    assert!(pulled > 50, "the pull ran {pulled} windows");
+    assert!(
+        worst < 1e-6,
+        "the mirror left the tracked error by {worst} µs"
+    );
 }

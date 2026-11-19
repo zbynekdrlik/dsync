@@ -201,6 +201,12 @@ impl ExcursionBoost {
         self.mean_us
     }
 
+    /// The mirror's error (µs): what the plain PI would hold now.
+    #[cfg(test)]
+    pub(crate) fn plain_error_us(&self) -> Option<f64> {
+        self.mirror.as_ref().map(|m| m.e_us())
+    }
+
     /// Boosts started from the normal gains since start.
     pub fn arms(&self) -> u32 {
         self.arms

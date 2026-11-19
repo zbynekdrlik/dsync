@@ -2,7 +2,7 @@
 //!
 //! The excursion boost must be decided on a quantity its own gain does not move (two followers on
 //! one PC otherwise split by µs: a gain step moved its own input before the loop could answer).
-//! The real loop's tracked error obeys `d(tracked)/dt = osc − corr` (the plant, and the real
+//! The real loop's tracked error obeys `d(tracked)/dt = osc + corr` (the plant, and the real
 //! correction: the word minus the pull's feed-forward). The mirror's error obeys the same plant
 //! with its own correction: each window it adds the tracked error's move, takes the real
 //! correction of the interval back out and puts its own in.
@@ -14,6 +14,11 @@
 //!
 //! Without the real word (a caller that gives none) the real loop is taken to be the plain PI:
 //! the mirror's error is then the tracked error itself.
+//!
+//! The mirror leaves the true plain PI only where the real loop is clamped (the tracked error at
+//! `ERROR_CLAMP_US`, the real integrator at `FREQ_CLAMP_PPM`). It stays bounded there: it is a
+//! closed plain PI disturbed by a bounded correction, and those states end in a re-alignment
+//! (a restart of the mirror) anyway.
 
 use super::super::{K_I_PER_S2, K_P_PER_S};
 use super::LoopWord;

@@ -1674,8 +1674,8 @@ review's two limits on 1.016 s windows turned out to be one design fault and one
   phase (tracked error − real correction + its own). Its integrator follows every re-seed of the
   real one. Without that, a followed 25 ppm step read as unlearned and the bench's back-to-back
   steps were followed at −23 ppm. The hold is `needed × max(start, min(memory, charge))`: gain
-  ≤ 1, and no revival from an old start once the charge is 0. Pairs are now ≤ 420 ns on every
-  shape at ±10 / ±20 µs (was 7.25 µs). Damping the old input (wider tapers, an EMA of `g²·e`)
+  ≤ 1, and no revival from an old start once the charge is 0. Pairs are now 82 ns in the committed
+  test (≤ 420 ns in a scratch sweep of 50 runs per shape; was 7.25 µs). Damping the old input (wider tapers, an EMA of `g²·e`)
   only got to 1.9-6.3 µs.
 - **Read a worst run's per-window trace before tuning.** The 2 min tail was the STEP-RATE gate
   (`|u| ≤ 3 ± 1` ppm): the plain PI lags a 2 min ramp by 3-4 ppm exactly when it should arm. It
@@ -1684,9 +1684,13 @@ review's two limits on 1.016 s windows turned out to be one design fault and one
 - **What did NOT survive the pins** (each broke a level-shift test, the bench's 0.1 ppm/min wander
   or an existing unit test): a 20-25 s sustain window, a lag-compensated mean, τ 5-7 s, a 12-13 s
   ring, lower `u` bounds.
+- **A mutation check found the untested wire.** Handing the mirror the word WITH the pull's
+  feed-forward left all 308 crate tests green; only a release-mode bench case caught it. Pinned
+  by `the_mirror_follows_the_tracked_error_through_a_pull_204` (zero-delay plant, plain gains:
+  mirror = tracked to 1e-6 µs; 54.9 µs off with the mutation).
 - **The honest limit:** 6 ppm / 2 min at ±20 µs on 1.016 s windows is 54.2 µs max over the
-  committed 200 runs (v1.35.13: 64.1), and up to 57.5 on another seed set (v1.35.13: 78.4). A
-  boost that is ALWAYS on reads 38.9, so the gap is the detection, not the loop: a ramp must be
+  committed 200 runs (v1.35.13: 64.1), and up to 57.5 on another seed set (a scratch sweep;
+  v1.35.13: 78.4). A boost that is ALWAYS on reads 38.9 (scratch), so the gap is the detection, not the loop: a ramp must be
   told from a 25-150 µs path shift before its error crosses ~25 µs. It is pinned as an envelope
   (< 60 µs). Thermal and 5 min at ±20 µs are < 50 (40.6 / 45.0, were 46.0 / 50.1).
 - **An env-var knob per constant made the sweep cheap.** `par("NAME", CONST)` in scratch, a
