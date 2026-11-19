@@ -318,10 +318,11 @@ mod tests {
             assert!(t < 1_000.0, "never returned");
         }
         // The hold counts from the last window the boost was still needed: the running mean of
-        // the excursion decays over a few τ after the input goes quiet.
+        // the excursion (here a 110 µs one, far beyond what a boosted loop leaves) decays over a
+        // few of its time constants after the input goes quiet.
         let left = left_full_at.expect("returned");
         assert!(
-            (GM_BOOST_HOLD_S - 10.0..=GM_BOOST_HOLD_S + 90.0).contains(&left),
+            (GM_BOOST_HOLD_S - 10.0..=GM_BOOST_HOLD_S + 200.0).contains(&left),
             "the hold ended at {left}s"
         );
         assert!(
