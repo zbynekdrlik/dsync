@@ -438,3 +438,120 @@ fn two_cores_on_one_second_windows_agree_within_a_microsecond_204() {
     }
     assert!(fails.is_empty(), "cores > 1 µs apart: {fails:?}");
 }
+
+/// The Dante grandmaster's window spacing (s): ~1.016 s, which divides no ring or window length
+/// (the #136 v1.27.2 lesson: a ring full by its SPAN never fills on it).
+const DANTE_DT: f64 = 1.016;
+
+/// The worst true |e| (µs) of `profile` at `jitter_us` window noise on Dante windows over
+/// `seeds` noise seeds × both directions (judged as a tail: the #204 lesson, 3 seeds say little).
+fn dante_ramp_worst(profile: Profile, jitter_us: f64, seeds: u64) -> f64 {
+    let mut worst = 0.0f64;
+    for sign in [1.0, -1.0] {
+        for seed in 1..=seeds {
+            let (w, _) = ramp_on(
+                profile,
+                sign,
+                jitter_us,
+                0x204_d000 + seed * 13,
+                DANTE_DT,
+                900.0,
+                0.0,
+            );
+            worst = worst.max(w);
+        }
+    }
+    worst
+}
+
+/// PR #207 review of #204: on the Dante cadence (1.016 s windows) at ±20 µs window noise (a USB
+/// Dante NIC's level), the live shapes (6 ppm thermal τ 300 s, 6 ppm over 5 min) keep |e| < 50 µs
+/// in every one of 64 runs per shape. v1.35.13 read 46.0 / 50.1 µs on these runs (on another
+/// 200-run seed set: 50.1 / 50.7 µs).
+#[test]
+fn a_ramp_on_dante_windows_at_20_us_keeps_the_phase_within_50_us_204() {
+    let mut fails = Vec::new();
+    for (name, profile) in [PROFILES[0], PROFILES[2]] {
+        let worst = dante_ramp_worst(profile, 20.0, 32);
+        eprintln!("dsync#204 Dante windows ±20 µs, {name}: worst {worst:.1} µs");
+        if worst >= 50.0 {
+            fails.push(format!("{name}: {worst:.1} µs"));
+        }
+    }
+    assert!(
+        fails.is_empty(),
+        "|e| ≥ 50 µs on 1.016 s windows: {fails:?}"
+    );
+}
+
+/// PR #207 review of #204: the 2.5× faster 6 ppm / 2 min ramp at ±20 µs on Dante windows. Its
+/// MEASURED LIMIT is not < 50 µs: a ramp must be told from a 25-150 µs path shift (which must not
+/// boost) before its error crosses ~25 µs, and the plain PI's error then grows ~1.5 µs per window
+/// while a 15 s slope reads ±0.8 ppm of window noise. A boost that is ALWAYS on reads 38.9 µs,
+/// so the gap is the detection, not the loop. v1.35.13 read 64.1 µs on these 200 runs (on
+/// another 200-run seed set: p99 65.3, max 78.4 µs). The envelope pins the improvement.
+#[test]
+fn a_fast_ramp_on_dante_windows_at_20_us_stays_inside_its_measured_envelope_204() {
+    let worst = dante_ramp_worst(PROFILES[1].1, 20.0, 100);
+    eprintln!("dsync#204 Dante windows ±20 µs, 6 ppm / 2 min: worst {worst:.1} µs");
+    assert!(worst < 60.0, "6 ppm / 2 min at ±20 µs: {worst:.1} µs");
+}
+
+/// PR #207 review of #204: two followers on one PC (the same windows ± ~40 ns of conversion
+/// residue, the #170 bar of 1 µs) through every ramp shape on Dante windows, ±10 and ±20 µs. The
+/// thermal ramp's slow release split v1.35.13 cores by up to 7.2 µs: the boost's own gain moved
+/// its decision input before the loop answered.
+#[test]
+fn two_cores_on_dante_windows_agree_within_a_microsecond_through_every_ramp_204() {
+    let mut fails = Vec::new();
+    let mut worst_all = 0.0f64;
+    for (name, profile) in PROFILES {
+        for jitter_us in [10.0, 20.0] {
+            for sign in [1.0, -1.0] {
+                for seed in 1..=12u64 {
+                    let mut jitter = Jitter::new(seed * 7919 + 5, jitter_us);
+                    let mut r1 = Jitter::new(seed * 31 + 7, 0.04);
+                    let mut r2 = Jitter::new(seed * 57 + 9, 0.04);
+                    let (mut c1, mut c2) = (PhaseLockCore::new(), PhaseLockCore::new());
+                    let osc0 = -3.8;
+                    let (mut p1, mut p2) = (Plant::new(osc0, -osc0), Plant::new(osc0, -osc0));
+                    let settle = (600.0 / DANTE_DT) as usize;
+                    let mut worst = 0.0f64;
+                    for n in 0..(settle + (1_800.0 / DANTE_DT) as usize) {
+                        if n >= settle {
+                            let o = osc0 + sign * profile((n - settle) as f64 * DANTE_DT);
+                            p1.osc_ppm = o;
+                            p2.osc_ppm = o;
+                        }
+                        let j = jitter.next();
+                        let o1 = c1.on_window(
+                            D + (p1.e_ns + j + r1.next()).round() as i64,
+                            true,
+                            -osc0,
+                            DANTE_DT,
+                        );
+                        let o2 = c2.on_window(
+                            D + (p2.e_ns + j + r2.next()).round() as i64,
+                            true,
+                            -osc0,
+                            DANTE_DT,
+                        );
+                        p1.advance(o1.freq_ppm.expect("engaged"), DANTE_DT);
+                        p2.advance(o2.freq_ppm.expect("engaged"), DANTE_DT);
+                        if n >= settle {
+                            worst = worst.max((p1.e_ns - p2.e_ns).abs());
+                        }
+                    }
+                    worst_all = worst_all.max(worst);
+                    if worst > 1_000.0 {
+                        fails.push(format!(
+                            "{name} ±{jitter_us} {sign:+} seed {seed}: {worst:.0} ns"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("dsync#204 pair split on Dante windows, worst {worst_all:.0} ns");
+    assert!(fails.is_empty(), "cores > 1 µs apart: {fails:?}");
+}
