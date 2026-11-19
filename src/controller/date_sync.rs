@@ -417,6 +417,7 @@ where
             .on_window(median_ns, locked, total_correction, dt);
         self.handle_phase_anchor_event(out.event);
         self.note_freq_step(out.freq_step);
+        self.note_excursion(out.excursion);
         self.date_sync
             .measure_step_phase_jump(out.error_ns, out.event);
         self.date_sync.fresh_window = out.error_ns.is_some();

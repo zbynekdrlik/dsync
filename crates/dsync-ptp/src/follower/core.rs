@@ -558,6 +558,16 @@ impl FollowerCore {
             self.core.set_fit_sample(s.ns);
         }
         let out = self.core.on_window(median, locked, word_ppm, dt);
+        if let Some(x) = out.excursion {
+            info!(
+                "[FOLLOWER] phase excursion: mean e {:+.1}us moving {:+.2}us/s -- the PI gains boosted (x{:.2} -> x{}, {} since start)",
+                x.mean_us,
+                x.rate_ppm,
+                x.gain_before,
+                crate::ptp_phase_lock::GM_BOOST_GAIN,
+                self.core.excursion_arms()
+            );
+        }
         if let (Some(f), None) = (self.core.boot_refine(), refine_before) {
             info!(
                 "[FOLLOWER] boot refinement re-seeded the integrator to {:+.3}ppm (σ {:.2}ppm, {} windows over {:.1}s)",

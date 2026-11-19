@@ -181,5 +181,8 @@ where
         status.ptp_phase_pull_us = ds.core.pull_us();
         status.last_freq_step_ppm = ds.core.last_freq_step().map(|s| s.step_ppm);
         status.last_freq_step_ts = ds.last_freq_step_ts;
+        // dsync#204: the excursion boosts and the PI gain in force.
+        status.ptp_phase_excursion_boosts = ds.core.excursion_arms();
+        status.ptp_phase_gain = ds.core.engaged().then(|| ds.core.gain_factor());
     }
 }

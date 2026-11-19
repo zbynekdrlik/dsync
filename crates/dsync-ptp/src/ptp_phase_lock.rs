@@ -73,12 +73,18 @@
 //! Pure (explicit inputs, no I/O, no logging) so the controller and the bench run the same code.
 
 pub mod boot_fit;
+pub mod excursion;
 pub mod first_engagement;
 pub mod freq_step;
 
 pub use boot_fit::{
     BootFit, BootFreqFit, BOOT_FIT_MAX_SIGMA_PPM, BOOT_FIT_WINDOW_S, BOOT_REFINE_MIN_PPM,
     BOOT_REFINE_WINDOW_S, BOOT_RESEED_MIN_PPM,
+};
+
+pub use excursion::{
+    excursion_gain, ExcursionArm, ExcursionBoost, EXCURSION_ARM_US, EXCURSION_RAMP_IN_S,
+    EXCURSION_TAU_S,
 };
 
 pub use first_engagement::{FirstEngagement, BOOT_SEEDED_ENGAGE_S, FIRST_ENGAGEMENT_OVERDUE_S};
@@ -305,6 +311,8 @@ pub struct WindowOutcome {
     pub event: AnchorEvent,
     /// A frequency step confirmed and followed in THIS window (the controller logs it).
     pub freq_step: Option<FreqStep>,
+    /// dsync#204: a phase excursion armed the gain boost in THIS window (the caller logs it).
+    pub excursion: Option<ExcursionArm>,
 }
 
 /// The phase-lock state of one box.
@@ -379,6 +387,8 @@ pub struct PhaseLockCore {
     /// dsync#166: PTP seconds since the last time-base change while its gain boost runs
     /// ([`boosted_gains`]); `None` = the normal gains.
     boost_s: Option<f64>,
+    /// dsync#204: a sustained excursion of the tracked error arms the same boost.
+    excursion: ExcursionBoost,
     /// dsync#170: grandmaster seconds anchored and never engaged, counted outside the
     /// acquisition ring (its restarts do not clear it): the first engagement's escape valve.
     acquire_s: f64,
@@ -587,6 +597,33 @@ impl PhaseLockCore {
     /// the next engagement, a learned one does not: a re-engagement is the plain PI's.
     fn end_gain_boost(&mut self) {
         self.boost_s = None;
+        self.excursion.end();
+    }
+
+    /// The PI gains in force: the #166 schedule, or the dsync#204 excursion boost where it is
+    /// stronger (still ζ = 1: `K_P × g`, `K_I × g²`). Without an excursion boost it is
+    /// [`boosted_gains`] bit for bit.
+    fn gains(&self) -> (f64, f64) {
+        let gm = boosted_gains(self.boost_s);
+        match self.excursion.gain() {
+            Some(g) if g * K_P_PER_S > gm.0 => (K_P_PER_S * g, K_I_PER_S2 * g * g),
+            _ => gm,
+        }
+    }
+
+    /// dsync#204: the PI gain factor in force (`K_P` / the normal `K_P`): 1.0 = the plain PI.
+    pub fn gain_factor(&self) -> f64 {
+        self.gains().0 / K_P_PER_S
+    }
+
+    /// dsync#204: boosts a phase excursion armed since start.
+    pub fn excursion_arms(&self) -> u32 {
+        self.excursion.arms()
+    }
+
+    /// dsync#204: seconds since the running excursion boost armed (`None` = none running).
+    pub fn excursion_boost_s(&self) -> Option<f64> {
+        self.excursion.boost_s()
     }
 
     /// dsync#146: the first engagement's fit ends (resolved, or its engagement ended).
@@ -602,6 +639,7 @@ impl PhaseLockCore {
         self.pull_us = 0.0;
         self.last_taken_e_us = None;
         self.late_held = 0;
+        self.excursion.restart_mean();
     }
 
     /// dsync#160: the next windows' measurement is PROVISIONAL (the delay floor's ring holds too
@@ -672,6 +710,7 @@ impl PhaseLockCore {
                     error_ns: None,
                     event,
                     freq_step: None,
+                    excursion: None,
                 };
             }
         }
@@ -701,6 +740,7 @@ impl PhaseLockCore {
                             error_ns: None,
                             event,
                             freq_step: None,
+                            excursion: None,
                         };
                     }
                 }
@@ -856,6 +896,7 @@ impl PhaseLockCore {
                 error_ns: Some(e_ns),
                 event,
                 freq_step: None,
+                excursion: None,
             };
         }
 
@@ -953,6 +994,9 @@ impl PhaseLockCore {
             && self
                 .last_taken_e_us
                 .is_some_and(|taken| (e_raw_us - taken).abs() > LATE_WINDOW_JUMP_US);
+        // dsync#204: the boot's own fits own the frequency while they run.
+        let armable = !self.boot_fit_open && self.refine.is_none() && freq_step.is_none();
+        let tracked_us = (e_raw_us - self.pull_us).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
         let f = if late {
             self.late_held += 1;
             self.late_windows = self.late_windows.saturating_add(1);
@@ -965,10 +1009,17 @@ impl PhaseLockCore {
             self.late_held = 0;
             self.last_taken_e_us = Some(e_raw_us);
             let e_us = e_raw_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
-            let (k_p, k_i) = boosted_gains(self.boost_s);
+            let (k_p, k_i) = self.gains();
             // offset = local − master: a fast local clock GROWS e, so the correction is negative.
             self.i_ppm = (self.i_ppm - k_i * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
             (self.i_ppm - k_p * e_us).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM)
+        };
+        // dsync#204: a window the PI took feeds the excursion mean (after its word, so the gains
+        // move from the next window on).
+        let excursion = if late {
+            None
+        } else {
+            self.excursion.observe(tracked_us, dt, armable)
         };
         // dsync#166: the boost's clock is the engaged windows' grandmaster time (late ones
         // included), so it is the same on every box that took the same windows.
@@ -1006,6 +1057,7 @@ impl PhaseLockCore {
             error_ns: Some(e_ns),
             event,
             freq_step,
+            excursion,
         }
     }
 
@@ -1126,6 +1178,7 @@ impl PhaseLockCore {
             pull_us: self.pull_us,
         };
         self.freq_steps = self.freq_steps.saturating_add(1);
+        self.excursion.restart_mean();
         self.last_freq_step = Some(followed);
         followed
     }
@@ -1136,7 +1189,7 @@ impl PhaseLockCore {
     fn pulled_word(&mut self, e_raw_us: f64, dt: f64) -> f64 {
         let e_us = (e_raw_us - self.pull_us).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
         let pull_rate = -self.pull_us / FSTEP_PULL_TAU_S;
-        let (k_p, k_i) = boosted_gains(self.boost_s);
+        let (k_p, k_i) = self.gains();
         self.i_ppm = (self.i_ppm - k_i * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
         let f = (self.i_ppm - k_p * e_us + pull_rate).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
         self.pull_us *= (-dt / FSTEP_PULL_TAU_S).exp();

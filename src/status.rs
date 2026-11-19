@@ -481,6 +481,18 @@ pub struct SyncStatus {
     #[serde(default)]
     pub last_freq_step_ts: Option<u64>,
 
+    /// dsync#204: phase excursions (a local-oscillator ramp the plain PI lags, e.g. a load warming
+    /// the crystal) that armed the phase lock's gain boost since the process started. 0 in a
+    /// pre-1.35.12 blob.
+    #[serde(default)]
+    pub ptp_phase_excursion_boosts: u32,
+
+    /// dsync#204: the phase lock's gain factor in force (1.0 = the normal ~100 s PI, 4.0 = the
+    /// boosted ~25 s one after a grandmaster change or an excursion); `null` when not engaged and
+    /// in a pre-1.35.12 blob.
+    #[serde(default)]
+    pub ptp_phase_gain: Option<f64>,
+
     // ========================================================================
     // Nightly date-step quantum (dsync#119, 1.16) — additive.
     // ========================================================================
@@ -722,6 +734,9 @@ impl Default for SyncStatus {
             freq_steps: 0,
             last_freq_step_ppm: None,
             last_freq_step_ts: None,
+            // dsync#204: no excursion boost yet, not engaged
+            ptp_phase_excursion_boosts: 0,
+            ptp_phase_gain: None,
             // #119 (1.16): no nightly step quantum until the daily master publishes
             date_daily_step_quantum_ms: None,
             // #129 (1.17): no Sync heard yet
