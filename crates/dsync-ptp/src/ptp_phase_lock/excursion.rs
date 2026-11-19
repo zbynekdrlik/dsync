@@ -1,18 +1,33 @@
-//! dsync#204 — a sustained phase EXCURSION arms the #166 gain boost.
+//! dsync#204 — a sustained phase excursion of an UNLEARNED frequency boosts the PI gains.
 //!
 //! The plain PI (~100 s, critically damped) leaves a frequency RAMP `ρ` (ppm/s) a standing phase
 //! error of `ρ / K_I`. A load that warms the local crystal moves it by a few ppm over minutes:
 //! resolume-pp (19.11.2026) went −3.8 → −9.6 ppm and read +95 µs for minutes while still in LOCK.
 //! The grandmaster-change boost (`K_P × 4`, `K_I × 16`, still ζ = 1, τ 25 s) cuts that error 16×,
-//! but it was armed only by a time-base change. Here the TRACKED error itself arms it: its mean
-//! over [`EXCURSION_TAU_S`] beyond [`EXCURSION_ARM_US`] is not window noise (the noise of that
-//! mean is a few µs), it is a frequency the loop is behind on.
+//! but only a time-base change armed it. Here the TRACKED error (`e` minus a running pull) drives
+//! the same boost when it is
+//! - beyond [`EXCURSION_ARM_US`] in its running mean (τ [`EXCURSION_TAU_S`]; its noise is a few µs),
+//! - carried by an UNLEARNED FREQUENCY `u` of its own sign ([`EXCURSION_UNLEARNED_PPM`]). The loop
+//!   is `d(e − r)/dt = u − K_P·(e − r)` (the plant, the PI and the pull's feed-forward), so
+//!   `u = d(tracked)/dt + K_P·tracked` with the `K_P` in force. A ramp the PI lags has
+//!   `u ≈ K_P·e > 0`; a path-delay level shift or an engagement's offset the PI retires has
+//!   `u ≈ 0` (then of the opposite sign, as the integrator learns a little of it): boosting those
+//!   would only be a 4× word swing,
+//! - with `|u|` no larger than [`EXCURSION_MAX_RATE_PPM`]: a larger one is a frequency STEP, the
+//!   camera-box 1372 detector's (it confirms in ~20-25 s and re-seeds the integrator),
+//! - SUSTAINED: `u` is judged by a low quantile over the last [`EXCURSION_SUSTAIN_S`], twice the
+//!   rate's ring, so the seconds a jump spends inside that ring (its slope reads as `u`) never
+//!   start a boost. A ramp's `u` is there long before its error crosses the bound: no added lag.
 //!
-//! The boost here starts from the gains in force (never a word step under a standing error): it
-//! ramps in geometrically over [`EXCURSION_RAMP_IN_S`], holds [`GM_BOOST_HOLD_S`] and returns
-//! over [`GM_BOOST_RAMP_S`] as the #166 schedule does. An excursion that is still there re-arms
-//! it from wherever it is, continuously (a ramp that goes on keeps the boost). A pure function of
-//! the windows' grandmaster `dt` and their `e`, so two followers fed the same windows agree.
+//! **Every input enters continuously** (two followers on one PC read the same windows ± ~40 ns of
+//! conversion residue, `.claude/rules/ptp-library.md` #136/#170: an all-or-nothing arm let them
+//! arm a window apart and split ~1.2 µs). Each condition is a linear taper to a factor in [0, 1];
+//! their product `x` is the boost's TARGET. A charge `C = max(C − dt/T, x)` holds it
+//! (`T` = [`GM_BOOST_HOLD_S`] + [`GM_BOOST_RAMP_S`]), its exponent `min(1, C·T/ramp)` is the #166
+//! schedule (full for the hold, then back geometrically over the ramp), and the exponent in force
+//! rises toward it by at most `dt / `[`EXCURSION_RAMP_IN_S`] (never a word step under a standing
+//! error). The gain is `GM_BOOST_GAIN^level`. `max`, `min` and the tapers are continuous, so the
+//! gain trajectory is continuous in the windows' `e` (`the_boost_is_continuous_in_its_input_204`).
 //!
 //! Rejected: a faster base loop (every µs of window noise passes as `K_P` ppm of word jitter, the
 //! camera-box 1372 doctrine), and a third integrator / ramp feed-forward (a ramp estimate from a
@@ -20,97 +35,105 @@
 
 use std::collections::VecDeque;
 
-use super::{fit_line, FSTEP_MIN_PPM, GM_BOOST_GAIN, GM_BOOST_HOLD_S, GM_BOOST_RAMP_S};
+use super::{fit_line, FSTEP_MIN_PPM, GM_BOOST_GAIN, GM_BOOST_HOLD_S, GM_BOOST_RAMP_S, K_P_PER_S};
 
 /// Grandmaster seconds of the tracked error's running mean (an exponential average). Its noise is
 /// the window noise × √(dt / 2τ): ~3 µs for the 14 µs window `e` sd of a USB Dante NIC at 1 s
 /// windows, ~1 µs on resolume-pp (sd 3.5-5.3 µs).
 pub const EXCURSION_TAU_S: f64 = 10.0;
 
-/// The running mean of the tracked error (µs) beyond which the boost arms. Over 8 σ of the mean's
-/// noise on the noisiest NIC measured, and clear of the plain PI's normal regime: a 0.1 ppm/min
-/// wander stands at 17 µs, a 0.4 ppm hand-over peaks at ~15 µs (the 1372 pins stay the plain PI).
-/// The fast-ramp cost: a 6 ppm / 2 min ramp peaks at ~44 µs (20 µs: ~42; 30 µs: ~50).
-pub const EXCURSION_ARM_US: f64 = 25.0;
+/// The running mean of the tracked error (µs) at which the boost's target is half: the taper runs
+/// over ± [`EXCURSION_ARM_TAPER_US`] around it, so it starts at 25 µs. Clear of the plain PI's
+/// normal regime: a 0.1 ppm/min wander stands at 17 µs, and with a 0.4 ppm hand-over on top the
+/// mean stays under 25 µs (the 1372 pins stay the plain PI bit for bit).
+pub const EXCURSION_ARM_US: f64 = 30.0;
+pub const EXCURSION_ARM_TAPER_US: f64 = 5.0;
 
 /// Grandmaster seconds of the tracked errors whose least-squares slope is the rate the error moves
 /// at (µs/s). Long enough for the line fit's minimum of 12 points on ~1 s Dante windows; its
 /// noise is ~1 µs/s at a 11 µs window `e` sd.
 pub const EXCURSION_RATE_WINDOW_S: f64 = 15.0;
 
-/// An error moving faster than this (µs/s = ppm) is a frequency STEP, the camera-box 1372
-/// detector's (it confirms in ~20-25 s and re-seeds the integrator): a boost armed under it would
-/// learn part of the step first and the detector would follow only the rest. Half the detector's
-/// minimum. A local ramp the plain PI lags reads ~1-2 µs/s when its error reaches the bound.
+/// An unlearned frequency larger than this (ppm) is a frequency STEP, the camera-box 1372
+/// detector's: a boost under it would learn part of the step first and the detector would follow
+/// only the rest. Half the detector's minimum; the taper runs ± 1 ppm around it. A local ramp the
+/// plain PI lags reads ~1-2 ppm when its error reaches the bound.
 pub const EXCURSION_MAX_RATE_PPM: f64 = FSTEP_MIN_PPM / 2.0;
 
-/// An error already shrinking faster than this (µs/s) is being retired by the loop (a
-/// re-engagement off the line, a pull's tail): boosting a retirement only swings the word
-/// (`K_P × 4` on 500 µs is 40 ppm, the #166 review). About 2 σ of the rate's noise.
-pub const EXCURSION_RETIRING_PPM: f64 = 1.0;
+/// The unlearned frequency (ppm, in the error's own direction) at which the target starts, and
+/// where it is full. A ramp the plain PI lags at 25 µs reads ≥ `K_P·25` = 0.5 ppm; a level shift
+/// being retired reads ~0, then negative.
+pub const EXCURSION_UNLEARNED_PPM: f64 = 0.25;
+pub const EXCURSION_UNLEARNED_FULL_PPM: f64 = 0.5;
+
+/// Grandmaster seconds over which the unlearned frequency must hold, judged by its
+/// [`EXCURSION_SUSTAIN_QUANTILE`] (a low quantile, so window noise dipping under the bound now and
+/// then does not stop a real ramp). Twice [`EXCURSION_RATE_WINDOW_S`]: the seconds a jump spends
+/// inside the rate's ring (where its slope reads as `u`) are at most half the window, and the
+/// windows before the jump or after it read `u ≈ 0`.
+pub const EXCURSION_SUSTAIN_S: f64 = 2.0 * EXCURSION_RATE_WINDOW_S;
+pub const EXCURSION_SUSTAIN_QUANTILE: f64 = 0.25;
 
 /// Grandmaster seconds after an engagement or a re-anchor (any restart of the mean) before the
-/// boost may arm: the tracked error then holds the engagement's own offset (an anchor placed on a
-/// noisy window, a re-engagement off the line), which the plain PI retires in ~3 τ (a 125 µs
-/// offset is under the bound after 300 s). Boosting that retirement is the #166 review's word swing,
-/// and its rate (`−K_P e`, 0.5 µs/s at 25 µs) is inside the rate's noise, so the retiring gate
-/// cannot tell it. A cold boot's own fits block it for ~80 s anyway.
-pub const EXCURSION_ENGAGE_HOLDOFF_S: f64 = 300.0;
+/// target may rise, tapered over the next [`EXCURSION_HOLDOFF_TAPER_S`]: the running mean and the
+/// rate's ring fill first (a rate from a few windows is not one).
+pub const EXCURSION_ENGAGE_HOLDOFF_S: f64 = 30.0;
+pub const EXCURSION_HOLDOFF_TAPER_S: f64 = 10.0;
 
-/// Grandmaster seconds over which the boost ramps in from the normal gains (`GAIN^(t/ramp)`): a
-/// `K_P` change of ~15 % per 0.5 s window, so under a 25 µs error the word moves ≤ ~0.08 ppm × the
-/// gain per window from the gain change itself, never a step.
+/// Grandmaster seconds over which the boost's exponent may rise from 0 to 1 (`GAIN^(t/ramp)`): a
+/// `K_P` change of ≤ ~15 % per 0.5 s window, so under a 25 µs error the word moves ≤ ~0.08 ppm
+/// × the gain per window from the gain change itself, never a step.
 pub const EXCURSION_RAMP_IN_S: f64 = 5.0;
 
-/// The boost's whole schedule ends here (s since it armed, ramp-in included).
-const EXCURSION_END_S: f64 = EXCURSION_RAMP_IN_S + GM_BOOST_HOLD_S + GM_BOOST_RAMP_S;
+/// The charge's whole decay (s): the hold, then the return.
+const EXCURSION_CHARGE_S: f64 = GM_BOOST_HOLD_S + GM_BOOST_RAMP_S;
 
-/// What armed the boost in one window (the caller logs it).
+/// A boost starting from the normal gains in one window (the caller logs it).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExcursionArm {
-    /// The tracked error's running mean (µs) that armed it.
+    /// The tracked error's running mean (µs) then.
     pub mean_us: f64,
-    /// The rate (µs/s) the error moved at then.
-    pub rate_ppm: f64,
-    /// The boost factor in force when it armed (1 = from the normal gains).
-    pub gain_before: f64,
+    /// The unlearned frequency (ppm) then.
+    pub unlearned_ppm: f64,
+    /// The target it rose toward (0-1).
+    pub target: f64,
 }
 
-/// The excursion detector and the boost it runs.
+/// The excursion detector and the boost it drives.
 #[derive(Clone, Debug, Default)]
 pub struct ExcursionBoost {
     /// Running mean (µs) of the tracked error; `None` until the first window of an engagement.
     mean_us: Option<f64>,
-    /// The tracked errors of the last [`EXCURSION_RATE_WINDOW_S`] (`(s, µs)`) and their clock.
+    /// The tracked errors of the last [`EXCURSION_RATE_WINDOW_S`] (`(s, µs)`), and the grandmaster
+    /// seconds since the mean restarted.
     ring: VecDeque<(f64, f64)>,
     clock_s: f64,
-    /// Grandmaster seconds since the boost armed (`None` = not running).
-    boost_s: Option<f64>,
-    /// Boosts armed since start (a re-arm of a running one included).
+    /// The last [`EXCURSION_SUSTAIN_S`] of unlearned frequencies (`(s, ppm)`).
+    raw: VecDeque<(f64, f64)>,
+    /// The #166 boost factor in force (set by the core each window; 0 = none known = 1).
+    gm_gain: f64,
+    /// The held target (0-1), decaying over [`EXCURSION_CHARGE_S`].
+    charge: f64,
+    /// The boost's exponent in force (0 = the normal gains, 1 = × [`GM_BOOST_GAIN`]).
+    level: f64,
+    /// Boosts started from the normal gains since start.
     arms: u32,
 }
 
-/// The boost factor `t` s after arming.
-pub fn excursion_gain(t: f64) -> f64 {
-    if t < EXCURSION_RAMP_IN_S {
-        GM_BOOST_GAIN.powf((t / EXCURSION_RAMP_IN_S).max(0.0))
-    } else if t < EXCURSION_RAMP_IN_S + GM_BOOST_HOLD_S {
-        GM_BOOST_GAIN
-    } else {
-        let out = (t - EXCURSION_RAMP_IN_S - GM_BOOST_HOLD_S) / GM_BOOST_RAMP_S;
-        GM_BOOST_GAIN.powf((1.0 - out).clamp(0.0, 1.0))
-    }
+/// `(v − lo) / (hi − lo)` clamped to [0, 1]: a continuous step.
+fn taper(v: f64, lo: f64, hi: f64) -> f64 {
+    ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
 }
 
 impl ExcursionBoost {
-    /// The boost factor in force (`None` = none running).
+    /// The boost factor in force (`None` = the normal gains).
     pub fn gain(&self) -> Option<f64> {
-        self.boost_s.map(excursion_gain)
+        (self.level > 0.0).then(|| GM_BOOST_GAIN.powf(self.level))
     }
 
-    /// Seconds since the running boost armed.
-    pub fn boost_s(&self) -> Option<f64> {
-        self.boost_s
+    /// The boost's exponent in force (0-1).
+    pub fn level(&self) -> f64 {
+        self.level
     }
 
     /// The tracked error's running mean (µs).
@@ -118,7 +141,7 @@ impl ExcursionBoost {
         self.mean_us
     }
 
-    /// Boosts armed since start.
+    /// Boosts started from the normal gains since start.
     pub fn arms(&self) -> u32 {
         self.arms
     }
@@ -127,18 +150,52 @@ impl ExcursionBoost {
     pub fn restart_mean(&mut self) {
         self.mean_us = None;
         self.ring.clear();
+        self.raw.clear();
         self.clock_s = 0.0;
+    }
+
+    /// The #166 grandmaster-change boost factor in force this window (its `K_P` enters `u`).
+    pub fn set_gm_gain(&mut self, gain: f64) {
+        self.gm_gain = gain;
     }
 
     /// A lock loss ends the boost with the engagement that ran it (as #166's).
     pub fn end(&mut self) {
-        self.boost_s = None;
+        self.charge = 0.0;
+        self.level = 0.0;
         self.restart_mean();
     }
 
+    /// The boost's clock runs `dt` with no new target (a late window: it says nothing about the
+    /// clock, but every box that took the same windows runs the same schedule).
+    pub fn advance(&mut self, dt: f64) {
+        self.charge = (self.charge - dt / EXCURSION_CHARGE_S).max(0.0);
+        self.level = self.level.min(self.scheduled());
+    }
+
+    /// The exponent the charge holds: full for the hold, then back over the ramp.
+    fn scheduled(&self) -> f64 {
+        (self.charge * EXCURSION_CHARGE_S / GM_BOOST_RAMP_S).min(1.0)
+    }
+
+    /// The unlearned frequency the window held in the error's direction `sign`: the
+    /// [`EXCURSION_SUSTAIN_QUANTILE`] of `u·sign` over the last [`EXCURSION_SUSTAIN_S`]. An order
+    /// statistic is continuous in its samples; a jump through the rate's ring fills at most half
+    /// of the window, so the quantile stays on the windows before or after it.
+    fn sustained_unlearned(&self, sign: f64) -> Option<f64> {
+        if self.raw.is_empty() {
+            return None;
+        }
+        let mut v: Vec<f64> = self.raw.iter().map(|&(_, u)| u * sign).collect();
+        v.sort_by(f64::total_cmp);
+        let i = ((v.len() - 1) as f64 * EXCURSION_SUSTAIN_QUANTILE).floor() as usize;
+        Some(v[i])
+    }
+
     /// One window the PI took: `tracked_us` = the error it tracked (`e` minus a running pull),
-    /// `dt` its grandmaster seconds, `armable` = no boot fit owns the frequency. Advances the
-    /// boost's clock, then arms or re-arms it when the mean is beyond the bound.
+    /// `dt` its grandmaster seconds, `armable` = no boot fit owns the frequency and no frequency
+    /// step was followed in this window. Returns the window where a boost starts from the normal
+    /// gains.
     pub fn observe(&mut self, tracked_us: f64, dt: f64, armable: bool) -> Option<ExcursionArm> {
         let alpha = 1.0 - (-dt / EXCURSION_TAU_S).exp();
         let mean = match self.mean_us {
@@ -158,43 +215,59 @@ impl ExcursionBoost {
         {
             self.ring.pop_front();
         }
-        // No rate yet (too few windows since a restart) = not judged: never armed blind.
-        let rate_ppm = fit_line(self.ring.iter()).map_or(f64::INFINITY, |l| l.slope_ppm);
-        if let Some(t) = self.boost_s {
-            let t = t + dt;
-            self.boost_s = (t < EXCURSION_END_S).then_some(t);
+        // No line yet (too few windows since a restart): no target.
+        let line = fit_line(self.ring.iter());
+        // The `K_P` of the PI WITHOUT this boost (the #166 schedule's): under this boost `u` then
+        // reads low (the boosted P term retires the lag), so a running boost never feeds its own
+        // target, a positive feedback that would make the gain steep in its input; the hold keeps
+        // it while the ramp lasts, and a ramp that outlasts it is met again.
+        let k_p = K_P_PER_S * self.gm_gain.max(1.0);
+        // The slope and the level at the same instant (the newest window): the running mean lags a
+        // moving error by ~τ × its rate, which reads a retired level shift as unlearned.
+        let unlearned = line.map(|l| l.slope_ppm + k_p * l.value_at(now));
+        if let Some(u) = unlearned {
+            self.raw.push_back((now, u));
         }
-        let retiring = rate_ppm * mean.signum() < -EXCURSION_RETIRING_PPM;
-        if !armable
-            || self.clock_s < EXCURSION_ENGAGE_HOLDOFF_S
-            || mean.abs() < EXCURSION_ARM_US
-            || rate_ppm.abs() > EXCURSION_MAX_RATE_PPM
-            || retiring
+        while self
+            .raw
+            .front()
+            .is_some_and(|&(t, _)| now - t > EXCURSION_SUSTAIN_S + 1e-9)
         {
-            return None;
+            self.raw.pop_front();
         }
-        let gain_before = self.gain().unwrap_or(1.0);
-        let t = self.boost_s.unwrap_or(0.0);
-        let restart = if t < EXCURSION_RAMP_IN_S {
-            // Still ramping in (or not running: from the normal gains).
-            t
-        } else if t <= EXCURSION_RAMP_IN_S + GM_BOOST_HOLD_S {
-            // Held: the hold starts again.
-            EXCURSION_RAMP_IN_S
-        } else {
-            // Returning: back onto the ramp-in where it gives the same gain (continuous).
-            EXCURSION_RAMP_IN_S * gain_before.ln() / GM_BOOST_GAIN.ln()
+        // Full by the time since the restart, never by the ring's span: a ~1.016 s Dante window
+        // spacing never spans exactly the window (the #136 v1.27.2 lesson).
+        let sustained = (self.clock_s >= EXCURSION_SUSTAIN_S)
+            .then(|| self.sustained_unlearned(mean.signum()))
+            .flatten();
+        let target = match (unlearned, sustained) {
+            (Some(u), Some(u_low)) if armable => {
+                taper(
+                    mean.abs(),
+                    EXCURSION_ARM_US - EXCURSION_ARM_TAPER_US,
+                    EXCURSION_ARM_US + EXCURSION_ARM_TAPER_US,
+                ) * taper(
+                    -u.abs(),
+                    -(EXCURSION_MAX_RATE_PPM + 1.0),
+                    -(EXCURSION_MAX_RATE_PPM - 1.0),
+                ) * taper(u_low, EXCURSION_UNLEARNED_PPM, EXCURSION_UNLEARNED_FULL_PPM)
+                    * taper(
+                        self.clock_s,
+                        EXCURSION_ENGAGE_HOLDOFF_S,
+                        EXCURSION_ENGAGE_HOLDOFF_S + EXCURSION_HOLDOFF_TAPER_S,
+                    )
+            }
+            _ => 0.0,
         };
-        // Logged (and counted) only when it starts from the normal gains or comes back while returning:
-        // a held boost re-arms every window the excursion lasts.
-        let fresh = self.boost_s.is_none() || t > EXCURSION_RAMP_IN_S + GM_BOOST_HOLD_S;
-        self.boost_s = Some(restart);
-        if fresh {
+        self.charge = (self.charge - dt / EXCURSION_CHARGE_S).max(target);
+        let before = self.level;
+        self.level = self.scheduled().min(before + dt / EXCURSION_RAMP_IN_S);
+        if before == 0.0 && self.level > 0.0 {
             self.arms = self.arms.saturating_add(1);
             Some(ExcursionArm {
                 mean_us: mean,
-                rate_ppm,
-                gain_before,
+                unlearned_ppm: unlearned.unwrap_or(0.0),
+                target,
             })
         } else {
             None
@@ -209,39 +282,68 @@ mod tests {
     /// A detector past its engagement holdoff (quiet windows).
     fn warmed() -> ExcursionBoost {
         let mut b = ExcursionBoost::default();
-        while b.clock_s < EXCURSION_ENGAGE_HOLDOFF_S {
+        while b.clock_s < EXCURSION_ENGAGE_HOLDOFF_S + EXCURSION_HOLDOFF_TAPER_S {
             assert_eq!(b.observe(0.0, 0.5, true), None);
         }
         b
     }
 
-    #[test]
-    fn the_gain_ramps_in_holds_and_returns_continuously_204() {
-        assert_eq!(excursion_gain(0.0), 1.0);
-        assert!((excursion_gain(EXCURSION_RAMP_IN_S / 2.0) - 2.0).abs() < 1e-12);
-        assert_eq!(excursion_gain(EXCURSION_RAMP_IN_S), GM_BOOST_GAIN);
-        assert_eq!(
-            excursion_gain(EXCURSION_RAMP_IN_S + GM_BOOST_HOLD_S),
-            GM_BOOST_GAIN
-        );
-        assert!((excursion_gain(EXCURSION_END_S) - 1.0).abs() < 1e-12);
-        // The steepest move of the schedule is the ramp-in's, per 0.5 s window.
-        let max_step = GM_BOOST_GAIN.powf(0.5 / EXCURSION_RAMP_IN_S) - 1.0 + 1e-9;
-        let mut prev = excursion_gain(0.0);
-        let mut t = 0.0;
-        while t < EXCURSION_END_S {
-            t += 0.5;
-            let g = excursion_gain(t);
-            assert!(
-                (g / prev - 1.0).abs() <= max_step,
-                "a gain jump at {t}s: {prev} -> {g}"
-            );
-            prev = g;
-        }
+    /// A growing excursion: 1 µs/s from `start_us`, `n` windows.
+    fn grow(b: &mut ExcursionBoost, start_us: f64, n: usize) -> Vec<Option<ExcursionArm>> {
+        (0..n)
+            .map(|i| b.observe(start_us + i as f64 * 0.5, 0.5, true))
+            .collect()
     }
 
     #[test]
-    fn noise_alone_never_arms_and_a_standing_error_arms_once_204() {
+    fn the_boost_ramps_in_holds_and_returns_without_a_jump_204() {
+        let mut b = warmed();
+        let arms = grow(&mut b, 30.0, 160);
+        assert_eq!(arms.iter().flatten().count(), 1, "one start");
+        assert_eq!(b.level(), 1.0, "full after the ramp-in");
+        assert_eq!(b.gain(), Some(GM_BOOST_GAIN));
+        // Quiet: held for the hold, then back over the ramp, never a jump.
+        let max_step = 0.5 / EXCURSION_RAMP_IN_S + 1e-12;
+        let mut prev = b.level();
+        let mut t = 0.0;
+        let mut left_full_at = None;
+        while b.gain().is_some() {
+            b.observe(0.0, 0.5, true);
+            t += 0.5;
+            assert!((b.level() - prev).abs() <= max_step, "a jump at {t}s");
+            if b.level() < 1.0 && left_full_at.is_none() {
+                left_full_at = Some(t);
+            }
+            prev = b.level();
+            assert!(t < 1_000.0, "never returned");
+        }
+        let left = left_full_at.expect("returned");
+        assert!(
+            (GM_BOOST_HOLD_S - 10.0..=GM_BOOST_HOLD_S + 30.0).contains(&left),
+            "the hold ended at {left}s"
+        );
+        assert!(
+            (GM_BOOST_HOLD_S + GM_BOOST_RAMP_S - 10.0..=GM_BOOST_HOLD_S + GM_BOOST_RAMP_S + 30.0)
+                .contains(&t),
+            "back at {t}s"
+        );
+    }
+
+    #[test]
+    fn a_late_window_advances_the_schedule_and_never_raises_it_204() {
+        let mut b = warmed();
+        grow(&mut b, 30.0, 160);
+        let mut t = 0.0;
+        while b.gain().is_some() {
+            b.advance(0.5);
+            t += 0.5;
+            assert!(t < 1_000.0, "never returned");
+        }
+        assert!(t >= GM_BOOST_HOLD_S, "{t}");
+    }
+
+    #[test]
+    fn noise_alone_never_boosts_and_a_growing_error_starts_once_204() {
         let mut b = warmed();
         let mut state = 0x204_u64;
         for _ in 0..20_000 {
@@ -249,15 +351,31 @@ mod tests {
             state ^= state >> 7;
             state ^= state << 17;
             let n = ((state >> 11) as f64 / (1u64 << 53) as f64 - 0.5) * 2.0 * 30.0;
-            assert_eq!(b.observe(n, 0.5, true), None, "noise armed it");
+            assert_eq!(b.observe(n, 0.5, true), None, "noise boosted it");
         }
         assert_eq!(b.gain(), None);
-        let mut armed = 0;
-        for _ in 0..60 {
-            armed += usize::from(b.observe(EXCURSION_ARM_US + 5.0, 0.5, true).is_some());
+        let starts = grow(&mut b, 30.0, 120).into_iter().flatten().count();
+        assert_eq!(starts, 1);
+        assert_eq!(b.arms(), 1);
+    }
+
+    #[test]
+    fn a_level_shift_the_pi_retires_is_not_boosted_204() {
+        // The critically damped PI's answer to a phase step S: e = S (1 − ωt) e^(−ωt), ω = K_P/2.
+        // Its unlearned frequency is −S ω² t e^(−ωt): nothing to learn, then the little the
+        // integrator learned from the shift. Up to the late-window bound (150 µs) its undershoot
+        // (−0.135 S) stays under the bound; beyond it the undershoot IS a frequency the integrator
+        // mis-learned, which the boost may retire.
+        let w = K_P_PER_S / 2.0;
+        for s in [40.0, -60.0, 100.0, -150.0] {
+            let mut b = warmed();
+            for n in 0..2_000 {
+                let t = n as f64 * 0.5;
+                let e = s * (1.0 - w * t) * (-w * t).exp();
+                assert_eq!(b.observe(e, 0.5, true), None, "shift {s}, {t}s");
+            }
+            assert_eq!(b.gain(), None);
         }
-        assert_eq!(armed, 1, "a held error arms once (ramp-in and hold)");
-        assert!(b.gain().expect("running") > 1.0);
     }
 
     #[test]
@@ -272,82 +390,43 @@ mod tests {
             );
         }
         assert_eq!(b.gain(), None);
-        // A slow ramp (0.5 µs/s) past the bound arms.
+        // A slow ramp (0.8 µs/s) past the bound starts it.
         let mut b = warmed();
-        let armed = (0..400).find_map(|n| b.observe(0.5 * n as f64 * 0.5, 0.5, true));
-        let arm = armed.expect("a slow excursion arms");
+        let arm = (0..400)
+            .find_map(|n| b.observe(0.8 * n as f64 * 0.5, 0.5, true))
+            .expect("a slow excursion starts the boost");
         assert!(
-            arm.rate_ppm.abs() < 1.0 && arm.mean_us >= EXCURSION_ARM_US,
+            arm.unlearned_ppm.abs() < EXCURSION_MAX_RATE_PPM
+                && arm.mean_us >= EXCURSION_ARM_US - EXCURSION_ARM_TAPER_US,
             "{arm:?}"
         );
     }
 
     #[test]
-    fn an_error_the_loop_is_retiring_never_arms_204() {
-        let mut b = warmed();
-        // 500 µs retired at 2 µs/s: shrinking, past the bound all the way.
-        for n in 0..400 {
-            assert_eq!(
-                b.observe(500.0 - 2.0 * n as f64 * 0.5, 0.5, true),
-                None,
-                "window {n}"
-            );
-        }
-        assert_eq!(b.gain(), None);
-    }
-
-    #[test]
-    fn a_re_arm_while_returning_keeps_the_gain_continuous_204() {
-        let mut b = warmed();
-        for _ in 0..40 {
-            b.observe(EXCURSION_ARM_US + 5.0, 0.5, true);
-        }
-        // Quiet until it is well into its return.
-        while b.boost_s().expect("running") < EXCURSION_RAMP_IN_S + GM_BOOST_HOLD_S + 100.0 {
-            b.observe(0.0, 0.5, true);
-        }
-        let before = b.gain().expect("running");
-        assert!(before < GM_BOOST_GAIN && before > 1.0);
-        let mut arm = None;
-        for _ in 0..200 {
-            let g = b.gain().expect("running");
-            if let Some(a) = b.observe(EXCURSION_ARM_US + 15.0, 0.5, true) {
-                arm = Some(a);
-                let after = b.gain().expect("running");
-                // The same gain the schedule reached this window (one window of its return).
-                let one_window = GM_BOOST_GAIN.powf(0.5 / GM_BOOST_RAMP_S) - 1.0 + 1e-9;
-                assert!(
-                    (after / g - 1.0).abs() <= one_window,
-                    "re-arm jumped {g} -> {after}"
-                );
-                break;
-            }
-        }
-        assert!(arm.is_some(), "a standing error re-arms");
-        assert!(arm.unwrap().gain_before > 1.0);
-    }
-
-    #[test]
-    fn nothing_arms_within_the_holdoff_after_an_engagement_204() {
+    fn nothing_starts_within_the_holdoff_after_an_engagement_204() {
         let mut b = ExcursionBoost::default();
-        let mut armed_at = None;
-        for n in 0..2_000 {
-            if b.observe(EXCURSION_ARM_US + 10.0, 0.5, true).is_some() {
-                armed_at = Some(n as f64 * 0.5);
-                break;
-            }
-        }
-        let at = armed_at.expect("a standing excursion arms after the holdoff");
+        let at = (0..2_000)
+            .find_map(|n| {
+                b.observe(30.0 + n as f64 * 0.5, 0.5, true)
+                    .map(|_| n as f64 * 0.5)
+            })
+            .expect("a growing excursion starts after the holdoff");
         assert!(
             at >= EXCURSION_ENGAGE_HOLDOFF_S,
-            "armed {at}s after the engagement"
+            "started {at}s after the engagement"
         );
-        // A restart (a re-anchor) starts the holdoff again.
-        b.restart_mean();
-        for _ in 0..100 {
-            b.observe(EXCURSION_ARM_US + 10.0, 0.5, true);
+    }
+
+    #[test]
+    fn a_window_no_boot_fit_allows_starts_nothing_204() {
+        let mut b = warmed();
+        for n in 0..200 {
+            assert_eq!(b.observe(30.0 + n as f64 * 0.5, 0.5, false), None);
         }
-        assert_eq!(b.arms(), 1);
+        assert_eq!(b.gain(), None);
+        assert_eq!(b.arms(), 0);
+        b.end();
+        assert_eq!(b.mean_us(), None);
     }
 
     /// Review of #204: two followers on one PC read the same windows ± ~40 ns of conversion
@@ -378,17 +457,5 @@ mod tests {
             worst <= 0.01,
             "the gain jumped by {worst} for a 1 ns input change"
         );
-    }
-
-    #[test]
-    fn a_window_no_boot_fit_allows_arms_nothing_204() {
-        let mut b = warmed();
-        for _ in 0..200 {
-            assert_eq!(b.observe(100.0, 0.5, false), None);
-        }
-        assert_eq!(b.gain(), None);
-        assert_eq!(b.arms(), 0);
-        b.end();
-        assert_eq!(b.mean_us(), None);
     }
 }

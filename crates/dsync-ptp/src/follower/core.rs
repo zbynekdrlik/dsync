@@ -560,11 +560,11 @@ impl FollowerCore {
         let out = self.core.on_window(median, locked, word_ppm, dt);
         if let Some(x) = out.excursion {
             info!(
-                "[FOLLOWER] phase excursion: mean e {:+.1}us moving {:+.2}us/s -- the PI gains boosted (x{:.2} -> x{}, {} since start)",
+                "[FOLLOWER] phase excursion: mean e {:+.1}us unlearned {:+.2}ppm -- the PI gains boosted toward x{} (target {:.2} of it, {} since start)",
                 x.mean_us,
-                x.rate_ppm,
-                x.gain_before,
+                x.unlearned_ppm,
                 crate::ptp_phase_lock::GM_BOOST_GAIN,
+                x.target,
                 self.core.excursion_arms()
             );
         }

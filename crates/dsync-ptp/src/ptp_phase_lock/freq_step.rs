@@ -195,6 +195,13 @@ pub fn fit_line<'a>(points: impl Iterator<Item = &'a (f64, f64)> + Clone) -> Opt
     })
 }
 
+impl LineFit {
+    /// The line's value (µs) at `t` (s).
+    pub fn value_at(&self, t: f64) -> f64 {
+        self.p_mean + self.slope_ppm * (t - self.t_mean)
+    }
+}
+
 /// The linearity test of a fitted line (see [`split_test`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SplitTest {

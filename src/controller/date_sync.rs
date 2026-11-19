@@ -1158,6 +1158,7 @@ where
 
 mod boot;
 mod daily;
+mod excursion;
 mod follow;
 mod freq_step;
 mod hold;
@@ -1172,6 +1173,8 @@ mod trigger;
 mod boot_tests;
 #[cfg(test)]
 mod daily_tests;
+#[cfg(test)]
+mod excursion_tests;
 #[cfg(test)]
 mod freq_step_tests;
 #[cfg(test)]

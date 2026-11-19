@@ -83,8 +83,8 @@ pub use boot_fit::{
 };
 
 pub use excursion::{
-    excursion_gain, ExcursionArm, ExcursionBoost, EXCURSION_ARM_US, EXCURSION_RAMP_IN_S,
-    EXCURSION_TAU_S,
+    ExcursionArm, ExcursionBoost, EXCURSION_ARM_US, EXCURSION_ENGAGE_HOLDOFF_S,
+    EXCURSION_RAMP_IN_S, EXCURSION_TAU_S,
 };
 
 pub use first_engagement::{FirstEngagement, BOOT_SEEDED_ENGAGE_S, FIRST_ENGAGEMENT_OVERDUE_S};
@@ -621,9 +621,9 @@ impl PhaseLockCore {
         self.excursion.arms()
     }
 
-    /// dsync#204: seconds since the running excursion boost armed (`None` = none running).
-    pub fn excursion_boost_s(&self) -> Option<f64> {
-        self.excursion.boost_s()
+    /// dsync#204: the excursion boost's exponent in force (0 = none, 1 = × [`GM_BOOST_GAIN`]).
+    pub fn excursion_level(&self) -> f64 {
+        self.excursion.level()
     }
 
     /// dsync#146: the first engagement's fit ends (resolved, or its engagement ended).
@@ -994,39 +994,10 @@ impl PhaseLockCore {
             && self
                 .last_taken_e_us
                 .is_some_and(|taken| (e_raw_us - taken).abs() > LATE_WINDOW_JUMP_US);
-        // dsync#204: the boot's own fits own the frequency while they run.
+        // dsync#204: the boot's own fits own the frequency while they run, and a followed step
+        // owns this window.
         let armable = !self.boot_fit_open && self.refine.is_none() && freq_step.is_none();
-        let tracked_us = (e_raw_us - self.pull_us).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
-        let f = if late {
-            self.late_held += 1;
-            self.late_windows = self.late_windows.saturating_add(1);
-            self.last_freq_ppm
-        } else if self.pull_us != 0.0 {
-            self.late_held = 0;
-            self.last_taken_e_us = Some(e_raw_us);
-            self.pulled_word(e_raw_us, dt)
-        } else {
-            self.late_held = 0;
-            self.last_taken_e_us = Some(e_raw_us);
-            let e_us = e_raw_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
-            let (k_p, k_i) = self.gains();
-            // offset = local − master: a fast local clock GROWS e, so the correction is negative.
-            self.i_ppm = (self.i_ppm - k_i * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
-            (self.i_ppm - k_p * e_us).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM)
-        };
-        // dsync#204: a window the PI took feeds the excursion mean (after its word, so the gains
-        // move from the next window on).
-        let excursion = if late {
-            None
-        } else {
-            self.excursion.observe(tracked_us, dt, armable)
-        };
-        // dsync#166: the boost's clock is the engaged windows' grandmaster time (late ones
-        // included), so it is the same on every box that took the same windows.
-        if let Some(t) = self.boost_s {
-            let t = t + dt;
-            self.boost_s = (t < GM_BOOST_HOLD_S + GM_BOOST_RAMP_S).then_some(t);
-        }
+        let (f, excursion) = self.pi_window(e_raw_us, dt, late, armable);
         self.fstep.note_word(f);
         self.last_freq_ppm = f;
         let disturbed = event != AnchorEvent::None || freq_step.is_some();
@@ -1181,6 +1152,54 @@ impl PhaseLockCore {
         self.excursion.restart_mean();
         self.last_freq_step = Some(followed);
         followed
+    }
+
+    /// One window's word: the late-window hold, the pulled PI or the plain PI (with the gains in
+    /// force), then the excursion detector (dsync#204) and the #166 boost's clock. Returns the
+    /// word and a boost the excursion started in this window.
+    fn pi_window(
+        &mut self,
+        e_raw_us: f64,
+        dt: f64,
+        late: bool,
+        armable: bool,
+    ) -> (f64, Option<ExcursionArm>) {
+        let tracked_us = (e_raw_us - self.pull_us).clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+        let f = if late {
+            self.late_held += 1;
+            self.late_windows = self.late_windows.saturating_add(1);
+            self.last_freq_ppm
+        } else if self.pull_us != 0.0 {
+            self.late_held = 0;
+            self.last_taken_e_us = Some(e_raw_us);
+            self.pulled_word(e_raw_us, dt)
+        } else {
+            self.late_held = 0;
+            self.last_taken_e_us = Some(e_raw_us);
+            let e_us = e_raw_us.clamp(-ERROR_CLAMP_US, ERROR_CLAMP_US);
+            let (k_p, k_i) = self.gains();
+            // offset = local − master: a fast local clock GROWS e, so the correction is negative.
+            self.i_ppm = (self.i_ppm - k_i * e_us * dt).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM);
+            (self.i_ppm - k_p * e_us).clamp(-FREQ_CLAMP_PPM, FREQ_CLAMP_PPM)
+        };
+        // dsync#204: a window the PI took feeds the excursion mean (after its word, so the gains
+        // move from the next window on).
+        let excursion = if late {
+            // The schedule still runs on a late window (as #166's clock), with no new target.
+            self.excursion.advance(dt);
+            None
+        } else {
+            self.excursion
+                .set_gm_gain(boosted_gains(self.boost_s).0 / K_P_PER_S);
+            self.excursion.observe(tracked_us, dt, armable)
+        };
+        // dsync#166: the boost's clock is the engaged windows' grandmaster time (late ones
+        // included), so it is the same on every box that took the same windows.
+        if let Some(t) = self.boost_s {
+            let t = t + dt;
+            self.boost_s = (t < GM_BOOST_HOLD_S + GM_BOOST_RAMP_S).then_some(t);
+        }
+        (f, excursion)
     }
 
     /// The word while a followed step's phase is retired: the PI tracks `e − r` (so it sees no

@@ -1,11 +1,10 @@
 //! camera-box issue 1372 — the controller side of the phase lock's grandmaster FREQUENCY-STEP
-//! follow: one log line per followed step and its wall time for `/status`. dsync#204: one log
-//! line per phase excursion that armed the gain boost. The detection and the
+//! follow: one log line per followed step and its wall time for `/status`. The detection and the
 //! re-seed live in the pure core (`crate::ptp_phase_lock::freq_step`); nothing here touches the
 //! clock, `D` or the date layer.
 
 use super::*;
-use crate::ptp_phase_lock::{ExcursionArm, FreqStep, FSTEP_PULL_TAU_S, GM_BOOST_GAIN};
+use crate::ptp_phase_lock::{FreqStep, FSTEP_PULL_TAU_S};
 
 impl<C, N, S> PtpController<C, N, S>
 where
@@ -38,24 +37,6 @@ where
             s.integrator_after_ppm,
             s.pull_us,
             FSTEP_PULL_TAU_S * 3.0
-        );
-    }
-
-    /// dsync#204: a sustained phase excursion (a local-oscillator ramp the plain PI lags) armed
-    /// the gain boost in this window: log it once with the values that decided it.
-    pub(super) fn note_excursion(&self, arm: Option<ExcursionArm>) {
-        let Some(x) = arm else {
-            return;
-        };
-        info!(
-            "[PHASE-LOCK] phase excursion: mean e {:+.1}us moving {:+.2}us/s, I {:+.3}ppm -- the PI \
-             gains boosted (x{:.2} -> x{}, {} since start), no wall step, D unchanged",
-            x.mean_us,
-            x.rate_ppm,
-            self.date_sync.core.integrator_ppm(),
-            x.gain_before,
-            GM_BOOST_GAIN,
-            self.date_sync.core.excursion_arms()
         );
     }
 }
