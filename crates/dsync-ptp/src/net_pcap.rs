@@ -439,6 +439,28 @@ impl NpcapPtpNetwork {
         })
     }
 
+    /// dsync#206: the startup's open failed (at boot the Npcap device list can lag the adapter
+    /// list): NO capture yet, the state a failed re-join leaves. The controller's re-join (#112)
+    /// selects and opens on its schedule through the same `select_ptp_device` /
+    /// `open_ptp_capture`, `ip` (the default interface's) as the home it looks for after the
+    /// trusted-subnet rule. Unpinned only: a pinned startup waits in `pinned_wait`.
+    pub fn unopened(
+        interface_name: &str,
+        ip: Ipv4Addr,
+        gm_allowlist: &crate::gm_filter::GmAllowlist,
+    ) -> Self {
+        NpcapPtpNetwork {
+            open: None,
+            using_hiprec: true,
+            hint: interface_name.to_string(),
+            gm_allowlist: gm_allowlist.clone(),
+            last_join: (interface_name.to_string(), ip),
+            home_ip: ip,
+            pinned: None,
+            recv_gate: crate::recv_errors::RecvErrorGate::new(),
+        }
+    }
+
     /// The device and the IPv4 of the last capture that opened (`/status.ptp_interface`).
     pub fn joined(&self) -> (&str, Ipv4Addr) {
         (self.last_join.0.as_str(), self.last_join.1)

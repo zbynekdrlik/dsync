@@ -53,6 +53,11 @@ pub(super) struct PtpLiveness {
     /// dsync#191: how the pinned NIC is looked at; `None` = the OS (`net::pinned_interface`).
     /// A test sets its own so it never depends on the host's NICs.
     pub(super) pinned_lookup: Option<fn(&str) -> crate::net::PinnedLookup>,
+    /// dsync#206: the startup could not open the receive path (an unpinned box whose Npcap
+    /// device list lagged the adapters at boot): the clock alarm's reason naming why, refreshed
+    /// by every failed re-join, cleared by a successful one or an allowed packet. The schedule
+    /// stays the unpinned #112 backoff.
+    pub(super) not_open: Option<String>,
 }
 
 /// dsync#131 — while the pinned interface stays unusable, a fast look's two lines are WARN on
@@ -348,6 +353,12 @@ where
             status.ptp_interface = Some(iface.to_string());
             status.ptp_interface_ip = Some(ip.to_string());
         }
+    }
+
+    /// dsync#206: the startup could not open the PTP receive path (`why`): the loop runs with
+    /// none, NTP-only once stale, and the #112 re-join opens it on its schedule.
+    pub fn note_ptp_not_open(&mut self, why: &str) {
+        let _ = why;
     }
 
     /// `/status`'s liveness fields at `now`: the packet age, the receive rate, the re-joins.

@@ -123,6 +123,8 @@ struct StartupJoin {
     pinned: Option<String>,
     iface: String,
     ip: std::net::Ipv4Addr,
+    /// dsync#206: why the receive path is not open yet (`None` = open).
+    not_open: Option<String>,
 }
 
 /// Open the PTP receive path for `iface_name` / `iface_ip` (the startup choice). `pinned`
@@ -213,6 +215,30 @@ fn open_ptp_network(
     }
 }
 
+/// dsync#206: the backend with NO receive path open (the state a failed re-join leaves), for a
+/// startup whose open failed: `recv_packet` reads nothing and the controller's #112 re-join opens
+/// it through the same selection as startup.
+fn unopened_ptp_network(
+    iface_name: &str,
+    iface_ip: std::net::Ipv4Addr,
+    system_config: &SystemConfig,
+) -> PlatformNetwork {
+    #[cfg(unix)]
+    {
+        let _ = system_config;
+        net_linux::UdpPtpNetwork::unopened(
+            net_linux::KernelSockets,
+            iface_name.to_string(),
+            iface_ip,
+        )
+    }
+    #[cfg(windows)]
+    {
+        let gm_allowlist = dsync::gm_filter::GmAllowlist::parse(&system_config.gm_allowlist);
+        net_pcap::NpcapPtpNetwork::unopened(iface_name, iface_ip, &gm_allowlist)
+    }
+}
+
 /// dsync#131 (owner ruling 1.11.2026): the PTP interface is an explicit setting.
 ///
 /// Pinned (`system.interface` / `--interface`): wait for exactly that NIC and open on it —
@@ -250,12 +276,25 @@ fn join_ptp_network(
                 }
             }
         };
-        let (network, iface, ip) = open_ptp_network(&iface_name, iface_ip, None, system_config)?;
+        // dsync#206: a failed open at boot (the Npcap device list lags the adapters) never ends
+        // the loop.
+        let opened = dsync::startup_open::open_unpinned(
+            || open_ptp_network(&iface_name, iface_ip, None, system_config),
+            || {
+                (
+                    unopened_ptp_network(&iface_name, iface_ip, system_config),
+                    iface_name.clone(),
+                    iface_ip,
+                )
+            },
+        )?;
+        let (network, iface, ip) = opened.network;
         return Ok(Some(StartupJoin {
             network,
             pinned: None,
             iface,
             ip,
+            not_open: opened.not_open,
         }));
     };
     info!(
@@ -294,6 +333,7 @@ fn join_ptp_network(
         pinned: Some(name.clone()),
         iface,
         ip,
+        not_open: None,
     }))
 }
 
@@ -775,6 +815,7 @@ fn run_sync_loop(
         pinned,
         iface: joined_iface,
         ip: joined_ip,
+        not_open,
     }) = join_ptp_network(
         &args,
         &system_config,
@@ -812,6 +853,10 @@ fn run_sync_loop(
     controller.open_drift_file(&state_dir().drift_path());
     // dsync#131 / #116: /status names the pin, the joined interface and the config source.
     controller.set_ptp_interface(pinned, &joined_iface, joined_ip);
+    // dsync#206: no receive path yet: the alarm names why, the #112 re-join opens it.
+    if let Some(why) = not_open {
+        controller.note_ptp_not_open(&why);
+    }
     // dsync#129 slice 2: the fallback time source on the PTP interface (off by default).
     if fallback_config.enabled {
         match dsync::fallback::UdpFallbackTransport::open(joined_ip) {

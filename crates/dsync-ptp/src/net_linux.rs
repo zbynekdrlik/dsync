@@ -123,6 +123,19 @@ impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
         })
     }
 
+    /// dsync#206: the startup's open failed: NO sockets yet (the state a failed re-join
+    /// leaves), `iface` / `ip` the startup choice as the home and the last join. The controller's
+    /// re-join (#112) opens it on its schedule through the same `open_pair`.
+    pub fn unopened(factory: F, iface: String, ip: Ipv4Addr) -> Self {
+        UdpPtpNetwork {
+            factory,
+            joined: None,
+            last_join: (iface, ip),
+            home_ip: ip,
+            pinned: None,
+        }
+    }
+
     /// dsync#131: pin every later re-join to the interface `name` (`None` = not pinned). The
     /// startup join is the caller's (it waits for the pinned NIC's IPv4 itself).
     pub fn pinned_to(mut self, name: Option<String>) -> Self {
