@@ -874,6 +874,54 @@ fn the_cli_interface_overrides_the_config_131() {
     assert_eq!(SystemConfig::default().pinned_interface(None), None);
 }
 
+/// dsync#212 — `system.interface` / `--interface` take a list: a string with commas or a JSON
+/// array, canonicalized to `a,b` (trimmed, blanks dropped); a single name keeps its meaning.
+#[test]
+fn the_pinned_interface_takes_a_list_as_a_string_or_an_array_212() {
+    for json in [
+        r#"{"interface": "enp1s0,enp3s0"}"#,
+        r#"{"interface": " enp1s0 , enp3s0 ,"}"#,
+        r#"{"interface": ["enp1s0", "enp3s0"]}"#,
+        r#"{"interface": [" enp1s0", "enp3s0 "]}"#,
+    ] {
+        let c: SystemConfig = serde_json::from_str(json).expect("parses");
+        assert_eq!(c.interface.as_deref(), Some("enp1s0,enp3s0"), "{json}");
+    }
+    for unset in [r#"{"interface": " , "}"#, r#"{"interface": ",,"}"#] {
+        let c: SystemConfig = serde_json::from_str(unset).expect("parses");
+        assert_eq!(c.interface, None, "{unset}");
+    }
+    // A list holding a non-string fails the parse (the last-good config runs, #116).
+    assert!(serde_json::from_str::<SystemConfig>(r#"{"interface": ["enp1s0", 3]}"#).is_err());
+    let cfg = SystemConfig::default();
+    assert_eq!(
+        cfg.pinned_interface(Some("enp1s0, enp3s0")).as_deref(),
+        Some("enp1s0,enp3s0")
+    );
+    assert_eq!(cfg.pinned_interface(Some(" , ")), None);
+    assert_eq!(
+        cfg.pinned_interface(Some(" enp3s0 ")).as_deref(),
+        Some("enp3s0")
+    );
+}
+
+/// dsync#212 review round 1: a malformed pin fails the parse naming `system.interface` (the
+/// #116 last-good path then says why), and an array element holding a comma is rejected rather
+/// than silently split into two NICs.
+#[test]
+fn a_malformed_interface_list_fails_naming_the_key_212() {
+    for bad in [
+        r#"{"interface": [1]}"#,
+        r#"{"interface": 3}"#,
+        r#"{"interface": ["enp1s0,enp3s0"]}"#,
+        r#"{"interface": []}"#,
+        r#"{"interface": ["enp1s0", " "]}"#,
+    ] {
+        let err = serde_json::from_str::<SystemConfig>(bad).expect_err(bad);
+        assert!(err.to_string().contains("system.interface"), "{bad}: {err}");
+    }
+}
+
 /// dsync#136: the in-process follower (`dsync_ptp::follower`) runs the service's sample
 /// windows, so its constants must be the service's defaults; and the crate is released with the
 /// service, under the same version (consumers pin the crate by the service's tag).

@@ -82,7 +82,10 @@ irm https://raw.githubusercontent.com/zbynekdrlik/dsync/master/uninstall.ps1 | i
 ```bash
 dsync [OPTIONS]
 ```
-- `--interface <NAME>`: Bind to specific interface (e.g., `eth0`)
+- `--interface <NAME>[,<NAME>…]`: Pin the PTP interface (e.g., `eth0`; overrides `system.interface`).
+  A list (`enp1s0,enp3s0`, or `"interface": ["enp1s0", "enp3s0"]` in `config.json`) binds
+  whichever listed NIC has an IPv4 and moves to another listed NIC when the cable does; an
+  unlisted NIC is never used. Windows takes the adapter's friendly name or GUID.
 - `--ntp-server <IP>`: NTP server for initial sync (default: `10.77.8.2`)
 - `--skip-ntp`: Skip NTP sync
 - `--service`: (Windows Only) Run as a Windows Service
@@ -143,6 +146,8 @@ The stable fields a monitor reads:
 | `clock_alarm` | object `{active, since, reason}` | `active` true while the node is NOT PTP-locked to an allowed grandmaster; `since` the unix second the episode began (`null` when inactive); `reason` a human string (`""` when inactive). |
 | `fallback_role` | string, or `null` | The fallback time source role: `"off"`, `"candidate"`, `"follower"` or `"source"` (since 1.33). |
 | `ptp_interface_ip` | IPv4 string, or `null` | The IPv4 of the interface the PTP receive path joined; `null` until joined. |
+| `interfaces_configured` | list of strings, or `null` | The pinned interfaces (`system.interface` / `--interface`), in order; `null` when not pinned. Since 1.35.16. |
+| `ptp_interface_name` | string, or `null` | The listed interface the PTP receive path joined, as configured; `null` when not pinned or not joined. Since 1.35.16. |
 
 A healthy node: `mode` is `LOCK` or `NANO`, `is_locked` is true, `|ptp_phase_error_us|` is well
 under 50, `last_ptp_rx_age_s` is at most a few seconds and `clock_alarm.active` is false.

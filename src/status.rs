@@ -540,6 +540,20 @@ pub struct SyncStatus {
     #[serde(default)]
     pub ptp_interface_ip: Option<String>,
 
+    /// dsync#212: the pinned interfaces as a list (`system.interface` / `--interface` may name
+    /// several, e.g. both onboard ports of a cambox; one name = a list of one). `null` when the
+    /// node is not pinned and in a pre-1.35.16 blob. `ptp_interface_configured` keeps the same
+    /// pin as one string (`"enp1s0,enp3s0"`).
+    #[serde(default)]
+    pub interfaces_configured: Option<Vec<String>>,
+
+    /// dsync#212: the listed name the PTP receive path joined (as the operator wrote it: a
+    /// Linux NIC name, a Windows friendly name or GUID); `ptp_interface` is the OS's name for
+    /// it (on Windows the Npcap device). `null` when not pinned, until joined, and in a
+    /// pre-1.35.16 blob.
+    #[serde(default)]
+    pub ptp_interface_name: Option<String>,
+
     /// dsync#116: where the running configuration came from — `loaded_from` = `"file"`
     /// (`config.json`), `"last-good"` (it did not load; the copy of the last good load runs) or
     /// `"defaults"` (neither loaded) — and why `config.json` was not used. Anything but `"file"`
@@ -757,6 +771,8 @@ impl Default for SyncStatus {
             ptp_source_uuid: None,
             // #131 / #116: published by the controller
             ptp_interface_configured: None,
+            interfaces_configured: None,
+            ptp_interface_name: None,
             ptp_interface: None,
             ptp_interface_ip: None,
             config_state: None,

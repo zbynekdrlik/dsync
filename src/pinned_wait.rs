@@ -17,7 +17,7 @@
 //! unit-tested.
 
 use crate::clock_alarm::{self, ClockAlarm, ClockAlarmNotifier, ClockHealth};
-use crate::net::{self, PinnedLookup};
+use crate::net::{self, PinnedChoice, PinnedInterfaceUnavailable, PinnedLookup};
 use crate::status::SyncStatus;
 use anyhow::Result;
 use log::{error, info, warn};
@@ -26,16 +26,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-/// What the startup sees of the pinned NIC on one look.
+/// What the startup sees of the pinned NIC on one look (dsync#212: which listed NIC, too).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Seen {
-    Lookup(PinnedLookup),
+    Lookup(PinnedChoice),
     OpenFailed(String),
 }
 
 /// The injected boundaries and the alarm context of one wait.
 pub struct PinnedWait<'a, N: ClockAlarmNotifier> {
-    /// The pinned interface name.
+    /// The pinned interface name (dsync#212: or the canonical list `a,b`).
     pub name: &'a str,
     /// `/status`, where the pin and the alarm are published.
     pub status: &'a RwLock<SyncStatus>,
@@ -54,17 +54,42 @@ pub struct PinnedWait<'a, N: ClockAlarmNotifier> {
 
 impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
     /// Look, open, alarm, pause — until the receive path is open on the pinned NIC (`Some((the
-    /// opened path, its IPv4))`) or the service stops (`None`).
+    /// opened path, its IPv4))`) or the service stops (`None`). One NIC: `lookup` says what it is.
     pub fn run<T>(
         self,
         mut lookup: impl FnMut() -> PinnedLookup,
         mut open: impl FnMut(Ipv4Addr) -> Result<T>,
+        pause: impl FnMut(),
+        now: impl FnMut() -> Instant,
+    ) -> Option<(T, Ipv4Addr)> {
+        let name = self.name.to_string();
+        self.run_list(
+            move || PinnedChoice {
+                name: name.clone(),
+                lookup: lookup(),
+            },
+            move |_, ip| open(ip),
+            pause,
+            now,
+        )
+        .map(|(opened, _, ip)| (opened, ip))
+    }
+
+    /// dsync#212 — [`Self::run`] for a pin that may be a LIST: `lookup` says which listed NIC is
+    /// usable now and what it is (`net::pinned_choice`), `open` opens on that listed name. Returns
+    /// the opened path, the listed name it opened on and its IPv4.
+    pub fn run_list<T>(
+        self,
+        mut lookup: impl FnMut() -> PinnedChoice,
+        mut open: impl FnMut(&str, Ipv4Addr) -> Result<T>,
         mut pause: impl FnMut(),
         mut now: impl FnMut() -> Instant,
-    ) -> Option<(T, Ipv4Addr)> {
-        let name = self.name;
+    ) -> Option<(T, String, Ipv4Addr)> {
+        let spec = self.name;
         if let Ok(mut s) = self.status.write() {
-            s.ptp_interface_configured = Some(name.to_string());
+            s.ptp_interface_configured = Some(spec.to_string());
+            s.interfaces_configured =
+                Some(net::interface_names(spec).map(str::to_string).collect());
         }
         let started = now();
         let mut alarm = ClockAlarm::from_interval_secs(self.alarm_interval_s);
@@ -72,11 +97,12 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
         loop {
             let at = now();
             let waited = at.saturating_duration_since(started);
-            let lookup = lookup();
+            let choice = lookup();
+            let (name, lookup) = (choice.name.as_str(), choice.lookup);
             // `problem` raises the alarm; `state` is what the NIC is now, which keeps an alarm
             // that is already up truthful inside the grace (e.g. missing -> no IPv4 yet).
             let (seen, problem, state) = match net::usable_pinned_ip(lookup, waited) {
-                Some(ip) => match open(ip) {
+                Some(ip) => match open(name, ip) {
                     Ok(opened) => {
                         info!(
                             "[NET] pinned PTP interface {} ({}) is open after {:.1} s",
@@ -85,7 +111,7 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
                             waited.as_secs_f64()
                         );
                         self.clear_alarm(&mut alarm, at);
-                        return Some((opened, ip));
+                        return Some((opened, name.to_string(), ip));
                     }
                     Err(e) => {
                         let text = format!("{e:#}");
@@ -95,7 +121,7 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
                     }
                 },
                 None => (
-                    Seen::Lookup(lookup),
+                    Seen::Lookup(choice.clone()),
                     net::startup_wait_problem(name, lookup, waited).map(|p| p.alarm_reason()),
                     lookup_state(name, lookup),
                 ),
@@ -171,29 +197,43 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
     }
 }
 
-/// The alarm text for the NIC's state while no IPv4 is usable yet.
+/// The alarm text for the NIC's state while no IPv4 is usable yet (`name`: the listed NIC, or
+/// the whole list when none is usable, #212).
 fn lookup_state(name: &str, lookup: PinnedLookup) -> String {
     match lookup {
         PinnedLookup::LinkLocalOnly(ip) => {
             format!("PTP interface {name} has only the link-local address {ip} (waiting for DHCP)")
         }
         PinnedLookup::Ready(ip) => format!("PTP interface {name} has {ip}"),
-        PinnedLookup::NoIpv4 => format!("PTP interface {name} has no IPv4 address"),
-        PinnedLookup::Missing => format!("PTP interface {name} is missing"),
+        PinnedLookup::NoIpv4 | PinnedLookup::Missing => {
+            PinnedInterfaceUnavailable::from_lookup(name, lookup)
+                .map(|p| p.alarm_reason())
+                .unwrap_or_default()
+        }
     }
 }
 
+/// `name`: the listed NIC looked at (or the whole list when none is usable, #212).
 fn log_seen(name: &str, seen: &Seen) {
     match seen {
-        Seen::Lookup(PinnedLookup::Ready(ip)) | Seen::Lookup(PinnedLookup::LinkLocalOnly(ip)) => {
+        Seen::Lookup(PinnedChoice {
+            lookup: PinnedLookup::Ready(ip) | PinnedLookup::LinkLocalOnly(ip),
+            ..
+        }) => {
             info!("[NET] pinned PTP interface {} has {}", name, ip)
         }
-        Seen::Lookup(PinnedLookup::NoIpv4) => warn!(
+        Seen::Lookup(PinnedChoice {
+            lookup: PinnedLookup::NoIpv4,
+            ..
+        }) => warn!(
             "[NET] pinned PTP interface {} has no IPv4 address yet -- waiting for it (never \
              another NIC)",
             name
         ),
-        Seen::Lookup(PinnedLookup::Missing) => error!(
+        Seen::Lookup(PinnedChoice {
+            lookup: PinnedLookup::Missing,
+            ..
+        }) => error!(
             "[NET] pinned PTP interface {} is missing -- waiting for it (never another NIC)",
             name
         ),

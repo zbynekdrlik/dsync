@@ -183,6 +183,7 @@ impl PtpNetwork for StatefulNetwork {
             iface: "sim0".to_string(),
             ip: std::net::Ipv4Addr::LOCALHOST,
             changed: false,
+            pinned_name: None,
         })
     }
 }

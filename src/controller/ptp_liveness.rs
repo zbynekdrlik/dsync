@@ -48,6 +48,9 @@ pub(super) struct PtpLiveness {
     pub(super) pinned: Option<String>,
     /// dsync#191: the address PTP is joined on now (the startup join, then every re-join).
     pub(super) joined_ip: Option<Ipv4Addr>,
+    /// dsync#212: the LISTED name PTP is joined on now (`RejoinOutcome::pinned_name`); the #191
+    /// link-local look asks about this NIC, never about the whole list.
+    pub(super) joined_name: Option<String>,
     /// dsync#191: the last look at a pinned NIC joined on a link-local address.
     pub(super) last_link_local_look: Option<Instant>,
     /// dsync#191: how the pinned NIC is looked at; `None` = the OS (`net::pinned_interface`).
@@ -292,9 +295,12 @@ where
         );
         self.ptp_liveness.rejoin.record(epoch_s, Ok(outcome));
         self.ptp_liveness.joined_ip = Some(outcome.ip);
+        self.ptp_liveness.joined_name = outcome.pinned_name.clone();
         if let Ok(mut status) = self.status_shared.write() {
             status.ptp_interface = Some(outcome.iface.clone());
             status.ptp_interface_ip = Some(outcome.ip.to_string());
+            // dsync#212: the listed NIC it joined (the cable may have moved to another one).
+            status.ptp_interface_name = outcome.pinned_name.clone();
             status.rejoin = self.ptp_liveness.rejoin.clone();
         }
         self.fallback_rejoin(outcome.ip);
@@ -307,12 +313,16 @@ where
     /// without DHCP keeps its link-local address and is never re-joined. A stale PTP is
     /// `maybe_rejoin_ptp`'s.
     pub(super) fn maybe_leave_link_local(&mut self, now: Instant) {
-        let (Some(name), Some(ip)) = (
+        let (Some(spec), Some(ip)) = (
             self.ptp_liveness.pinned.clone(),
             self.ptp_liveness.joined_ip,
         ) else {
             return;
         };
+        // dsync#212: of a pinned list, only the listed NIC PTP is joined on is looked at: a
+        // routable address on ANOTHER listed port (a static one without carrier) is no reason to
+        // leave the link-local NIC PTP flows on. The re-join stays on it (`net::rejoin_order`).
+        let name = self.ptp_liveness.joined_name.clone().unwrap_or(spec);
         if !ip.is_link_local() || self.ptp_stale_at(now) {
             return;
         }
@@ -359,13 +369,28 @@ where
 
     /// dsync#131 — the startup join (`main`): the pin (or `None`) and where PTP joined.
     /// Published at once in `/status`; each successful re-join updates the joined interface.
+    /// dsync#212: the pin may be a canonical list (`a,b`), published as `interfaces_configured`.
     pub fn set_ptp_interface(&mut self, configured: Option<String>, iface: &str, ip: Ipv4Addr) {
         self.ptp_liveness.pinned = configured.clone();
         self.ptp_liveness.joined_ip = Some(ip);
         if let Ok(mut status) = self.status_shared.write() {
+            status.interfaces_configured = configured.as_deref().map(|spec| {
+                crate::net::interface_names(spec)
+                    .map(str::to_string)
+                    .collect()
+            });
             status.ptp_interface_configured = configured;
             status.ptp_interface = Some(iface.to_string());
             status.ptp_interface_ip = Some(ip.to_string());
+        }
+    }
+
+    /// dsync#212 — the listed name the startup joined (`None` when not pinned):
+    /// `/status.ptp_interface_name`. Each successful re-join updates it.
+    pub fn set_ptp_interface_name(&mut self, name: Option<String>) {
+        self.ptp_liveness.joined_name = name.clone();
+        if let Ok(mut status) = self.status_shared.write() {
+            status.ptp_interface_name = name;
         }
     }
 
@@ -374,9 +399,11 @@ where
     pub fn note_ptp_not_open(&mut self, why: &str) {
         self.ptp_liveness.not_open = Some(not_open_reason(why));
         self.ptp_liveness.joined_ip = None;
+        self.ptp_liveness.joined_name = None;
         if let Ok(mut status) = self.status_shared.write() {
             status.ptp_interface = None;
             status.ptp_interface_ip = None;
+            status.ptp_interface_name = None;
         }
     }
 
