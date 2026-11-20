@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::clock::MockSystemClock;
-use crate::traits::{MockNtpSource, MockPtpNetwork, RejoinOutcome};
+use crate::traits::{MockNtpSource, MockPtpNetwork, RejoinOutcome, TrustedPtp};
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -44,10 +44,12 @@ fn eth0() -> RejoinOutcome {
     }
 }
 
-/// A network whose re-joins succeed and are counted.
+/// A network whose re-joins succeed and are counted. Every one is a STALE re-join (dsync#215:
+/// the controller tells the backend the trusted grandmaster is silent).
 fn counting_network(count: Arc<AtomicU32>) -> MockPtpNetwork {
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().returning(move || {
+    net.expect_rejoin().returning(move |trusted| {
+        assert_eq!(trusted, TrustedPtp::Silent, "a stale re-join");
         count.fetch_add(1, Ordering::SeqCst);
         Ok(eth0())
     });
@@ -184,7 +186,7 @@ fn a_failed_rejoin_is_published_and_retried_on_the_schedule_never_fatal_112() {
     let calls = Arc::new(AtomicU32::new(0));
     let seen = calls.clone();
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().returning(move || {
+    net.expect_rejoin().returning(move |_| {
         if seen.fetch_add(1, Ordering::SeqCst) == 0 {
             Err(anyhow::anyhow!("No suitable IPv4 interface found"))
         } else {
@@ -435,7 +437,7 @@ fn a_followers_delay_req_neither_names_the_grandmaster_nor_clears_the_drop_count
 /// re-joins, then back (`eth0()` stands for the joined NIC).
 fn pinned_network(down: u32, calls: Arc<AtomicU32>, missing: bool) -> MockPtpNetwork {
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().returning(move || {
+    net.expect_rejoin().returning(move |_| {
         if calls.fetch_add(1, Ordering::SeqCst) < down {
             Err(crate::net::PinnedInterfaceUnavailable {
                 name: "enp56s0".to_string(),
@@ -510,7 +512,7 @@ fn an_unpinned_rejoin_failure_keeps_the_backoff_and_names_no_interface_131() {
     let calls = Arc::new(AtomicU32::new(0));
     let seen = calls.clone();
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().returning(move || {
+    net.expect_rejoin().returning(move |_| {
         seen.fetch_add(1, Ordering::SeqCst);
         Err(anyhow::anyhow!("No suitable IPv4 interface found"))
     });
@@ -574,7 +576,7 @@ fn any_rejoin_failure_of_a_pinned_node_names_the_nic_and_is_retried_fast_131() {
     let calls = Arc::new(AtomicU32::new(0));
     let seen = calls.clone();
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().returning(move || {
+    net.expect_rejoin().returning(move |_| {
         seen.fetch_add(1, Ordering::SeqCst);
         Err(anyhow::anyhow!("no Npcap device carries 10.77.9.204"))
     });
@@ -610,10 +612,16 @@ fn a_pinned_wait_logs_warn_on_a_changed_reason_and_every_sixtieth_look_131() {
 const APIPA: Ipv4Addr = Ipv4Addr::new(169, 254, 39, 11);
 const DHCP: Ipv4Addr = Ipv4Addr::new(10, 77, 7, 108);
 
-/// A network whose re-joins succeed on the DHCP address of `Ethernet` and are counted.
+/// A network whose re-joins succeed on the DHCP address of `Ethernet` and are counted. Every
+/// one is the #191 leave while PTP flows (dsync#215: the trusted grandmaster flows).
 fn dhcp_network(count: Arc<AtomicU32>) -> MockPtpNetwork {
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().returning(move || {
+    net.expect_rejoin().returning(move |trusted| {
+        assert_eq!(
+            trusted,
+            TrustedPtp::Flowing,
+            "the link-local leave while PTP flows"
+        );
         count.fetch_add(1, Ordering::SeqCst);
         Ok(RejoinOutcome {
             iface: "Ethernet".to_string(),
@@ -729,7 +737,7 @@ fn a_receive_path_not_open_at_start_is_named_and_opened_by_the_rejoin_206() {
     let calls = Arc::new(AtomicU32::new(0));
     let seen = calls.clone();
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().returning(move || {
+    net.expect_rejoin().returning(move |_| {
         if seen.fetch_add(1, Ordering::SeqCst) == 0 {
             Err(anyhow::anyhow!(
                 "Interface '{{CC545DEA-6E37-4FF6-A98E-0297BB71B85A}}' not found. Available: \
@@ -789,7 +797,7 @@ fn a_receive_path_not_open_at_start_is_named_and_opened_by_the_rejoin_206() {
 #[test]
 fn a_pinned_list_and_the_listed_nic_joined_are_published_212() {
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().returning(|| {
+    net.expect_rejoin().returning(|_| {
         Ok(RejoinOutcome {
             iface: "enp1s0".to_string(),
             ip: Ipv4Addr::new(10, 77, 9, 133),
@@ -860,4 +868,54 @@ fn a_link_local_join_of_a_list_looks_only_at_the_joined_nic_212() {
         c.maybe_leave_link_local(t0 + ms(at));
     }
     assert_eq!(count.load(Ordering::SeqCst), 0, "never re-joined");
+}
+
+/// dsync#215 — the controller, which owns the `gm_allowlist`, tells the backend whether the
+/// TRUSTED grandmaster still flows on the join: a foreign grandmaster's packets (dropped by the
+/// allowlist) keep the node stale, and the stale re-join says `Silent`, so a pinned list moves
+/// on to the port the trusted grandmaster is on. The #191 link-local leave says `Flowing`.
+#[test]
+fn the_rejoin_names_the_trusted_grandmaster_silent_when_only_a_foreign_one_sends_215() {
+    let seen: Arc<std::sync::Mutex<Vec<TrustedPtp>>> = Arc::default();
+    let log = seen.clone();
+    let mut net = MockPtpNetwork::new();
+    // A foreign grandmaster's Sync, every loop iteration.
+    net.expect_recv_packet().returning(|| {
+        Ok(Some((
+            ptp_packet(0),
+            60,
+            SystemTime::now(),
+            Some(Ipv4Addr::new(10, 77, 7, 109)),
+        )))
+    });
+    net.expect_rejoin().returning(move |trusted| {
+        log.lock().expect("log").push(trusted);
+        Ok(RejoinOutcome {
+            iface: "enp1s0".to_string(),
+            ip: DHCP,
+            changed: true,
+            pinned_name: Some("enp1s0".to_string()),
+        })
+    });
+    let mut cfg = SystemConfig::default();
+    cfg.gm_allowlist = vec![GM.to_string()];
+    let status = Arc::new(RwLock::new(SyncStatus::default()));
+    let mut c = PtpController::new(
+        MockSystemClock::new(),
+        net,
+        MockNtpSource::new(),
+        status,
+        cfg,
+    );
+    c.clock_alarm_notifier = Box::new(QuietNotifier);
+    c.set_ptp_interface(Some("enp1s0,enp3s0".to_string()), "enp3s0", DHCP);
+    c.set_ptp_interface_name(Some("enp3s0".to_string()));
+    went_quiet(&mut c, 30);
+    // The loop receives the foreign Sync: dropped, so still stale; the re-join is due.
+    c.process_loop_iteration().expect("the iteration");
+    assert!(
+        c.ptp_stale_at(Instant::now()),
+        "a foreign GM is no PTP liveness"
+    );
+    assert_eq!(*seen.lock().expect("log"), vec![TrustedPtp::Silent]);
 }

@@ -336,7 +336,9 @@ fn run<N: PtpNetwork>(
         let now = Instant::now();
         if schedule.due(last_rx, now) {
             let attempt = schedule.record_attempt(now);
-            match network.rejoin() {
+            // dsync#215: stale = no allowed time message (the core's allowlist), so the
+            // trusted grandmaster is silent on this join.
+            match network.rejoin(crate::network::TrustedPtp::Silent) {
                 Ok(outcome) => info!(
                     "[FOLLOWER] re-joined the PTP group on {} ({}), attempt {}",
                     outcome.iface, outcome.ip, attempt

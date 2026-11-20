@@ -45,7 +45,7 @@ fn a_ptp_loss_rejoin_and_re_acquire_keep_the_fleet_d_and_its_seq_on_the_master_1
         c.lock_reported_for_test();
         let rejoins = Arc::new(AtomicU32::new(0));
         let seen = rejoins.clone();
-        c.network.expect_rejoin().returning(move || {
+        c.network.expect_rejoin().returning(move |_| {
             seen.fetch_add(1, Ordering::SeqCst);
             Ok(RejoinOutcome {
                 iface: "enx002427159965".to_string(),

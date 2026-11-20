@@ -13,13 +13,13 @@
 //! before this nothing ever joined again (only a service restart recovered).
 
 use crate::net::{self, PinnedLookup};
-use crate::network::{PtpNetwork, RejoinOutcome};
+use crate::network::{PtpNetwork, RejoinOutcome, TrustedPtp};
 use crate::ptp::{PTP_EVENT_PORT, PTP_GENERAL_PORT};
 use anyhow::Result;
 use log::info;
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, UdpSocket};
-use std::time::{Instant, SystemTime};
+use std::time::SystemTime;
 
 /// The two OS boundaries of the Linux PTP receive path.
 pub trait PtpSocketFactory {
@@ -105,10 +105,6 @@ pub struct UdpPtpNetwork<F: PtpSocketFactory = KernelSockets> {
     /// a canonical list `a,b`). When set, a re-join joins only a listed NIC (no home address, no
     /// resolver) and waits for one otherwise.
     pinned: Option<String>,
-    /// dsync#212: when the grandmaster's time last arrived on the CURRENT join (`None` since
-    /// the join): a pinned re-join while it still flows stays on the listed NIC, a silent one
-    /// moves on in the list (`net::rejoin_order`).
-    last_time_message: Option<Instant>,
 }
 
 impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
@@ -126,7 +122,6 @@ impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
             last_join: (iface, ip),
             home_ip: ip,
             pinned: None,
-            last_time_message: None,
         })
     }
 
@@ -140,7 +135,6 @@ impl<F: PtpSocketFactory> UdpPtpNetwork<F> {
             last_join: (iface, ip),
             home_ip: ip,
             pinned: None,
-            last_time_message: None,
         }
     }
 
@@ -178,7 +172,6 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         // stray datagram on a fallback join must not make that join the home.
         if crate::ptp::is_time_message(&buf[..size]) {
             self.home_ip = joined_ip;
-            self.last_time_message = Some(Instant::now());
         }
         Ok(Some((buf[..size].to_vec(), size, ts, source_ip)))
     }
@@ -192,7 +185,7 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         Ok(())
     }
 
-    fn rejoin(&mut self) -> Result<RejoinOutcome> {
+    fn rejoin(&mut self, trusted: TrustedPtp) -> Result<RejoinOutcome> {
         // The interface NOW. First the one that carries the home address (where PTP was last
         // received): a re-plugged NIC comes back with a new, higher ifindex and often a new name,
         // and the listing-ordered startup resolver may answer another interface first (tailscale,
@@ -204,13 +197,12 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         // clock alarm and looks again in seconds; another NIC is never joined.
         //
         // dsync#212: a pinned LIST takes a listed NIC that carries an IPv4 now: the joined one
-        // again while PTP still flows on it, else the next listed one (`net::rejoin_order`):
-        // the cable moved to the other port.
+        // again while the TRUSTED grandmaster still flows on it (#215: the caller's `trusted`),
+        // else the next listed one (`net::rejoin_order`): the cable moved to the other port.
         let (iface, ip) = match &self.pinned {
             Some(spec) => {
                 let factory = &mut self.factory;
-                let order =
-                    net::rejoin_order(&self.last_join.0, self.last_time_message, Instant::now());
+                let order = net::rejoin_order(&self.last_join.0, trusted);
                 net::choose_pinned(spec, order, |name| factory.lookup_pinned(name)).usable()?
             }
             None => match self.factory.interface_carrying(self.home_ip) {
@@ -231,7 +223,6 @@ impl<F: PtpSocketFactory> PtpNetwork for UdpPtpNetwork<F> {
         let changed = self.last_join.0 != iface || self.last_join.1 != ip;
         self.joined = Some(joined);
         self.last_join = (iface.clone(), ip);
-        self.last_time_message = None;
         let pinned_name = self.pinned.is_some().then(|| iface.clone());
         Ok(RejoinOutcome {
             iface,
@@ -392,7 +383,7 @@ mod tests {
         let old = addrs(&net);
         net.factory.released_before_open = old.clone();
 
-        let out = net.rejoin().expect("the re-join");
+        let out = net.rejoin(TrustedPtp::Silent).expect("the re-join");
         assert_eq!(
             out,
             RejoinOutcome {
@@ -433,7 +424,7 @@ mod tests {
         script.interfaces.push_back(Ok(("eth0".to_string(), ETH0)));
         let mut net = joined(script);
         net.factory.released_before_open = addrs(&net);
-        let out = net.rejoin().expect("the re-join");
+        let out = net.rejoin(TrustedPtp::Silent).expect("the re-join");
         assert_eq!(
             out,
             RejoinOutcome {
@@ -455,7 +446,7 @@ mod tests {
     fn a_rejoin_that_cannot_resolve_an_interface_keeps_the_old_sockets_112() {
         let mut net = joined(ScriptedSockets::default()); // nothing scripted: resolve fails
         let old = addrs(&net);
-        let err = net.rejoin().expect_err("no interface");
+        let err = net.rejoin(TrustedPtp::Silent).expect_err("no interface");
         assert!(
             err.to_string().contains("No suitable IPv4 interface"),
             "{err}"
@@ -481,7 +472,9 @@ mod tests {
         let mut net = joined_after_startup_failing_port(script);
         let old = addrs(&net);
 
-        let err = net.rejoin().expect_err("the general socket cannot open");
+        let err = net
+            .rejoin(TrustedPtp::Silent)
+            .expect_err("the general socket cannot open");
         assert!(err.to_string().contains("No such device"), "{err}");
         assert_eq!(net.interface(), None, "no sockets");
         assert_eq!(net.recv_packet().expect("recv"), None, "nothing to read");
@@ -498,7 +491,7 @@ mod tests {
 
         // The next attempt (on the controller's schedule) works.
         net.factory.fail_port = None;
-        let out = net.rejoin().expect("the second re-join");
+        let out = net.rejoin(TrustedPtp::Silent).expect("the second re-join");
         assert!(
             out.changed,
             "compared with the last join that worked (eth0)"
@@ -524,7 +517,7 @@ mod tests {
         script.carrying.insert(ETH0, "enx002427159965".to_string());
         let mut net = joined(script);
 
-        let out = net.rejoin().expect("the re-join");
+        let out = net.rejoin(TrustedPtp::Silent).expect("the re-join");
         assert_eq!(
             out,
             RejoinOutcome {
@@ -550,7 +543,9 @@ mod tests {
         assert!(net.recv_packet().expect("no error").is_none());
         assert!(net.factory.opened.is_empty());
 
-        let out = net.rejoin().expect("the first re-join opens it");
+        let out = net
+            .rejoin(TrustedPtp::Silent)
+            .expect("the first re-join opens it");
         assert_eq!(
             out,
             RejoinOutcome {
@@ -580,7 +575,7 @@ mod tests {
             .interfaces
             .push_back(Ok(("enp2s0".to_string(), ETH1)));
         let mut net = joined(script);
-        let out = net.rejoin().expect("the re-join");
+        let out = net.rejoin(TrustedPtp::Silent).expect("the re-join");
         assert_eq!((out.iface.as_str(), out.ip), ("enp2s0", ETH1));
         assert_eq!(net.factory.resolves, 1);
     }
@@ -593,7 +588,7 @@ mod tests {
             .interfaces
             .push_back(Ok(("tailscale0".to_string(), TAILSCALE)));
         let mut net = joined(script);
-        net.rejoin().expect("the fallback join");
+        net.rejoin(TrustedPtp::Silent).expect("the fallback join");
         assert_eq!(net.interface(), Some(("tailscale0", TAILSCALE)));
 
         // Nothing is received there, so the home is still eth0's address: once the NIC is back
@@ -604,7 +599,7 @@ mod tests {
         net.factory
             .carrying
             .insert(ETH0, "enx002427159965".to_string());
-        net.rejoin().expect("the 2nd re-join");
+        net.rejoin(TrustedPtp::Silent).expect("the 2nd re-join");
         assert_eq!(net.interface(), Some(("enx002427159965", ETH0)));
 
         // A later move to eth1 that DOES receive PTP makes eth1's address the home.
@@ -612,7 +607,7 @@ mod tests {
         net.factory
             .interfaces
             .push_back(Ok(("eth1".to_string(), ETH1)));
-        net.rejoin().expect("the 3rd re-join");
+        net.rejoin(TrustedPtp::Silent).expect("the 3rd re-join");
         let a = addrs(&net);
         let event = a[a.len() - 2];
         let sync = time_message();
@@ -624,7 +619,7 @@ mod tests {
         net.factory
             .carrying
             .insert(ETH1, "eth1-renamed".to_string());
-        net.rejoin().expect("the 4th re-join");
+        net.rejoin(TrustedPtp::Silent).expect("the 4th re-join");
         assert_eq!(
             net.interface(),
             Some(("eth1-renamed", ETH1)),
@@ -651,7 +646,7 @@ mod tests {
             .interfaces
             .push_back(Ok(("tailscale0".to_string(), TAILSCALE)));
         let mut net = joined(script);
-        net.rejoin().expect("the fallback join");
+        net.rejoin(TrustedPtp::Silent).expect("the fallback join");
         let a = addrs(&net);
         let event = a[a.len() - 2];
         let mut delay_req = time_message();
@@ -670,7 +665,7 @@ mod tests {
         net.factory
             .carrying
             .insert(ETH0, "enx002427159965".to_string());
-        net.rejoin().expect("the 2nd re-join");
+        net.rejoin(TrustedPtp::Silent).expect("the 2nd re-join");
         assert_eq!(
             net.interface(),
             Some(("enx002427159965", ETH0)),
@@ -701,7 +696,7 @@ mod tests {
             .pinned
             .insert("enp56s0".to_string(), PinnedLookup::Ready(new_rig));
         let mut net = pinned_rig(script);
-        let out = net.rejoin().expect("the re-join");
+        let out = net.rejoin(TrustedPtp::Silent).expect("the re-join");
         assert_eq!(
             out,
             RejoinOutcome {
@@ -726,7 +721,9 @@ mod tests {
             .push_back(Ok(("enx00e04c680185".to_string(), USB)));
         let mut net = pinned_rig(script);
         let old = addrs(&net);
-        let err = net.rejoin().expect_err("the pinned NIC is gone");
+        let err = net
+            .rejoin(TrustedPtp::Silent)
+            .expect_err("the pinned NIC is gone");
         assert_eq!(
             err.downcast_ref::<PinnedInterfaceUnavailable>(),
             Some(&PinnedInterfaceUnavailable {
@@ -747,7 +744,7 @@ mod tests {
             .pinned
             .insert("enp56s0".to_string(), PinnedLookup::NoIpv4);
         let mut net = pinned_rig(script);
-        let err = net.rejoin().expect_err("no IPv4 yet");
+        let err = net.rejoin(TrustedPtp::Silent).expect_err("no IPv4 yet");
         assert_eq!(
             err.downcast_ref::<PinnedInterfaceUnavailable>()
                 .map(|p| p.missing),
@@ -759,7 +756,9 @@ mod tests {
             .pinned
             .insert("enp56s0".to_string(), PinnedLookup::Ready(RIG));
         net.factory.released_before_open = addrs(&net);
-        let out = net.rejoin().expect("the NIC has its address");
+        let out = net
+            .rejoin(TrustedPtp::Silent)
+            .expect("the NIC has its address");
         assert_eq!(
             (out.iface.as_str(), out.ip, out.changed),
             ("enp56s0", RIG, false)
@@ -796,7 +795,9 @@ mod tests {
             .pinned
             .insert("enp1s0".to_string(), PinnedLookup::Ready(RIG));
         let mut net = pinned_cambox(script);
-        let out = net.rejoin().expect("the cable is in enp1s0 now");
+        let out = net
+            .rejoin(TrustedPtp::Silent)
+            .expect("the cable is in enp1s0 now");
         assert_eq!(
             (out.iface.as_str(), out.ip, out.changed),
             ("enp1s0", RIG, true)
@@ -810,7 +811,9 @@ mod tests {
         net.factory
             .pinned
             .insert("enp3s0".to_string(), PinnedLookup::Ready(RIG));
-        let out = net.rejoin().expect("the cable is back in enp3s0");
+        let out = net
+            .rejoin(TrustedPtp::Silent)
+            .expect("the cable is back in enp3s0");
         assert_eq!(
             (out.iface.as_str(), out.ip, out.changed),
             ("enp3s0", RIG, true)
@@ -821,7 +824,9 @@ mod tests {
             .pinned
             .insert("enp3s0".to_string(), PinnedLookup::NoIpv4);
         let opened = net.factory.opened.len();
-        let err = net.rejoin().expect_err("no listed NIC has an IPv4");
+        let err = net
+            .rejoin(TrustedPtp::Silent)
+            .expect_err("no listed NIC has an IPv4");
         assert_eq!(
             err.downcast_ref::<PinnedInterfaceUnavailable>(),
             Some(&PinnedInterfaceUnavailable {
@@ -847,9 +852,9 @@ mod tests {
             .pinned
             .insert("enp3s0".to_string(), PinnedLookup::Ready(RIG));
         let mut net = pinned_cambox(script);
-        let out = net.rejoin().expect("the re-join");
+        let out = net.rejoin(TrustedPtp::Silent).expect("the re-join");
         assert_eq!((out.iface.as_str(), out.ip), ("enp1s0", other));
-        let out = net.rejoin().expect("the re-join");
+        let out = net.rejoin(TrustedPtp::Silent).expect("the re-join");
         assert_eq!((out.iface.as_str(), out.ip), ("enp3s0", RIG));
     }
 
@@ -872,7 +877,7 @@ mod tests {
         // The foreign grandmaster's Sync arrives on the joined port (the controller drops it).
         assert!(round_trip(&mut net, a[0], &time_message()).is_some());
         // The controller's stale re-join (the trusted grandmaster is silent here).
-        let out = net.rejoin().expect("the re-join");
+        let out = net.rejoin(TrustedPtp::Silent).expect("the re-join");
         assert_eq!(
             (out.iface.as_str(), out.ip),
             ("enp1s0", other),
@@ -895,10 +900,10 @@ mod tests {
         let mut net = pinned_cambox(script);
         let a = addrs(&net);
         assert!(round_trip(&mut net, a[0], &time_message()).is_some());
-        let out = net.rejoin().expect("the re-join");
+        let out = net.rejoin(TrustedPtp::Flowing).expect("the re-join");
         assert_eq!((out.iface.as_str(), out.ip), ("enp3s0", RIG));
-        // The new join has received nothing yet: a later re-join moves on.
-        let out = net.rejoin().expect("the re-join");
+        // The trusted grandmaster went silent: a later re-join moves on.
+        let out = net.rejoin(TrustedPtp::Silent).expect("the re-join");
         assert_eq!((out.iface.as_str(), out.ip), ("enp1s0", other));
     }
 }

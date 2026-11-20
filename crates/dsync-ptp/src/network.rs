@@ -20,6 +20,21 @@ pub struct RejoinOutcome {
     pub pinned_name: Option<String>,
 }
 
+/// dsync#215 — what the CALLER of [`PtpNetwork::rejoin`] knows about the trusted grandmaster
+/// on the current join. Only the caller can say: it owns the `gm_allowlist` and the staleness
+/// (a backend sees every grandmaster's time messages, the allowed and the foreign ones alike).
+/// "Trusted" = a source the allowlist allows; with an EMPTY allowlist every source is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrustedPtp {
+    /// The trusted grandmaster's time still arrives on the current join (the #191 link-local
+    /// leave): a pinned list stays on the joined listed NIC while it is usable.
+    Flowing,
+    /// No trusted time message for the staleness bound (`ptp_rejoin::REJOIN_AFTER`): a pinned
+    /// list moves on to the next usable listed NIC, whatever a foreign grandmaster still sends
+    /// on the joined one.
+    Silent,
+}
+
 #[cfg_attr(any(test, feature = "mock"), mockall::automock)]
 pub trait PtpNetwork {
     /// Receive a packet. Returns Ok(Some((data, len, timestamp, source_ip))) if packet received.
@@ -45,5 +60,9 @@ pub trait PtpNetwork {
     /// resolved leaves the old path in place; an `Err` when the new one cannot be opened leaves
     /// none (nothing is received) until the next attempt. Either way the controller retries on
     /// its schedule.
-    fn rejoin(&mut self) -> Result<RejoinOutcome>;
+    ///
+    /// dsync#215: `trusted` is the caller's judgement of the trusted grandmaster on the current
+    /// join; a pinned LIST stays on the joined listed NIC only while it is
+    /// [`TrustedPtp::Flowing`] (`net::rejoin_order`). Unpinned and single-pin re-joins ignore it.
+    fn rejoin(&mut self, trusted: TrustedPtp) -> Result<RejoinOutcome>;
 }

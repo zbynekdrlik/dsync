@@ -212,7 +212,9 @@ where
         }
         // Only the receive path is re-opened. The clock, the servos and the date offset are not
         // touched: a re-join must never do what a restart does to the fleet date.
-        let result = self.network.rejoin();
+        // dsync#215: stale = no ALLOWED time message for 10 s, so the trusted grandmaster is
+        // silent on this join, whatever a foreign one still sends there.
+        let result = self.network.rejoin(crate::traits::TrustedPtp::Silent);
         let epoch_s = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -350,7 +352,8 @@ where
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        match self.network.rejoin() {
+        // dsync#215: not stale, so the trusted grandmaster still flows on this join.
+        match self.network.rejoin(crate::traits::TrustedPtp::Flowing) {
             Ok(outcome) => self.note_rejoined(&outcome, epoch_s),
             Err(e) => {
                 let text = format!("{e:#}");

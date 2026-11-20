@@ -27,7 +27,7 @@ use dsync::config::SystemConfig;
 use dsync::controller::PtpController;
 use dsync::ntp::NtpMeasurement;
 use dsync::status::SyncStatus;
-use dsync::traits::{NtpSource, PtpNetwork, RejoinOutcome};
+use dsync::traits::{NtpSource, PtpNetwork, RejoinOutcome, TrustedPtp};
 use dsync_ptp::follower::model::VirtualClock;
 use dsync_ptp::follower::{Follower, FollowerConfig};
 use dsync_ptp::mono;
@@ -131,8 +131,8 @@ impl PtpNetwork for ServiceNet {
             ip,
         )))
     }
-    fn rejoin(&mut self) -> Result<RejoinOutcome> {
-        self.inner.rejoin()
+    fn rejoin(&mut self, trusted: TrustedPtp) -> Result<RejoinOutcome> {
+        self.inner.rejoin(trusted)
     }
 }
 

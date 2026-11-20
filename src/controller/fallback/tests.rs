@@ -142,7 +142,7 @@ fn the_source_steps_down_on_the_first_ptp_message_before_its_next_sync_129() {
         .returning(move || Ok(Some((ptp.clone(), 124, SystemTime::now(), Some(GM_IP)))));
     net.expect_recv_packet().returning(|| Ok(None));
     net.expect_rejoin()
-        .returning(|| Err(anyhow::anyhow!("no NIC in a unit test")));
+        .returning(|_| Err(anyhow::anyhow!("no NIC in a unit test")));
     let mut cfg = config(200);
     cfg.gm_allowlist = vec!["10.77.9.0/24".to_string()];
     let (mut c, transport) = controller(net, MockSystemClock::new(), cfg);
@@ -401,7 +401,7 @@ fn a_follower_locks_on_the_fallback_source_and_hands_back_to_ptp_without_a_wall_
     net.expect_recv_packet()
         .returning(move || Ok(q.lock().expect("queue").pop_front()));
     net.expect_rejoin()
-        .returning(|| Err(anyhow::anyhow!("no NIC in a unit test")));
+        .returning(|_| Err(anyhow::anyhow!("no NIC in a unit test")));
     let mut ntp = MockNtpSource::new();
     ntp.expect_get_offset()
         .returning(|| Err(anyhow::anyhow!("no upstream in a unit test")));
@@ -577,7 +577,7 @@ fn a_follower_keeps_its_periodic_ntp_check_129() {
 fn a_ptp_rejoin_reopens_the_fallback_socket_and_a_moved_address_renames_the_node_129() {
     let moved = Ipv4Addr::new(10, 77, 9, 77);
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().times(2).returning(move || {
+    net.expect_rejoin().times(2).returning(move |_| {
         Ok(crate::traits::RejoinOutcome {
             iface: "enx0".to_string(),
             ip: moved,
@@ -621,7 +621,7 @@ fn a_ptp_rejoin_reopens_the_fallback_socket_and_a_moved_address_renames_the_node
 fn a_failed_reopen_keeps_the_node_id_with_the_socket_in_use_129() {
     let moved = Ipv4Addr::new(10, 77, 9, 77);
     let mut net = MockPtpNetwork::new();
-    net.expect_rejoin().times(1).returning(move || {
+    net.expect_rejoin().times(1).returning(move |_| {
         Ok(crate::traits::RejoinOutcome {
             iface: "enx0".to_string(),
             ip: moved,

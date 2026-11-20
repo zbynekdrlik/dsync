@@ -411,7 +411,7 @@ fn the_loop_keeps_iterating_while_a_slow_burst_runs_on_its_thread_136() {
     ));
     let mut net = MockPtpNetwork::new();
     net.expect_recv_packet().returning(|| Ok(None));
-    net.expect_rejoin().returning(|| {
+    net.expect_rejoin().returning(|_| {
         Ok(RejoinOutcome {
             iface: "eth0".to_string(),
             ip: Ipv4Addr::new(192, 0, 2, 10),

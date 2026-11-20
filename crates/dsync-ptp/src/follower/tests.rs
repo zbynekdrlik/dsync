@@ -149,7 +149,10 @@ fn a_reader_handle_answers_nothing_before_the_anchor() {
         > {
             Ok(None)
         }
-        fn rejoin(&mut self) -> Result<crate::network::RejoinOutcome> {
+        fn rejoin(
+            &mut self,
+            _: crate::network::TrustedPtp,
+        ) -> Result<crate::network::RejoinOutcome> {
             Err(anyhow::anyhow!("no network"))
         }
     }
@@ -184,7 +187,7 @@ impl PtpNetwork for Script {
             (data, len, ts, None)
         }))
     }
-    fn rejoin(&mut self) -> Result<crate::network::RejoinOutcome> {
+    fn rejoin(&mut self, _: crate::network::TrustedPtp) -> Result<crate::network::RejoinOutcome> {
         Err(anyhow::anyhow!("scripted"))
     }
 }

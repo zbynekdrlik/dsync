@@ -4,7 +4,7 @@ use dsync::config::SystemConfig;
 use dsync::controller::PtpController;
 use dsync::ntp::NtpMeasurement;
 use dsync::status::SyncStatus;
-use dsync::traits::{NtpSource, PtpNetwork, RejoinOutcome};
+use dsync::traits::{NtpSource, PtpNetwork, RejoinOutcome, TrustedPtp};
 use std::cell::RefCell;
 use std::f64::consts::PI;
 use std::sync::{Arc, RwLock};
@@ -178,7 +178,7 @@ impl PtpNetwork for StatefulNetwork {
 
     /// dsync#112: the simulated grandmaster never goes quiet, so the controller never asks;
     /// the simulated network is always joined.
-    fn rejoin(&mut self) -> Result<RejoinOutcome> {
+    fn rejoin(&mut self, _: TrustedPtp) -> Result<RejoinOutcome> {
         Ok(RejoinOutcome {
             iface: "sim0".to_string(),
             ip: std::net::Ipv4Addr::LOCALHOST,

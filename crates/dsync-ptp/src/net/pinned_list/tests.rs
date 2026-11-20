@@ -236,23 +236,15 @@ fn a_rejoin_while_ptp_flows_stays_on_the_joined_listed_nic_212() {
     });
     assert_eq!(gone.name, "enp1s0");
 
-    let now = std::time::Instant::now();
-    let s = std::time::Duration::from_secs;
+    // dsync#215: the caller's judgement of the TRUSTED grandmaster decides, never a count of
+    // every time message (a foreign grandmaster on the joined port).
+    use crate::network::TrustedPtp;
     assert_eq!(
-        rejoin_order("enp3s0", None, now),
-        PinnedOrder::MoveOn("enp3s0")
-    );
-    assert_eq!(
-        rejoin_order("enp3s0", now.checked_sub(s(3)), now),
+        rejoin_order("enp3s0", TrustedPtp::Flowing),
         PinnedOrder::Stay("enp3s0")
     );
     assert_eq!(
-        rejoin_order("enp3s0", now.checked_sub(s(10)), now),
-        PinnedOrder::Stay("enp3s0"),
-        "the staleness bound itself is not stale"
-    );
-    assert_eq!(
-        rejoin_order("enp3s0", now.checked_sub(s(11)), now),
+        rejoin_order("enp3s0", TrustedPtp::Silent),
         PinnedOrder::MoveOn("enp3s0")
     );
 }
