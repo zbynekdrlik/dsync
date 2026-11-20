@@ -18,4 +18,4 @@ impl<T: NtpSource + ?Sized> NtpSource for std::sync::Arc<T> {
 // dsync#136: the PTP receive path lives in the shared `dsync-ptp` crate.
 #[cfg(test)]
 pub use dsync_ptp::network::MockPtpNetwork;
-pub use dsync_ptp::network::{PtpNetwork, RejoinOutcome};
+pub use dsync_ptp::network::{PtpNetwork, RejoinOutcome, TrustedPtp};

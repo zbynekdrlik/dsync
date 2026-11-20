@@ -594,7 +594,11 @@ impl crate::traits::PtpNetwork for WinsockPtpNetwork {
 
     /// dsync#112 — the same socket re-create as the startup: on the interface that carries the
     /// home address now, else on the default interface.
-    fn rejoin(&mut self) -> Result<crate::traits::RejoinOutcome> {
+    /// Never pinned, so the caller's `trusted` (dsync#215, a pinned list only) is not used.
+    fn rejoin(
+        &mut self,
+        _trusted: crate::traits::TrustedPtp,
+    ) -> Result<crate::traits::RejoinOutcome> {
         // The interface that carries the home address first (a re-plugged NIC may come back
         // behind other interfaces in the listing order), else the startup resolver. When neither
         // finds one, the old sockets stay (nothing better to join on).

@@ -963,3 +963,31 @@ canary evidence before continuing.
   `pulled_word.rs`; unused Windows imports dropped (`SEND_RECV_FLAGS`, `File` now `#[cfg(unix)]`),
   a needless `mut` in the bench. Commit `bbadcc4`; lib/bench 31/31/simulation_e2e/library_acceptance
   unchanged, Windows gnu check 0 warnings.
+
+## 1.35.16 — #212 a pinned interface LIST (20.11.2026)
+
+- #212 (camera-box#1545: cam3 ran the 19.11 service on NTP, `enp3s0` pinned, the cable in
+  `enp1s0`): `system.interface` / `--interface` take a list (string with commas or a JSON array),
+  kept as ONE canonical spec `a,b`; `net::choose_pinned` + `PinnedOrder` (Startup / Stay /
+  MoveOn) is the one decision; `/status.interfaces_configured` + `ptp_interface_name`. RED → GREEN
+  `6fa13d7` → `6e28355`; review fixes `7a745ff` (a list re-join stays while PTP flows, moves on
+  when silent) and `014522a` (an empty / blank-holding array fails the parse). PR #213, merge
+  `97e1eb9`, release run 44648632755 (success, all assets). Roll held by dstack until after
+  25.11. Review follow-ups filed as #214 (main.rs size) and #215 (a foreign GM holds the list).
+
+## 1.35.17 — #215 trusted-GM-aware list re-join, #214 main.rs split (20.11.2026)
+
+- #215: `PtpNetwork::rejoin(trusted: TrustedPtp)` — the caller (controller, follower), which owns
+  the `gm_allowlist` and the staleness, says whether the TRUSTED grandmaster flows (`Silent` from a
+  stale re-join → `MoveOn`, `Flowing` from the #191 link-local leave → `Stay`); both backends drop
+  their unfiltered `last_time_message`. Empty allowlist = every source trusted = 1.35.16
+  behaviour, except the first 10 s after start (a link-local leave then stays). RED `0f1f8e2`
+  (`a_foreign_grandmaster_on_the_joined_port_never_holds_a_stale_rejoin_there_215`) → GREEN
+  `b1e6316` (+ `the_rejoin_names_the_trusted_grandmaster_silent_when_only_a_foreign_one_sends_215`;
+  a mutation passing `Flowing` from the stale path fails 5 controller tests). Rejected: a
+  `note_trusted_time_message` trait call (must-remember per consumer), the allowlist inside the
+  backend (a second copy to re-resolve).
+- #214: `main.rs` 1577 → 948 lines, pure moves: `src/service/ptp_join.rs`,
+  `src/service/singleton.rs` (binary-only, `mod service;`), the 15 `dsync::config` tests to
+  `src/config/defaults_tests.rs` (now run by CI's `--lib`). Commit `9abe4d3`; test count 830
+  unchanged.

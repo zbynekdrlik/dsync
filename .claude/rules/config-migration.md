@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/main.rs"
+  - "src/config/defaults_tests.rs"
   - "src/config.rs"
   - "src/config/file.rs"
   - "src/config/file/tests.rs"

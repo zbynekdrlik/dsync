@@ -137,19 +137,14 @@ pub fn choose_pinned(
 }
 
 /// dsync#212 — the order of a pinned re-join from the listed NIC `joined`: [`PinnedOrder::Stay`]
-/// while the backend still receives the grandmaster's time on it (a time message within
-/// `ptp_rejoin::REJOIN_AFTER` before `now`: the #191 link-local leave, PTP flowing), else
-/// [`PinnedOrder::MoveOn`] (PTP went silent there: the cable moved).
-pub fn rejoin_order(
-    joined: &str,
-    last_time_message: Option<std::time::Instant>,
-    now: std::time::Instant,
-) -> PinnedOrder<'_> {
-    match last_time_message {
-        Some(at) if now.saturating_duration_since(at) <= crate::ptp_rejoin::REJOIN_AFTER => {
-            PinnedOrder::Stay(joined)
-        }
-        _ => PinnedOrder::MoveOn(joined),
+/// while the TRUSTED grandmaster's time still flows on it (the #191 link-local leave), else
+/// [`PinnedOrder::MoveOn`] (it went silent there: the cable moved, or the port carries only a
+/// foreign grandmaster). dsync#215: the caller judges it (`TrustedPtp`), since only the caller
+/// knows the `gm_allowlist`; the backend's own count of time messages included foreign ones.
+pub fn rejoin_order(joined: &str, trusted: crate::network::TrustedPtp) -> PinnedOrder<'_> {
+    match trusted {
+        crate::network::TrustedPtp::Flowing => PinnedOrder::Stay(joined),
+        crate::network::TrustedPtp::Silent => PinnedOrder::MoveOn(joined),
     }
 }
 

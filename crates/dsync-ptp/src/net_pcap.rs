@@ -384,11 +384,9 @@ pub struct NpcapPtpNetwork {
     /// startup and every re-join use only a listed device (`select_pinned_device`).
     pinned: Option<String>,
     /// dsync#212: the listed name the capture is joined on now (`RejoinOutcome::pinned_name`);
-    /// a re-join of a list stays on it while PTP flows, else moves on after it
+    /// a re-join of a list stays on it while the trusted GM flows, else moves on after it
     /// (`net::rejoin_order`). `None` when not pinned.
     pinned_joined: Option<String>,
-    /// dsync#212: when the grandmaster's time last arrived on the CURRENT capture.
-    last_time_message: Option<std::time::Instant>,
     /// dsync#161: a failing read (the adapter vanished) is reported and retried at a bounded
     /// rate, not on every 1 ms poll.
     recv_gate: crate::recv_errors::RecvErrorGate,
@@ -431,7 +429,6 @@ impl NpcapPtpNetwork {
             last_join,
             home_ip: ip,
             pinned_joined: pinned.as_ref().map(|_| interface_name.to_string()),
-            last_time_message: None,
             pinned: pinned.map(|(name, _)| name),
             recv_gate: crate::recv_errors::RecvErrorGate::new(),
         })
@@ -459,7 +456,6 @@ impl NpcapPtpNetwork {
             home_ip: ip,
             pinned: None,
             pinned_joined: None,
-            last_time_message: None,
             recv_gate: crate::recv_errors::RecvErrorGate::new(),
         }
     }
@@ -535,8 +531,6 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
                     // address is the home a re-join looks for (nothing else moves it).
                     if crate::ptp::is_time_message(&result) {
                         self.home_ip = joined_ip;
-                        // dsync#212: PTP flows on this listed NIC (`net::rejoin_order`).
-                        self.last_time_message = Some(std::time::Instant::now());
                     }
                     Ok(Some((result, payload_len, ts, Some(source_ip))))
                 } else {
@@ -576,16 +570,16 @@ impl crate::network::PtpNetwork for NpcapPtpNetwork {
     /// ERROR_DEVICE_REMOVED) or any other silence: the startup selection with the home address
     /// (the trusted subnet, then the device that carries the home address, then the name
     /// fallback), on the default interface and the allowlist resolved NOW.
-    fn rejoin(&mut self) -> Result<crate::network::RejoinOutcome> {
+    fn rejoin(
+        &mut self,
+        trusted: crate::network::TrustedPtp,
+    ) -> Result<crate::network::RejoinOutcome> {
         // dsync#131: a pinned interface alone selects the device; not usable now = a typed
-        // error before the old capture is dropped.
+        // error before the old capture is dropped. dsync#215: a list stays on the joined NIC
+        // only while the caller's TRUSTED grandmaster flows there (`net::rejoin_order`).
         if let Some(spec) = self.pinned.clone() {
             let joined = self.pinned_joined.clone().unwrap_or_default();
-            let order = crate::net::rejoin_order(
-                &joined,
-                self.last_time_message,
-                std::time::Instant::now(),
-            );
+            let order = crate::net::rejoin_order(&joined, trusted);
             let (device, ip, name) = select_pinned_device(&spec, order)?;
             return self.reopen(device, ip, Some(name));
         }
@@ -636,7 +630,6 @@ impl NpcapPtpNetwork {
         // dsync#161: a new handle is read at once.
         self.recv_gate = crate::recv_errors::RecvErrorGate::new();
         self.pinned_joined = pinned_name.clone();
-        self.last_time_message = None;
         Ok(crate::network::RejoinOutcome {
             iface,
             ip,

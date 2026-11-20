@@ -12,6 +12,7 @@ paths:
   - "src/traits.rs"
   - "src/startup_open.rs"
   - "src/main.rs"
+  - "src/service/ptp_join.rs"
 ---
 
 # PTP liveness: the re-join and the honest `/status` while PTP is stale (dsync#112)
@@ -94,11 +95,19 @@ offset `D` from its own NTP-stepped wall: 29.9.2026, −19.8 ms, every box stepp
   `net::PinnedInterfaceUnavailable` before closing anything when it is missing / has no IPv4;
   the controller names it in the alarm and retries every 5 s. The limits below apply only to an
   UNPINNED node — pinning is their fix (see `multi-homed-interface-selection.md`).
-  One limit DOES reach a pinned LIST (#212): the backend's `last_time_message` (which makes a
-  re-join `Stay` on the joined port, `net::rejoin_order`) counts every time message, also one
-  from a grandmaster the controller's `gm_allowlist` drops. A listed port carrying a FOREIGN
-  PTPv1 grandmaster therefore keeps every stale re-join there; it never moves on to the port with
-  the trusted one. Same root, same fix (the allowed-packet time in the backend).
+  A pinned LIST (#212) stays on the joined port only while the TRUSTED grandmaster flows there
+  (#215, v1.35.17): `rejoin(trusted: TrustedPtp)` — the CALLER judges, since it owns the
+  `gm_allowlist` and the staleness. `maybe_rejoin_ptp` (runs only while stale = no ALLOWED time
+  message for 10 s) passes `Silent` → `MoveOn`; the #191 link-local leave (runs only while not
+  stale) passes `Flowing` → `Stay`; the follower's stale re-join passes `Silent`. The backends
+  keep no time-message clock of their own any more (the 1.35.16 `last_time_message` counted a
+  foreign grandmaster too, so a listed port carrying one held every stale re-join there). With an
+  EMPTY allowlist every source is trusted, so this is the 1.35.16 behaviour, except in the first
+  10 s after start (not stale yet, nothing heard: a link-local leave then stays, 1.35.16 moved
+  on) and for a time message the controller drops for another reason (it no longer holds the
+  port). A new caller of
+  `rejoin` must say which of the two it is; a mock test asserts the argument
+  (`counting_network` / `dhcp_network` in `controller/ptp_liveness/tests.rs`).
 - **A failing Npcap read is reported and retried by `recv_errors::RecvErrorGate` (#161,
   v1.28.1).** A vanished adapter (iem-snv NIC driver swap) fails every read at once, and both
   receive loops poll every 1 ms: 2881 WARN lines a minute before. Now one WARN on the transition,
@@ -116,9 +125,9 @@ offset `D` from its own NTP-stepped wall: 29.9.2026, −19.8 ms, every box stepp
     makes it the home, and later re-joins stay there (the controller drops its packets: stale;
     a restart recovers). Npcap is not affected: its trusted-subnet rule always wins.
   - Both go away once the Linux backend chooses by the trusted grandmaster (the Windows
-    issue-1073 rule), which needs the allowlist-filtered grandmaster in the backend: a new trait
-    method or a change of the decided `rejoin` signature (every `MockPtpNetwork` test that feeds
-    a Sync would then need the new expectation) -- a decision for the main session.
+    issue-1073 rule), which needs the allowlist-filtered grandmaster in the backend. #215 took
+    the CALLER-judges route for the list's Stay/MoveOn (`TrustedPtp`); the unpinned home address
+    still moves on any time message.
 
 ## Is `D` re-derived at re-lock? (the finding, 29.9.2026)
 

@@ -2,6 +2,7 @@
 paths:
   - "src/pinned_wait.rs"
   - "src/boot_ready.rs"
+  - "src/service/ptp_join.rs"
   - "crates/dsync-ptp/src/net.rs"
   - "crates/dsync-ptp/src/net/pinned_list.rs"
   - "crates/dsync-ptp/src/net/pinned_list/tests.rs"
@@ -65,8 +66,8 @@ ran the 19.11.2026 service on NTP. `system.interface` / `--interface` may now na
 - `net::choose_pinned(spec, order, look)` is the ONE decision, `PinnedOrder`:
   - `Startup`: the list order, the first `Ready`, else the first `LinkLocalOnly` (a boot-time
     link-local address may be a DHCP placeholder, #131's grace).
-  - `Stay(joined)` (a re-join while the backend still gets time messages on the joined NIC,
-    `net::rejoin_order`, ≤ 10 s): the joined NIC if usable — the #191 link-local leave must
+  - `Stay(joined)` (a re-join while the TRUSTED grandmaster still flows on the joined NIC,
+    `net::rejoin_order(joined, TrustedPtp::Flowing)`, the caller not stale): the joined NIC if usable — the #191 link-local leave must
     never hop to another port.
   - `MoveOn(joined)` (PTP went silent there): the NEXT usable listed NIC after it, wrapping,
     routable and link-local ALIKE. Review round 1: "routable first" on a stale re-join held a
@@ -75,8 +76,9 @@ ran the 19.11.2026 service on NTP. `system.interface` / `--interface` may now na
   - Nothing usable: `NoIpv4` (any listed NIC exists) / `Missing`, naming the whole list.
   Consumers: `net::pinned_choice` (startup `pinned_wait::run_list`, Npcap
   `select_pinned_device`, the follower); the Linux re-join walks
-  `PtpSocketFactory::lookup_pinned(name)` per listed name. Both backends keep
-  `last_time_message` (reset by each join) for `rejoin_order`.
+  `PtpSocketFactory::lookup_pinned(name)` per listed name. `rejoin_order(joined, trusted)`
+  takes the CALLER's `TrustedPtp` (#215, v1.35.17): `Silent` from a stale re-join, `Flowing`
+  from the #191 leave — the backend never judges it, it sees foreign grandmasters too.
 - The controller's #191 link-local look asks ONLY the joined listed NIC
   (`ptp_liveness.joined_name`, from `set_ptp_interface_name` / `RejoinOutcome::pinned_name`),
   never the whole list: a routable address on the other port is no reason to leave.
