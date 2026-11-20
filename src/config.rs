@@ -881,4 +881,6 @@ impl Default for SystemConfig {
 pub mod file;
 
 #[cfg(test)]
+mod defaults_tests;
+#[cfg(test)]
 mod tests;
