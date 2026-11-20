@@ -12,6 +12,7 @@ paths:
   - "src/traits.rs"
   - "src/startup_open.rs"
   - "src/main.rs"
+  - "src/service/ptp_join.rs"
 ---
 
 # PTP liveness: the re-join and the honest `/status` while PTP is stale (dsync#112)

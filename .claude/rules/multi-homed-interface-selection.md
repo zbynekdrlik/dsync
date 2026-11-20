@@ -2,6 +2,7 @@
 paths:
   - "src/pinned_wait.rs"
   - "src/boot_ready.rs"
+  - "src/service/ptp_join.rs"
   - "crates/dsync-ptp/src/net.rs"
   - "crates/dsync-ptp/src/net/pinned_list.rs"
   - "crates/dsync-ptp/src/net/pinned_list/tests.rs"
