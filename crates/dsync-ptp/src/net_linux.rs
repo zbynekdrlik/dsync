@@ -853,6 +853,33 @@ mod tests {
         assert_eq!((out.iface.as_str(), out.ip), ("enp3s0", RIG));
     }
 
+    /// dsync#215: the joined listed port carries a FOREIGN grandmaster (a PTPv1 GM the
+    /// controller's `gm_allowlist` drops), the trusted one is on the other listed port. The
+    /// controller is stale (no ALLOWED time message), so its re-join must move on to the other
+    /// port; a foreign GM's time messages never hold the list on the joined one.
+    #[test]
+    fn a_foreign_grandmaster_on_the_joined_port_never_holds_a_stale_rejoin_there_215() {
+        let other = Ipv4Addr::new(10, 77, 9, 134);
+        let mut script = ScriptedSockets::default();
+        script
+            .pinned
+            .insert("enp1s0".to_string(), PinnedLookup::Ready(other));
+        script
+            .pinned
+            .insert("enp3s0".to_string(), PinnedLookup::Ready(RIG));
+        let mut net = pinned_cambox(script);
+        let a = addrs(&net);
+        // The foreign grandmaster's Sync arrives on the joined port (the controller drops it).
+        assert!(round_trip(&mut net, a[0], &time_message()).is_some());
+        // The controller's stale re-join (the trusted grandmaster is silent here).
+        let out = net.rejoin().expect("the re-join");
+        assert_eq!(
+            (out.iface.as_str(), out.ip),
+            ("enp1s0", other),
+            "the trusted grandmaster is on the other listed port"
+        );
+    }
+
     /// Review round 1 (#191 + #212): PTP still arrives on the joined port (its link-local
     /// address became routable): the re-join stays on it, never hops to the other listed port.
     #[test]
