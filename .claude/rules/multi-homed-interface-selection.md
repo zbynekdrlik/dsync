@@ -66,7 +66,7 @@ ran the 19.11.2026 service on NTP. `system.interface` / `--interface` may now na
   - `Startup`: the list order, the first `Ready`, else the first `LinkLocalOnly` (a boot-time
     link-local address may be a DHCP placeholder, #131's grace).
   - `Stay(joined)` (a re-join while the TRUSTED grandmaster still flows on the joined NIC,
-    `net::rejoin_order`, ≤ 10 s): the joined NIC if usable — the #191 link-local leave must
+    `net::rejoin_order(joined, TrustedPtp::Flowing)`, the caller not stale): the joined NIC if usable — the #191 link-local leave must
     never hop to another port.
   - `MoveOn(joined)` (PTP went silent there): the NEXT usable listed NIC after it, wrapping,
     routable and link-local ALIKE. Review round 1: "routable first" on a stale re-join held a

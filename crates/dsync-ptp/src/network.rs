@@ -27,7 +27,9 @@ pub struct RejoinOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrustedPtp {
     /// The trusted grandmaster's time still arrives on the current join (the #191 link-local
-    /// leave): a pinned list stays on the joined listed NIC while it is usable.
+    /// leave): a pinned list stays on the joined listed NIC while it is usable. The controller
+    /// says it whenever it is not stale: an allowed time message in the last 10 s, or less than
+    /// 10 s since it started (nothing heard yet, the joined NIC kept).
     Flowing,
     /// No trusted time message for the staleness bound (`ptp_rejoin::REJOIN_AFTER`): a pinned
     /// list moves on to the next usable listed NIC, whatever a foreign grandmaster still sends

@@ -101,7 +101,10 @@ offset `D` from its own NTP-stepped wall: 29.9.2026, −19.8 ms, every box stepp
   stale) passes `Flowing` → `Stay`; the follower's stale re-join passes `Silent`. The backends
   keep no time-message clock of their own any more (the 1.35.16 `last_time_message` counted a
   foreign grandmaster too, so a listed port carrying one held every stale re-join there). With an
-  EMPTY allowlist every source is trusted, so this is the 1.35.16 behaviour. A new caller of
+  EMPTY allowlist every source is trusted, so this is the 1.35.16 behaviour, except in the first
+  10 s after start (not stale yet, nothing heard: a link-local leave then stays, 1.35.16 moved
+  on) and for a time message the controller drops for another reason (it no longer holds the
+  port). A new caller of
   `rejoin` must say which of the two it is; a mock test asserts the argument
   (`counting_network` / `dhcp_network` in `controller/ptp_liveness/tests.rs`).
 - **A failing Npcap read is reported and retried by `recv_errors::RecvErrorGate` (#161,

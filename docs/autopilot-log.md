@@ -981,7 +981,7 @@ canary evidence before continuing.
   the `gm_allowlist` and the staleness, says whether the TRUSTED grandmaster flows (`Silent` from a
   stale re-join → `MoveOn`, `Flowing` from the #191 link-local leave → `Stay`); both backends drop
   their unfiltered `last_time_message`. Empty allowlist = every source trusted = 1.35.16
-  behaviour. RED `0f1f8e2`
+  behaviour, except the first 10 s after start (a link-local leave then stays). RED `0f1f8e2`
   (`a_foreign_grandmaster_on_the_joined_port_never_holds_a_stale_rejoin_there_215`) → GREEN
   `b1e6316` (+ `the_rejoin_names_the_trusted_grandmaster_silent_when_only_a_foreign_one_sends_215`;
   a mutation passing `Flowing` from the stale path fails 5 controller tests). Rejected: a
