@@ -1377,3 +1377,54 @@ fn an_arrival_latency_step_up_is_counted_once_218() {
         assert_eq!(delivery_step_run(seed, 0, 600_000), 1, "seed {seed:#x}");
     }
 }
+
+#[test]
+fn a_usb_nics_receive_jitter_is_no_latency_step_218() {
+    for seed in SEEDS {
+        let mut world = usb_world(seed);
+        let mut core = new_core(&world);
+        run_to_lock(&mut world, &mut core, 180);
+        for _ in 0..(300 * 4) {
+            world.tick(&mut [&mut core]);
+        }
+        assert_eq!(core.latency_steps(), 0, "seed {seed:#x}");
+    }
+}
+
+#[test]
+fn a_grandmaster_change_is_no_latency_step_218() {
+    let mut world = World::new(0x5eed_0004, 5_000.0);
+    let mut core = new_core(&world);
+    run_to_lock(&mut world, &mut core, 300);
+    world.gm = GM_B;
+    world.gm_base = world.gm_base + 4 * 86_400_000_000_000 + 123_456_789;
+    world.gm_ppm = -7.0;
+    for _ in 0..(300 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    assert!(core.model().locked && core.model().epoch == 1);
+    assert_eq!(core.latency_steps(), 0);
+}
+
+#[test]
+fn late_windows_shorter_than_the_hold_are_no_latency_step_218() {
+    for seed in SEEDS {
+        let mut world = World::new(seed, 10_000.0);
+        world.late_ns = 900_000;
+        let mut core = new_core(&world);
+        run_to_lock(&mut world, &mut core, 120);
+        for _ in 0..(60 * 8) {
+            world.tick(&mut [&mut core]);
+        }
+        // Two whole windows late (every Sync of them), twice, a few seconds apart.
+        for start in [0u16, 40] {
+            for k in 1..=8 {
+                world.late.insert(world.seq.wrapping_add(start + k));
+            }
+        }
+        for _ in 0..(60 * 8) {
+            world.tick(&mut [&mut core]);
+        }
+        assert_eq!(core.latency_steps(), 0, "seed {seed:#x}");
+    }
+}

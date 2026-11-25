@@ -25,6 +25,7 @@
 //! service's offset is the mod-1 s phase, which stays bounded; the raw `t2 − t1` here jumps by the
 //! base shift and would read as a ±500 ppm rate).
 
+use super::latency_step::{self, LatencyStep, LatencyStepDetector, WindowReading};
 use super::model::{ClockModel, VirtualClock};
 use crate::delay_floor::DelayFloor;
 use crate::freq_seed::{SeedJudge, SeedVerdict, SEED_JUDGE_WINDOWS};
@@ -105,6 +106,8 @@ struct Sample {
     raw_ns: i64,
     /// `wall_rx − t2`: with `D_v` added, the wall's date offset.
     wall_minus_v_ns: i64,
+    /// dsync#218: the Follow_Up's arrival minus its Sync's (raw counter ns), context only.
+    gap_ns: i64,
 }
 
 /// The follower's whole PTP state.
@@ -143,6 +146,9 @@ pub struct FollowerCore {
     word_before: f64,
     /// dsync#136: |e| (ns) of the last engaged windows the PI took, for `settled`.
     recent_e: VecDeque<i64>,
+    /// dsync#218: the arrival-latency step detector (report-only) and the NIC it names.
+    latency: LatencyStepDetector,
+    nic: String,
 }
 
 impl FollowerCore {
@@ -180,6 +186,8 @@ impl FollowerCore {
             word_last: 0.0,
             word_before: 0.0,
             recent_e: VecDeque::with_capacity(SETTLED_WINDOWS),
+            latency: LatencyStepDetector::new(),
+            nic: String::new(),
         }
     }
 
@@ -286,7 +294,13 @@ impl FollowerCore {
 
     /// dsync#218: the arrival-latency steps seen since start.
     pub fn latency_steps(&self) -> u32 {
-        0
+        self.latency.count()
+    }
+
+    /// dsync#218: the NIC the follower receives on, named by the arrival-latency warning.
+    pub fn with_interface_name(mut self, nic: impl Into<String>) -> Self {
+        self.nic = nic.into();
+        self
     }
 
     /// Samples dropped because the wall clock stepped while they were received.
@@ -320,7 +334,7 @@ impl FollowerCore {
         };
         match header.message_type {
             PtpV1Control::Sync => self.on_sync(&header, p),
-            PtpV1Control::FollowUp => self.on_follow_up(&header, p.data),
+            PtpV1Control::FollowUp => self.on_follow_up(&header, p.data, p.mono_rx_ns),
             _ => {}
         }
         PacketVerdict::TimeMessage
@@ -383,6 +397,7 @@ impl FollowerCore {
         self.prev_t1_ns = 0;
         self.last_window_t1_ns = None;
         self.rate.reset_measurement();
+        self.latency.reset();
     }
 
     /// The PTP sender may carry another time base: re-anchor `D_v` on the next window, never
@@ -411,6 +426,8 @@ impl FollowerCore {
             }
             PortVerdict::PortMoved { from } => {
                 // The same clock on its other port: no new time base, nothing pending kept.
+                // dsync#218: the ports' stamps differ (~470 µs, #136), so no latency level spans it.
+                self.latency.reset();
                 warn!(
                     "[FOLLOWER] grandmaster port {} silent, following port {}",
                     from.port, source.port
@@ -456,7 +473,7 @@ impl FollowerCore {
         );
     }
 
-    fn on_follow_up(&mut self, header: &PtpV1Header, data: &[u8]) {
+    fn on_follow_up(&mut self, header: &PtpV1Header, data: &[u8], mono_rx_ns: i64) {
         let Ok(body) = PtpV1FollowUpBody::parse(&data[PtpV1Header::SIZE..]) else {
             return;
         };
@@ -489,9 +506,41 @@ impl FollowerCore {
             t1_ns: t1,
             raw_ns: t2.wrapping_sub(t1),
             wall_minus_v_ns: sync.wall_rx_ns.wrapping_sub(t2),
+            gap_ns: mono_rx_ns.saturating_sub(sync.mono_rx_ns),
         });
         if self.window.len() >= WINDOW_SAMPLES {
             self.close_window(t1, sync.mono_rx_ns);
+        }
+    }
+
+    /// dsync#218: once per direction a WARN naming the NIC, every later step an INFO with the
+    /// count. Report-only: the servo is unchanged.
+    fn log_latency_step(&self, s: &LatencyStep) {
+        let us = |ns: i64| ns as f64 / 1_000.0;
+        let nic = if self.nic.is_empty() {
+            "the PTP interface"
+        } else {
+            &self.nic
+        };
+        let line = format!(
+            "arrival latency stepped on {}: e {:+.0}us -> {:+.0}us (delta {:+.0}us held {} windows); sync->follow_up gap median {:.0}us -> {:.0}us; window spread {:.0}us -> {:.0}us; {} step(s) since start",
+            nic,
+            us(s.before.e_ns),
+            us(s.after.e_ns),
+            us(s.delta_ns()),
+            latency_step::HELD_WINDOWS,
+            us(s.before.gap_ns),
+            us(s.after.gap_ns),
+            us(s.before.spread_ns),
+            us(s.after.spread_ns),
+            s.count
+        );
+        if s.first_in_direction {
+            warn!(
+                "[FOLLOWER] {line}. A software stamp carries the NIC's delivery delay into the offset; the servo is unchanged."
+            );
+        } else {
+            info!("[FOLLOWER] {line}");
         }
     }
 
@@ -508,6 +557,12 @@ impl FollowerCore {
             .floor
             .push_samples(self.window.iter().map(|s| (s.t1_ns, s.raw_ns)), mid_t1)
             .expect("a window closes full");
+        // dsync#218: the window's spread and Sync→Follow_Up gap, the context of a latency step.
+        let raws = self.window.iter().map(|s| s.raw_ns);
+        let spread_ns = raws.clone().max().unwrap_or(0) - raws.min().unwrap_or(0);
+        let mut gaps: Vec<i64> = self.window.iter().map(|s| s.gap_ns).collect();
+        gaps.sort_unstable();
+        let gap_ns = gaps[gaps.len() / 2];
         self.window.clear();
         let wall_minus_v = wall[wall.len() / 2];
         self.windows += 1;
@@ -601,6 +656,20 @@ impl FollowerCore {
             // forgetting it read "not settled" for ~15 s after every handover on the same line.
             (true, AnchorEvent::GmContinued { .. }, _) => {}
             _ => self.recent_e.clear(),
+        }
+        match (was_engaged && self.core.engaged(), out.event, out.error_ns) {
+            (true, AnchorEvent::None, Some(e_ns)) => {
+                let reading = WindowReading {
+                    e_ns,
+                    gap_ns,
+                    spread_ns,
+                };
+                if let Some(step) = self.latency.on_window(reading) {
+                    self.log_latency_step(&step);
+                }
+            }
+            // A new anchor, a re-base or a re-alignment: the level before says nothing after.
+            _ => self.latency.reset(),
         }
         if late {
             info!(
