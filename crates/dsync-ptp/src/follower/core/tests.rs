@@ -1428,3 +1428,27 @@ fn late_windows_shorter_than_the_hold_are_no_latency_step_218() {
         assert_eq!(core.latency_steps(), 0, "seed {seed:#x}");
     }
 }
+
+/// dsync#218: the boot pulls retire up to ~2 ms after the first engagement; that walk is the
+/// boot's, never an arrival-latency step.
+#[test]
+fn the_boot_pulls_are_no_latency_step_218() {
+    for seed in SEEDS {
+        for start_seed in [None, Some(-5.4 + 40.0), Some(-5.4 - 3.0)] {
+            let mut world = mbc_world(seed);
+            let mut core = new_core(&world);
+            if let Some(ppm) = start_seed {
+                core = core.with_seed(ppm);
+            }
+            for _ in 0..(300 * 4) {
+                world.tick(&mut [&mut core]);
+            }
+            assert!(core.model().locked, "seed {seed:#x}");
+            assert_eq!(
+                core.latency_steps(),
+                0,
+                "seed {seed:#x} start {start_seed:?}"
+            );
+        }
+    }
+}
