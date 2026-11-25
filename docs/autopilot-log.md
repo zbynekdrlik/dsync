@@ -991,3 +991,15 @@ canary evidence before continuing.
   `src/service/singleton.rs` (binary-only, `mod service;`), the 15 `dsync::config` tests to
   `src/config/defaults_tests.rs` (now run by CI's `--lib`). Commit `9abe4d3`; test count 830
   unchanged.
+
+## #218 — Follower: report an arrival-latency step, naming the NIC (dstack#465, dasio#234)
+
+- Version bump: `e13a358` (1.35.17 -> 1.35.18)
+- Design comment (Approach 1..3, Architektúra), dstack approved 25.11:
+  https://github.com/zbynekdrlik/dsync/issues/218#issuecomment-7176897646
+- RED: `233a9bc` — `an_arrival_latency_step_down_is_counted_once_218`,
+  `an_arrival_latency_step_up_is_counted_once_218` (World::delivery_ns; stub count 0)
+- GREEN: `31c111a` — `follower/latency_step.rs` (8-window median baseline, > 300 µs held 3
+  windows, once-per-direction WARN naming the NIC); negatives: USB jitter, GM change, late windows
+- Decision: report-only, the trigger is the `e` step alone; the Sync→Follow_Up gap and the window
+  spread are context (unproven on RTL8153). A constant delay is undetectable one-way (dstack accepted).
