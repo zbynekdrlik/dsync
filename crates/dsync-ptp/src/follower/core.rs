@@ -284,6 +284,11 @@ impl FollowerCore {
         }
     }
 
+    /// dsync#218: the arrival-latency steps seen since start.
+    pub fn latency_steps(&self) -> u32 {
+        0
+    }
+
     /// Samples dropped because the wall clock stepped while they were received.
     pub fn straddled(&self) -> u64 {
         self.straddled
