@@ -143,6 +143,11 @@ to be free. Then gate the tree again:
   `full-path` run may also drop the lease for a minute and take it again. So wait until
   `rig-lease.json` shows `"held": false` for about 5 minutes in a row before you dispatch.
 
+- A push run the lease refused stays a red `Gate on companion` check on the PR's head SHA, and the
+  PR then reads `mergeable_state: "unstable"` even after a green dispatched gate on the same SHA
+  (PR #219, 2026-11-26). Re-run that refused run (`gh run rerun <id> --failed`) once the lease is
+  free; its new attempt replaces the red check and the PR reads `clean`.
+
 - Before the merge: `gh workflow run gate.yml --ref dev`.
 - After the merge: `gh workflow run gate.yml --ref master`. That run's `head_sha` is the merge
   commit itself. Dev may have moved on already, so a dev run might test a different tree.
