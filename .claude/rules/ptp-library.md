@@ -141,6 +141,17 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
   `IP_MULTICAST_ALL = 0` (socket2 feature `all`), or a receiver also hears every interface any
   other socket on the host joined. A follower-vs-service gap of ~0.5 ms on one PC = check the
   ports (`tcpdump -e`, `sourcePortId`) before theorising about latency.
+- **An arrival-latency step is reported, never servoed (#218, v1.35.18).** A software stamp
+  carries the NIC's delivery delay; a USB RTL8153 delivers sparse inbound ~1 ms late and promptly
+  under an RX flow (dasio#234), so `e` shifts by the delay when inbound load changes.
+  `follower/latency_step.rs` fires when `e` leaves its 8-window median by > 300 µs for 3 windows in
+  a row (> 100 ppm: not a clock). Late windows are FED (they are the step's first windows). It is
+  reset by `drop_measurement`, a port move (the ports are ~470 µs apart) and every anchor event.
+  The first step per direction is a `warn!` naming `FollowerConfig.interface`
+  (`arrival latency stepped on <nic>: e … -> …`) with the Sync→Follow_Up gap and window spread as
+  context; later ones are `info!` with the count (`FollowerCore::latency_steps`). An upward step
+  shows ~10 s late: the delay floor holds the old minimum until it ages out. A constant delay is
+  invisible to a one-way follower.
 - **On-rig diagnosis:** the probe prints `e_us` / `freq_ppm` per second, and
   `RUST_LOG=dsync_ptp::follower=debug` logs every window with the boot fit's slope and σ
   (stderr). Read those before theorising about jitter: the fit was right, it just never fired.

@@ -50,6 +50,7 @@
 
 pub mod core;
 mod error;
+pub mod latency_step;
 pub mod model;
 
 pub use self::error::FollowerError;
@@ -255,7 +256,8 @@ impl Follower {
         if allowlist.has_hostnames() {
             allowlist.resolve(&crate::gm_filter::StdResolver);
         }
-        let mut core = FollowerCore::new(allowlist, mono::mono_now_ns());
+        let mut core = FollowerCore::new(allowlist, mono::mono_now_ns())
+            .with_interface_name(interface_spec(config));
         if let Some(ppb) = config.frequency_seed_ppb {
             core = core.with_seed(ppb as f64 / 1_000.0);
         }

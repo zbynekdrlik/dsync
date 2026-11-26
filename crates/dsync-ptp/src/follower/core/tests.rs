@@ -76,6 +76,9 @@ struct World {
     pc_profile: Option<fn(f64) -> f64>,
     pc_profile_t0: i64,
     pc_extra_ns: f64,
+    /// dsync#218: a constant extra delivery delay on every Sync (a USB NIC's latency that moves
+    /// with the inbound load: set it, run, change it).
+    delivery_ns: i64,
 }
 
 impl World {
@@ -104,6 +107,7 @@ impl World {
             pc_profile: None,
             pc_profile_t0: 0,
             pc_extra_ns: 0.0,
+            delivery_ns: 0,
         }
     }
 
@@ -159,6 +163,7 @@ impl World {
                 + LATENCY_NS
                 + late
                 + usb
+                + self.delivery_ns
                 + (self.jitter_ns * self.noise.gauss()).abs() as i64;
             if self.shared_rx {
                 let first = *shared.get_or_insert(rx);
@@ -1335,4 +1340,115 @@ fn a_local_oscillator_ramp_keeps_the_follower_within_50_us_and_locked_204() {
     }
     eprintln!("dsync#204 follower, local ramp:\n  {}", report.join("\n  "));
     assert!(fails.is_empty(), "{fails:?}");
+}
+
+/// dsync#218 (dasio#234): an RTL8153 that delivers sparse inbound ~0.8 ms late and promptly once
+/// an RX flow runs. The follower counts the step (one per direction, the servo untouched).
+fn delivery_step_run(seed: u64, before_ns: i64, after_ns: i64) -> u32 {
+    let mut world = World::new(seed, 10_000.0);
+    world.delivery_ns = before_ns;
+    let mut core = new_core(&world);
+    run_to_lock(&mut world, &mut core, 120);
+    for _ in 0..(60 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    assert_eq!(
+        core.latency_steps(),
+        0,
+        "seed {seed:#x}: a step before the change"
+    );
+    world.delivery_ns = after_ns;
+    for _ in 0..(30 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    core.latency_steps()
+}
+
+#[test]
+fn an_arrival_latency_step_down_is_counted_once_218() {
+    for seed in SEEDS {
+        assert_eq!(delivery_step_run(seed, 800_000, 0), 1, "seed {seed:#x}");
+    }
+}
+
+#[test]
+fn an_arrival_latency_step_up_is_counted_once_218() {
+    for seed in SEEDS {
+        assert_eq!(delivery_step_run(seed, 0, 600_000), 1, "seed {seed:#x}");
+    }
+}
+
+#[test]
+fn a_usb_nics_receive_jitter_is_no_latency_step_218() {
+    for seed in SEEDS {
+        let mut world = usb_world(seed);
+        let mut core = new_core(&world);
+        run_to_lock(&mut world, &mut core, 180);
+        for _ in 0..(300 * 4) {
+            world.tick(&mut [&mut core]);
+        }
+        assert_eq!(core.latency_steps(), 0, "seed {seed:#x}");
+    }
+}
+
+#[test]
+fn a_grandmaster_change_is_no_latency_step_218() {
+    let mut world = World::new(0x5eed_0004, 5_000.0);
+    let mut core = new_core(&world);
+    run_to_lock(&mut world, &mut core, 300);
+    world.gm = GM_B;
+    world.gm_base = world.gm_base + 4 * 86_400_000_000_000 + 123_456_789;
+    world.gm_ppm = -7.0;
+    for _ in 0..(300 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    assert!(core.model().locked && core.model().epoch == 1);
+    assert_eq!(core.latency_steps(), 0);
+}
+
+#[test]
+fn late_windows_shorter_than_the_hold_are_no_latency_step_218() {
+    for seed in SEEDS {
+        let mut world = World::new(seed, 10_000.0);
+        world.late_ns = 900_000;
+        let mut core = new_core(&world);
+        run_to_lock(&mut world, &mut core, 120);
+        for _ in 0..(60 * 8) {
+            world.tick(&mut [&mut core]);
+        }
+        // Two whole windows late (every Sync of them), twice, a few seconds apart.
+        for start in [0u16, 40] {
+            for k in 1..=8 {
+                world.late.insert(world.seq.wrapping_add(start + k));
+            }
+        }
+        for _ in 0..(60 * 8) {
+            world.tick(&mut [&mut core]);
+        }
+        assert_eq!(core.latency_steps(), 0, "seed {seed:#x}");
+    }
+}
+
+/// dsync#218: the boot pulls retire up to ~2 ms after the first engagement; that walk is the
+/// boot's, never an arrival-latency step.
+#[test]
+fn the_boot_pulls_are_no_latency_step_218() {
+    for seed in SEEDS {
+        for start_seed in [None, Some(-5.4 + 40.0), Some(-5.4 - 3.0)] {
+            let mut world = mbc_world(seed);
+            let mut core = new_core(&world);
+            if let Some(ppm) = start_seed {
+                core = core.with_seed(ppm);
+            }
+            for _ in 0..(300 * 4) {
+                world.tick(&mut [&mut core]);
+            }
+            assert!(core.model().locked, "seed {seed:#x}");
+            assert_eq!(
+                core.latency_steps(),
+                0,
+                "seed {seed:#x} start {start_seed:?}"
+            );
+        }
+    }
 }
