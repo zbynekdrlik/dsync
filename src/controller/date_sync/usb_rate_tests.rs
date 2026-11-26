@@ -14,7 +14,7 @@ use crate::clock::MockSystemClock;
 use crate::traits::{MockNtpSource, MockPtpNetwork};
 use std::sync::Mutex;
 
-type Ctl = PtpController<MockSystemClock, MockPtpNetwork, MockNtpSource>;
+pub(super) type Ctl = PtpController<MockSystemClock, MockPtpNetwork, MockNtpSource>;
 
 /// 8 Syncs a second, as the Dante grandmaster.
 const SYNC_NS: i64 = 125_000_000;
@@ -24,7 +24,7 @@ const NATURAL_PPM: f64 = 4.5;
 /// mbc's measured receive delay above the floor (2365 samples, 10.11.2026; the in-process
 /// follower's `usb_extra_ns` model): a third of the Syncs on the floor, the rest exponential with
 /// a mean of 250 µs, 3 % of all 1-4 ms late; plus a few µs of jitter.
-fn usb_delay_us(noise: &mut Noise) -> f64 {
+pub(super) fn usb_delay_us(noise: &mut Noise) -> f64 {
     let jitter = (5.0 * noise.gauss()).abs();
     let u = noise.uniform();
     jitter
@@ -37,7 +37,7 @@ fn usb_delay_us(noise: &mut Noise) -> f64 {
         }
 }
 
-fn usb_service() -> (Ctl, Arc<Mutex<f64>>) {
+pub(super) fn usb_service() -> (Ctl, Arc<Mutex<f64>>) {
     let word = Arc::new(Mutex::new(0.0_f64));
     let w = word.clone();
     let mut clock = MockSystemClock::new();

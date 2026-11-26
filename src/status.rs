@@ -489,6 +489,13 @@ pub struct SyncStatus {
     #[serde(default)]
     pub ptp_phase_excursion_boosts: u32,
 
+    /// dsync#220: arrival-latency steps since the process started: the window error `e` shifted
+    /// > 300 µs and held 3 windows while engaged (a NIC's delivery delay changing with the
+    /// inbound load, e.g. a USB RTL8153), as the in-process follower's #218 report. Report-only.
+    /// 0 in a pre-1.35.19 blob.
+    #[serde(default)]
+    pub arrival_latency_steps: u32,
+
     /// dsync#204: the phase lock's gain factor in force (1.0 = the normal ~100 s PI, 4.0 = the
     /// boosted ~25 s one after a grandmaster change or an excursion); `null` when not engaged and
     /// in a pre-1.35.12 blob.
@@ -762,6 +769,7 @@ impl Default for SyncStatus {
             last_freq_step_ts: None,
             // dsync#204: no excursion boost yet, not engaged
             ptp_phase_excursion_boosts: 0,
+            arrival_latency_steps: 0,
             ptp_phase_gain: None,
             // #119 (1.16): no nightly step quantum until the daily master publishes
             date_daily_step_quantum_ms: None,

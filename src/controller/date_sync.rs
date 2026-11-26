@@ -87,6 +87,9 @@ pub(super) struct DateSync {
     /// dsync#160: the window minima of the last ~10 s; their floor is handed to the servo in
     /// place of the window median (a one-sided receive delay moves a median, never the floor).
     pub(super) floor: dsync_ptp::delay_floor::DelayFloor,
+    /// dsync#220: the arrival-latency step detector (report-only), as the in-process follower's
+    /// (#218); fed at the phase lock's window, reset with every measurement reset.
+    pub(super) latency: dsync_ptp::follower::latency_step::LatencyStepDetector,
     /// The window median handed from `process_sample_window` to the servo, and its GM time `t1`.
     pub(super) pending_median_ns: Option<i64>,
     /// dsync#160: the pending window's floor came from fewer than 3 windows (no anchor on it),
@@ -217,6 +220,7 @@ impl DateSync {
             window: Vec::with_capacity(window_size),
             window_t1: Vec::with_capacity(window_size),
             floor: dsync_ptp::delay_floor::DelayFloor::new(),
+            latency: dsync_ptp::follower::latency_step::LatencyStepDetector::new(),
             pending_median_ns: None,
             pending_provisional: false,
             pending_fit: None,
@@ -348,6 +352,11 @@ impl DateSync {
                 jump as f64 / 1_000.0
             );
         }
+    }
+
+    /// dsync#220: the arrival-latency steps seen since start.
+    pub(super) fn arrival_latency_steps(&self) -> u32 {
+        self.latency.count()
     }
 
     /// The PTP sender may carry another time base (another grandmaster, or the same one after a
@@ -1181,6 +1190,8 @@ mod freq_step_tests;
 mod gm_identity_tests;
 mod lock_report;
 
+#[cfg(test)]
+mod latency_step_tests;
 #[cfg(test)]
 mod lock_sim;
 #[cfg(test)]
