@@ -121,3 +121,61 @@ fn the_status_carries_the_arrival_latency_steps_220() {
     let status = c.status_shared.read().expect("status");
     assert_eq!(status.arrival_latency_steps, 1);
 }
+
+#[test]
+fn a_grandmaster_change_is_no_latency_step_in_the_service_220() {
+    for seed in [0x5eed_2209_u64, 0x5eed_220a] {
+        let (mut c, word) = usb_service();
+        let mut noise = Noise(seed);
+        let base_ns: i64 = 1_791_000_000_000_000_000;
+        let mut t1: i64 = 5_000 * 1_000_000_000;
+        let mut true_offset_us = 0.0_f64;
+        for k in 0..(240 * 8) {
+            let s = k as f64 / 8.0;
+            if k == 150 * 8 {
+                // A failover to a grandmaster whose time is 600 µs off the old one (the same
+                // line within 1 ms: a continued time base, #158).
+                c.current_gm_uuid = Some([0, 0x1d, 0xc1, 0x8b, 0x5f, 0x59]);
+                c.on_grandmaster_uuid_change();
+            }
+            let applied = *word.lock().expect("word");
+            true_offset_us += (NATURAL_PPM + applied) * SYNC_NS as f64 / 1e9;
+            t1 += SYNC_NS;
+            let shift_us = if s >= 150.0 { 600.0 } else { 0.0 };
+            let rx_us = true_offset_us + shift_us + clean(&mut noise);
+            let t2 = t1 + base_ns + (rx_us * 1_000.0).round() as i64;
+            let phase = c.calculate_phase_offset(t1, t2);
+            c.process_settled_sync(t1, t2, phase);
+        }
+        assert!(c.date_sync.core.engaged(), "seed {seed:#x}: not engaged");
+        assert_eq!(
+            c.date_sync.arrival_latency_steps(),
+            0,
+            "seed {seed:#x}: a grandmaster change read as a latency step"
+        );
+    }
+}
+
+#[test]
+fn a_prompt_run_shorter_than_the_hold_is_no_latency_step_in_the_service_220() {
+    for seed in [0x5eed_220b_u64, 0x5eed_220c] {
+        let (mut c, word) = usb_service();
+        // 800 µs late, then delivered promptly for 1 s (two windows), then late again.
+        let (_, after) = drive(
+            &mut c,
+            &word,
+            seed,
+            210,
+            |s| {
+                if (150.0..151.0).contains(&s) {
+                    0.0
+                } else {
+                    800.0
+                }
+            },
+            clean,
+            0.0,
+        );
+        assert_eq!(after, 0, "seed {seed:#x}: a 1 s prompt run read as a step");
+    }
+}
