@@ -152,6 +152,14 @@ arithmetic bit-for-bit. `MonoNs` lets the follower and its simulations run witho
   context; later ones are `info!` with the count (`FollowerCore::latency_steps`). An upward step
   shows ~10 s late: the delay floor holds the old minimum until it ages out. A constant delay is
   invisible to a one-way follower.
+  - **The service runs the same detector (#220, v1.35.19)**, because on a box where the in-process
+    follower stays unsettled (alex-nb) the service is the clock source. `DateSync::latency`, fed in
+    `phase_lock_word` after `on_window` under the follower's rule; reset in `drop_window` and on a
+    `PortMoved`. One text for both: `latency_step::describe` + `WARN_TAIL` (prefix `[PTP]` there).
+    The Follow_Up's own `t2` reaches `handle_followup_message` for the gap; a wall-stamped gap is
+    context only (negative or ≥ 1 s is dropped). `/status.arrival_latency_steps` counts them.
+    Test the service through `process_settled_sync` (`date_sync/latency_step_tests.rs`); a test
+    that never resets the detector on a GM change fails `a_grandmaster_change_is_no_latency_step…`.
 - **On-rig diagnosis:** the probe prints `e_us` / `freq_ppm` per second, and
   `RUST_LOG=dsync_ptp::follower=debug` logs every window with the boot fit's slope and σ
   (stderr). Read those before theorising about jitter: the fit was right, it just never fired.

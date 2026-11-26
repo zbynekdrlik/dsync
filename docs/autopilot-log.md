@@ -1003,3 +1003,17 @@ canary evidence before continuing.
   windows, once-per-direction WARN naming the NIC); negatives: USB jitter, GM change, late windows
 - Decision: report-only, the trigger is the `e` step alone; the Sync→Follow_Up gap and the window
   spread are context (unproven on RTL8153). A constant delay is undetectable one-way (dstack accepted).
+
+## #220 — Service: report an arrival-latency step, naming the NIC (dstack#498)
+
+- Version bump: `0451620` (1.35.18 -> 1.35.19)
+- Design comment (Approach 1..3, Architektúra):
+  https://github.com/zbynekdrlik/dsync/issues/220#issuecomment-7186300970
+- RED: `c0b0d63` — `an_arrival_latency_step_down/up_is_counted_once_by_the_service_220`, the
+  status field (an inert detector field, never fed: 0)
+- GREEN: `6151e01` — the #218 detector in `DateSync`, fed in `phase_lock_word`, the shared text
+  `latency_step::describe`; `/status.arrival_latency_steps`
+- Negatives: `a0d039d` — a GM change (RED with the resets mutated away), a 1 s prompt run, mbc's
+  USB delay model
+- Why: alex-nb's clock source is the service; the in-process follower there stays not_settled.
+
