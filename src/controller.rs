@@ -649,6 +649,9 @@ where
 
     // PTP state
     pending_syncs: HashMap<u16, PendingSync>,
+    /// dsync#220: the Sync→Follow_Up arrival gap of the pair being processed (context of an
+    /// arrival-latency step only); taken by the sample it belongs to.
+    followup_gap_ns: Option<i64>,
     prev_t1_ns: i64,
     prev_t2_ns: i64,
     current_gm_uuid: Option<[u8; 6]>,
@@ -985,6 +988,7 @@ where
             ntp,
             config,
             pending_syncs: HashMap::new(),
+            followup_gap_ns: None,
             prev_t1_ns: 0,
             prev_t2_ns: 0,
             current_gm_uuid: None,
@@ -2254,7 +2258,7 @@ where
 
         match header.message_type {
             PtpV1Control::Sync => self.handle_sync_message(&header, &buf[..size], t2),
-            PtpV1Control::FollowUp => self.handle_followup_message(&header, &buf[..size]),
+            PtpV1Control::FollowUp => self.handle_followup_message(&header, &buf[..size], t2),
             _ => {}
         }
 
@@ -2293,6 +2297,8 @@ where
                     port.port
                 );
                 self.pending_syncs.clear();
+                // dsync#220: the ports' stamps differ (~470 µs, #136), no latency level spans it.
+                self.date_sync.latency.reset();
             }
             PortVerdict::First | PortVerdict::Followed | PortVerdict::OtherClock { .. } => {}
         }
@@ -2382,7 +2388,7 @@ where
         );
     }
 
-    fn handle_followup_message(&mut self, header: &PtpV1Header, buf: &[u8]) {
+    fn handle_followup_message(&mut self, header: &PtpV1Header, buf: &[u8], rx: SystemTime) {
         if let Ok(body) = PtpV1FollowUpBody::parse(&buf[PtpV1Header::SIZE..]) {
             // dsync#136: only the same port's Sync; another port's Follow_Up of the same sequence
             // id leaves the pending Sync for its own.
@@ -2394,6 +2400,12 @@ where
                 return;
             }
             if let Some(sync_info) = self.pending_syncs.remove(&seq) {
+                // dsync#220: context only, wall-stamped: a step between the two reads drops it.
+                self.followup_gap_ns = rx
+                    .duration_since(sync_info.rx_time_sys)
+                    .ok()
+                    .filter(|d| *d < Duration::from_secs(1))
+                    .map(|d| d.as_nanos() as i64);
                 self.process_sync_pair(
                     body.precise_origin_timestamp.to_nanos(),
                     sync_info.rx_time_sys,
@@ -2534,6 +2546,8 @@ where
         if self.should_add_sample(t1_ns) {
             self.sample_window.push(phase_offset_ns);
             self.date_sync.push_raw_sample(t1_ns, t2_ns); // #117
+            let gap_ns = self.followup_gap_ns.take();
+            self.date_sync.push_sample_gap(gap_ns); // dsync#220
         }
 
         // Process window when full - pass master time for drift calculation
@@ -7128,7 +7142,7 @@ mod tests {
                 let header = PtpV1Header::parse(&data).unwrap();
                 match header.message_type {
                     PtpV1Control::Sync => c.handle_sync_message(&header, &data, t2),
-                    PtpV1Control::FollowUp => c.handle_followup_message(&header, &data),
+                    PtpV1Control::FollowUp => c.handle_followup_message(&header, &data, t2),
                     _ => unreachable!(),
                 }
             };

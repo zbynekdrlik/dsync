@@ -138,6 +138,8 @@ pub struct FollowerState {
     /// time base (a frequency step, the boot hold): the published time is about this far off
     /// the grandmaster line, shrinking with τ 20 s at ≤ 50 ppm. 0 when none.
     pub pull_ns: i64,
+    /// dsync#220: arrival-latency steps since start (#218), the count the WARN lines carry.
+    pub latency_steps: u32,
 }
 
 impl From<ClockModel> for FollowerState {
@@ -156,6 +158,7 @@ impl From<ClockModel> for FollowerState {
             settled: m.settled,
             recent_abs_e_ns: m.recent_abs_e_ns,
             pull_ns: m.pull_ns,
+            latency_steps: m.latency_steps,
         }
     }
 }

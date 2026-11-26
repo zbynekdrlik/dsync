@@ -102,10 +102,13 @@ pub struct ClockModel {
     /// boot hold. The published time is about this far off the grandmaster line, shrinking with
     /// τ 20 s at ≤ 50 ppm; 0 when none.
     pub pull_ns: i64,
+    /// dsync#220: arrival-latency steps since start (#218: `e` shifted > 300 µs and held 3
+    /// windows while engaged, a NIC's delivery delay changing). Report-only.
+    pub latency_steps: u32,
 }
 
 /// The seqlock words of a [`ClockModel`].
-pub const MODEL_WORDS: usize = 13;
+pub const MODEL_WORDS: usize = 14;
 
 const F_ANCHORED: u64 = 1;
 const F_LOCKED: u64 = 2;
@@ -158,6 +161,7 @@ impl ClockModel {
             self.windows,
             self.recent_abs_e_ns.unwrap_or(0) as u64,
             self.pull_ns as u64,
+            self.latency_steps as u64,
         ]
     }
 
@@ -188,6 +192,7 @@ impl ClockModel {
             settled: on(F_SETTLED),
             recent_abs_e_ns: on(F_RECENT).then_some(w[11] as i64),
             pull_ns: w[12] as i64,
+            latency_steps: w[13] as u32,
         }
     }
 }
@@ -229,6 +234,7 @@ mod tests {
             settled: true,
             recent_abs_e_ns: Some(12_345),
             pull_ns: -88_000,
+            latency_steps: 5,
         };
         assert_eq!(ClockModel::from_words(m.to_words()), m);
         let empty = ClockModel::default();

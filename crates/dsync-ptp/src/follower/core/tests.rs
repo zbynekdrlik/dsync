@@ -1372,6 +1372,28 @@ fn an_arrival_latency_step_down_is_counted_once_218() {
 }
 
 #[test]
+fn a_readers_state_carries_the_arrival_latency_steps_220() {
+    let mut world = World::new(SEEDS[0], 10_000.0);
+    world.delivery_ns = 800_000;
+    let mut core = new_core(&world);
+    run_to_lock(&mut world, &mut core, 120);
+    for _ in 0..(60 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    world.delivery_ns = 0;
+    for _ in 0..(30 * 8) {
+        world.tick(&mut [&mut core]);
+    }
+    let model = core.model();
+    let state = crate::follower::FollowerState::from(ClockModel::from_words(model.to_words()));
+    assert_eq!(
+        (core.latency_steps(), state.latency_steps),
+        (1, 1),
+        "the core's count and what a reader of the seqlock sees"
+    );
+}
+
+#[test]
 fn an_arrival_latency_step_up_is_counted_once_218() {
     for seed in SEEDS {
         assert_eq!(delivery_step_run(seed, 0, 600_000), 1, "seed {seed:#x}");

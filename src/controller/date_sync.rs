@@ -84,9 +84,17 @@ pub(super) struct DateSync {
     pub(super) window: Vec<i64>,
     /// dsync#160: each `window` sample's grandmaster time `t1`, pushed together with it.
     pub(super) window_t1: Vec<i64>,
+    /// dsync#220: the Sync→Follow_Up arrival gaps of the window's samples that had one.
+    pub(super) window_gap: Vec<i64>,
+    /// dsync#220: the closed window's median gap and `t2 − t1` spread (max − min), the context
+    /// of an arrival-latency step; handed to the phase lock's window with the floor.
+    pub(super) pending_context: (i64, i64),
     /// dsync#160: the window minima of the last ~10 s; their floor is handed to the servo in
     /// place of the window median (a one-sided receive delay moves a median, never the floor).
     pub(super) floor: dsync_ptp::delay_floor::DelayFloor,
+    /// dsync#220: the arrival-latency step detector (report-only), as the in-process follower's
+    /// (#218); fed at the phase lock's window, reset with every measurement reset.
+    pub(super) latency: dsync_ptp::follower::latency_step::LatencyStepDetector,
     /// The window median handed from `process_sample_window` to the servo, and its GM time `t1`.
     pub(super) pending_median_ns: Option<i64>,
     /// dsync#160: the pending window's floor came from fewer than 3 windows (no anchor on it),
@@ -217,6 +225,9 @@ impl DateSync {
             window: Vec::with_capacity(window_size),
             window_t1: Vec::with_capacity(window_size),
             floor: dsync_ptp::delay_floor::DelayFloor::new(),
+            latency: dsync_ptp::follower::latency_step::LatencyStepDetector::new(),
+            window_gap: Vec::new(),
+            pending_context: (0, 0),
             pending_median_ns: None,
             pending_provisional: false,
             pending_fit: None,
@@ -274,6 +285,14 @@ impl DateSync {
         }
     }
 
+    /// dsync#220: the Sync→Follow_Up arrival gap of the sample just pushed, when known (context of
+    /// an arrival-latency step only).
+    pub(super) fn push_sample_gap(&mut self, gap_ns: Option<i64>) {
+        if self.enabled {
+            self.window_gap.extend(gap_ns);
+        }
+    }
+
     /// The sample window closed: hand the delay floor of the last ~10 s (dsync#160, the shared
     /// `dsync_ptp::delay_floor`, as the in-process follower) and the grandmaster time to the
     /// servo. The floor is read at the window's middle, where the median it replaces sat.
@@ -299,8 +318,21 @@ impl DateSync {
             None
         };
         self.pending_t1_ns = master_time_ns;
+        // dsync#220: the window's context for an arrival-latency step.
+        let spread = match (self.window.iter().max(), self.window.iter().min()) {
+            (Some(hi), Some(lo)) => hi.wrapping_sub(*lo),
+            _ => 0,
+        };
+        self.window_gap.sort_unstable();
+        let gap = self
+            .window_gap
+            .get(self.window_gap.len() / 2)
+            .copied()
+            .unwrap_or(0);
+        self.pending_context = (gap, spread);
         self.window.clear();
         self.window_t1.clear();
+        self.window_gap.clear();
     }
 
     /// Every PTP phase measurement so far is void (a time-base change, an outage, a step before
@@ -308,7 +340,10 @@ impl DateSync {
     pub(super) fn drop_window(&mut self) {
         self.window.clear();
         self.window_t1.clear();
+        self.window_gap.clear();
         self.floor.clear();
+        // dsync#220: the levels before a measurement reset say nothing about the ones after.
+        self.latency.reset();
     }
 
     /// A clock step of `delta_ns` that `D` moves with: the phase lock's `D` and the delay floor's
@@ -348,6 +383,11 @@ impl DateSync {
                 jump as f64 / 1_000.0
             );
         }
+    }
+
+    /// dsync#220: the arrival-latency steps seen since start.
+    pub(super) fn arrival_latency_steps(&self) -> u32 {
+        self.latency.count()
     }
 
     /// The PTP sender may carry another time base (another grandmaster, or the same one after a
@@ -420,6 +460,7 @@ where
         self.note_excursion(out.excursion);
         self.date_sync
             .measure_step_phase_jump(out.error_ns, out.event);
+        self.feed_latency_step(was_engaged, out.event, out.error_ns);
         self.date_sync.fresh_window = out.error_ns.is_some();
         if let (false, Some(fit)) = (reseeded_before, self.date_sync.core.boot_reseed()) {
             info!(
@@ -503,6 +544,39 @@ where
             }
         }
         close.word_ppm
+    }
+
+    /// dsync#220: the window to the arrival-latency step detector (report-only, the follower's
+    /// #218 trigger and text): only an engaged window with no anchor event; anything else resets
+    /// it.
+    fn feed_latency_step(&mut self, was_engaged: bool, event: AnchorEvent, error_ns: Option<i64>) {
+        use dsync_ptp::follower::latency_step::{self, WindowReading};
+        let engaged = was_engaged && self.date_sync.core.engaged();
+        let (gap_ns, spread_ns) = self.date_sync.pending_context;
+        match (engaged, event, error_ns) {
+            (true, AnchorEvent::None, Some(e_ns)) => {
+                let reading = WindowReading {
+                    e_ns,
+                    gap_ns,
+                    spread_ns,
+                };
+                if let Some(step) = self.date_sync.latency.on_window(reading) {
+                    let nic = self
+                        .status_shared
+                        .read()
+                        .ok()
+                        .and_then(|s| s.ptp_interface_name.clone().or(s.ptp_interface.clone()))
+                        .unwrap_or_default();
+                    let line = latency_step::describe(&nic, &step);
+                    if step.first_in_direction {
+                        warn!("[PTP] {line}. {}", latency_step::WARN_TAIL);
+                    } else {
+                        info!("[PTP] {line}");
+                    }
+                }
+            }
+            _ => self.date_sync.latency.reset(),
+        }
     }
 
     /// #88 — inside the backoff after a failed date step.
@@ -1181,6 +1255,8 @@ mod freq_step_tests;
 mod gm_identity_tests;
 mod lock_report;
 
+#[cfg(test)]
+mod latency_step_tests;
 #[cfg(test)]
 mod lock_sim;
 #[cfg(test)]

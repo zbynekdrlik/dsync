@@ -289,6 +289,7 @@ impl FollowerCore {
                     .is_some_and(|p90| p90 <= SETTLED_P90_NS),
             recent_abs_e_ns: self.recent_abs_e_ns(),
             pull_ns: (self.core.pull_us() * 1_000.0).round() as i64,
+            latency_steps: self.latency.count(),
         }
     }
 
@@ -516,29 +517,9 @@ impl FollowerCore {
     /// dsync#218: once per direction a WARN naming the NIC, every later step an INFO with the
     /// count. Report-only: the servo is unchanged.
     fn log_latency_step(&self, s: &LatencyStep) {
-        let us = |ns: i64| ns as f64 / 1_000.0;
-        let nic = if self.nic.is_empty() {
-            "the PTP interface"
-        } else {
-            &self.nic
-        };
-        let line = format!(
-            "arrival latency stepped on {}: e {:+.0}us -> {:+.0}us (delta {:+.0}us held {} windows); sync->follow_up gap median {:.0}us -> {:.0}us; window spread {:.0}us -> {:.0}us; {} step(s) since start",
-            nic,
-            us(s.before.e_ns),
-            us(s.after.e_ns),
-            us(s.delta_ns()),
-            latency_step::HELD_WINDOWS,
-            us(s.before.gap_ns),
-            us(s.after.gap_ns),
-            us(s.before.spread_ns),
-            us(s.after.spread_ns),
-            s.count
-        );
+        let line = latency_step::describe(&self.nic, s);
         if s.first_in_direction {
-            warn!(
-                "[FOLLOWER] {line}. A software stamp carries the NIC's delivery delay into the offset; the servo is unchanged."
-            );
+            warn!("[FOLLOWER] {line}. {}", latency_step::WARN_TAIL);
         } else {
             info!("[FOLLOWER] {line}");
         }
