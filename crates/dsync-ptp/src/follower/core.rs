@@ -289,6 +289,7 @@ impl FollowerCore {
                     .is_some_and(|p90| p90 <= SETTLED_P90_NS),
             recent_abs_e_ns: self.recent_abs_e_ns(),
             pull_ns: (self.core.pull_us() * 1_000.0).round() as i64,
+            latency_steps: 0,
         }
     }
 
