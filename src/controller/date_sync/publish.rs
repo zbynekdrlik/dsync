@@ -183,6 +183,8 @@ where
         status.last_freq_step_ts = ds.last_freq_step_ts;
         // dsync#204: the excursion boosts and the PI gain in force.
         status.ptp_phase_excursion_boosts = ds.core.excursion_arms();
+        // dsync#220: the arrival-latency steps since start.
+        status.arrival_latency_steps = ds.arrival_latency_steps();
         status.ptp_phase_gain = ds.core.engaged().then(|| ds.core.gain_factor());
     }
 }

@@ -490,9 +490,9 @@ pub struct SyncStatus {
     pub ptp_phase_excursion_boosts: u32,
 
     /// dsync#220: arrival-latency steps since the process started: the window error `e` shifted
-    /// > 300 µs and held 3 windows while engaged (a NIC's delivery delay changing with the
-    /// inbound load, e.g. a USB RTL8153), as the in-process follower's #218 report. Report-only.
-    /// 0 in a pre-1.35.19 blob.
+    /// by more than 300 µs and held 3 windows while engaged (a NIC's delivery delay changing with
+    /// the inbound load, e.g. a USB RTL8153), as the in-process follower's #218 report.
+    /// Report-only. 0 in a pre-1.35.19 blob.
     #[serde(default)]
     pub arrival_latency_steps: u32,
 

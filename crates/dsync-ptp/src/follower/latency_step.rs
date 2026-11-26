@@ -48,6 +48,36 @@ impl LatencyStep {
     }
 }
 
+/// The report line of a step, the same text in the follower and the service (dsync#220): the
+/// NIC, the levels before and after, the held windows, the context and the count. `nic` empty =
+/// "the PTP interface". The caller adds its prefix and picks the level (warn on
+/// `first_in_direction`).
+pub fn describe(nic: &str, s: &LatencyStep) -> String {
+    let us = |ns: i64| ns as f64 / 1_000.0;
+    let nic = if nic.is_empty() {
+        "the PTP interface"
+    } else {
+        nic
+    };
+    format!(
+        "arrival latency stepped on {}: e {:+.0}us -> {:+.0}us (delta {:+.0}us held {} windows); sync->follow_up gap median {:.0}us -> {:.0}us; window spread {:.0}us -> {:.0}us; {} step(s) since start",
+        nic,
+        us(s.before.e_ns),
+        us(s.after.e_ns),
+        us(s.delta_ns()),
+        HELD_WINDOWS,
+        us(s.before.gap_ns),
+        us(s.after.gap_ns),
+        us(s.before.spread_ns),
+        us(s.after.spread_ns),
+        s.count
+    )
+}
+
+/// The sentence a first step in a direction adds to its warning.
+pub const WARN_TAIL: &str =
+    "A software stamp carries the NIC's delivery delay into the offset; the servo is unchanged.";
+
 #[derive(Debug, Default)]
 pub struct LatencyStepDetector {
     history: VecDeque<WindowReading>,
@@ -226,6 +256,29 @@ mod tests {
         d.reset();
         assert!(feed(&mut d, &[900_000; BASELINE_WINDOWS]).is_empty());
         assert_eq!(d.count(), 0);
+    }
+
+    #[test]
+    fn the_report_line_names_the_nic_the_levels_and_the_count() {
+        let s = LatencyStep {
+            before: WindowReading {
+                e_ns: 0,
+                gap_ns: 12_000,
+                spread_ns: 40_000,
+            },
+            after: WindowReading {
+                e_ns: -800_000,
+                gap_ns: 9_000,
+                spread_ns: 30_000,
+            },
+            count: 2,
+            first_in_direction: true,
+        };
+        assert_eq!(
+            describe("Ethernet 2", &s),
+            "arrival latency stepped on Ethernet 2: e +0us -> -800us (delta -800us held 3 windows); sync->follow_up gap median 12us -> 9us; window spread 40us -> 30us; 2 step(s) since start"
+        );
+        assert!(describe("", &s).starts_with("arrival latency stepped on the PTP interface: "));
     }
 
     #[test]
