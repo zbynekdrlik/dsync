@@ -3606,14 +3606,86 @@ mod tests {
                 "an unresolvable hostname must be published loudly"
             );
             assert!(s.gm_allowlist_resolved.is_empty());
-            assert!(s.clock_alarm.active, "an unresolvable GM raises the alarm");
+            // dsync#217: a list whose only entry does not resolve fails open (it no longer
+            // drops every grandmaster), and /status says so.
             assert!(
-                s.clock_alarm.reason.contains("gm-clock.invalid")
-                    && s.clock_alarm.reason.contains("unresolvable"),
-                "the alarm reason must name the unresolvable hostname, got: {}",
-                s.clock_alarm.reason
+                s.gm_allowlist_fail_open,
+                "an all-unresolvable list must be published as failed open"
             );
         }
+    }
+
+    /// dsync#217, the incident's shape (pp-cam6, 22.11.2026): `gm_allowlist` names a host the
+    /// site's DNS does not know, and PP's grandmaster 10.77.7.200 must be adopted, not dropped.
+    #[test]
+    fn an_unresolvable_allowlist_name_never_drops_the_sites_grandmaster_217() {
+        let gm_uuid = [0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14];
+        let gm_ip: std::net::Ipv4Addr = "10.77.7.200".parse().unwrap();
+        let sync_pkt = make_sync_pkt(gm_uuid, 0);
+        let t2 = SystemTime::UNIX_EPOCH + Duration::from_nanos(1_000_000_000);
+        let mut mock_net = MockPtpNetwork::new();
+        mock_net
+            .expect_recv_packet()
+            .times(1)
+            .returning(move || Ok(Some((sync_pkt.clone(), SYNC_LEN, t2, Some(gm_ip)))));
+        mock_net.expect_recv_packet().returning(|| Ok(None));
+        let mut config = SystemConfig::default();
+        // `.invalid` never resolves (RFC 6761), as `video-clock.lan` did not at PP.
+        config.gm_allowlist = vec!["video-clock.invalid".to_string()];
+        config.filters.calibration_samples = 0;
+        config.filters.warmup_secs = 0.0;
+        let mut controller = PtpController::new(
+            MockSystemClock::new(),
+            mock_net,
+            MockNtpSource::new(),
+            Arc::new(RwLock::new(SyncStatus::default())),
+            config,
+        );
+        controller.gm_resolver = Box::new(MapResolver(std::collections::HashMap::new()));
+        controller.process_loop_iteration().unwrap();
+        assert_eq!(
+            controller.current_sync_source_ip,
+            Some(gm_ip),
+            "the site's grandmaster must be adopted"
+        );
+        assert_eq!(controller.gm_dropped_since_accepted, 0);
+    }
+
+    /// dsync#217: a restricting list that drops the only grandmaster heard names both in the
+    /// clock alarm: the source it dropped and the list that dropped it.
+    #[test]
+    fn the_clock_alarm_names_the_dropped_grandmaster_and_the_list_217() {
+        let gm_ip: std::net::Ipv4Addr = "10.77.7.200".parse().unwrap();
+        let sync_pkt = make_sync_pkt([0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14], 0);
+        let t2 = SystemTime::UNIX_EPOCH + Duration::from_nanos(1_000_000_000);
+        let mut mock_net = MockPtpNetwork::new();
+        mock_net
+            .expect_recv_packet()
+            .times(1)
+            .returning(move || Ok(Some((sync_pkt.clone(), SYNC_LEN, t2, Some(gm_ip)))));
+        mock_net.expect_recv_packet().returning(|| Ok(None));
+        let mut config = SystemConfig::default();
+        config.gm_allowlist = vec!["10.77.9.0/24".to_string()];
+        config.filters.calibration_samples = 0;
+        config.filters.warmup_secs = 0.0;
+        let mut controller = PtpController::new(
+            MockSystemClock::new(),
+            mock_net,
+            MockNtpSource::new(),
+            Arc::new(RwLock::new(SyncStatus::default())),
+            config,
+        );
+        controller.process_loop_iteration().unwrap();
+        assert_eq!(controller.gm_dropped_since_accepted, 1);
+        controller.last_ptp_packet = Instant::now() - Duration::from_secs(PTP_TIMEOUT_SECS + 1);
+        let reason = controller
+            .sample_clock_health()
+            .lost_reason()
+            .expect("no allowed grandmaster: the clock is lost");
+        assert!(
+            reason.contains("10.77.7.200") && reason.contains("10.77.9.0/24"),
+            "the alarm must name the dropped GM and the list, got: {reason}"
+        );
     }
 
     /// RED (camera-box issue 1073): reproduces the live incident. The stream box,

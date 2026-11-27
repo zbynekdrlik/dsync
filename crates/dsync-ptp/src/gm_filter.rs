@@ -279,6 +279,11 @@ impl GmAllowlist {
         self.prefixes.iter().any(|p| p.contains(ip)) || self.resolved.contains(&ip)
     }
 
+    /// dsync#217 — true when the list fails open because no entry works.
+    pub fn fails_open(&self) -> bool {
+        false
+    }
+
     /// Entries that failed to parse, so the caller can warn loudly at startup.
     pub fn invalid_entries(&self) -> &[String] {
         &self.invalid
@@ -880,18 +885,75 @@ mod tests {
         assert!(!a.allows(ip("10.77.7.109")));
     }
 
+    /// dsync#217 (supersedes #113's "restricts for ever"): pp-cam6, 22.11.2026, ran on NTP
+    /// before a live service with `["video-clock.lan"]`, a name PP's DNS does not know; every
+    /// Sync of PP's GM 10.77.7.200 was dropped. A name that does not resolve is an INVALID
+    /// entry after a real pass, and an all-invalid list fails open, as the module promises.
     #[test]
-    fn unresolvable_hostname_restricts_and_is_loud() {
+    fn an_unresolvable_hostname_only_list_fails_open_and_is_loud_217() {
         let mut a = GmAllowlist::parse(&["video-clock.lan".to_string()]);
-        let resolver = FakeResolver::new(&[]); // nothing resolves
-        let outcome = a.resolve(&resolver);
+        let outcome = a.resolve(&FakeResolver::new(&[])); // nothing resolves
         assert_eq!(outcome.unresolved, vec!["video-clock.lan".to_string()]);
         assert!(a.resolved_ips().is_empty());
         assert_eq!(a.unresolved_hostnames(), &["video-clock.lan".to_string()]);
-        // Never silently accept any GM — nothing is allowed…
-        assert!(!a.allows(ip("10.77.9.230")));
-        // …and the loud clock-alarm reason is surfaced.
-        assert_eq!(a.unresolvable_reason().as_deref(), Some("video-clock.lan"));
+        assert!(a.fails_open(), "no entry resolves: the list fails open");
+        assert!(a.is_unrestricted());
+        assert!(
+            a.allows(ip("10.77.7.200")),
+            "PP's grandmaster must be accepted (the incident dropped it)"
+        );
+        // The clock is not lost on its account, so it is no clock-alarm reason.
+        assert!(a.unresolvable_reason().is_none());
+    }
+
+    #[test]
+    fn a_list_fails_open_only_after_a_resolve_pass_217() {
+        let a = GmAllowlist::parse(&["video-clock.lan".to_string()]);
+        assert!(!a.fails_open(), "before any pass the list still restricts");
+        assert!(!a.allows(ip("10.77.7.200")));
+    }
+
+    #[test]
+    fn a_partly_unresolvable_list_restricts_to_what_works_and_names_the_dropped_entry_217() {
+        let mut a =
+            GmAllowlist::parse(&["10.77.9.0/24".to_string(), "video-clock.lan".to_string()]);
+        a.resolve(&FakeResolver::new(&[]));
+        assert!(!a.fails_open(), "a literal prefix still restricts");
+        assert!(a.allows(ip("10.77.9.184")));
+        assert!(!a.allows(ip("10.77.7.200")));
+        assert_eq!(a.unresolved_hostnames(), &["video-clock.lan".to_string()]);
+
+        let mut b = GmAllowlist::parse(&["video-clock.lan".to_string(), "gm2.lan".to_string()]);
+        b.resolve(&FakeResolver::new(&[("gm2.lan", &["10.77.9.230"])]));
+        assert!(
+            !b.fails_open(),
+            "one name resolves: the list restricts to it"
+        );
+        assert!(b.allows(ip("10.77.9.230")));
+        assert!(!b.allows(ip("10.77.7.200")));
+        assert_eq!(b.unresolved_hostnames(), &["video-clock.lan".to_string()]);
+    }
+
+    #[test]
+    fn a_kept_resolution_never_fails_open_217() {
+        let mut a = GmAllowlist::parse(&["video-clock.lan".to_string()]);
+        a.resolve(&FakeResolver::new(&[("video-clock.lan", &["10.77.9.230"])]));
+        a.resolve(&FakeResolver::new(&[])); // a DNS blip
+        assert!(!a.fails_open(), "a DNS blip keeps the old resolution");
+        assert!(a.allows(ip("10.77.9.230")));
+        assert!(!a.allows(ip("10.77.7.200")));
+    }
+
+    #[test]
+    fn a_name_that_resolves_later_restricts_again_217() {
+        let mut a = GmAllowlist::parse(&["video-clock.lan".to_string()]);
+        a.resolve(&FakeResolver::new(&[]));
+        assert!(a.fails_open());
+        let outcome = a.resolve(&FakeResolver::new(&[("video-clock.lan", &["10.77.9.230"])]));
+        assert!(outcome.changed);
+        assert!(!a.fails_open());
+        assert!(a.allows(ip("10.77.9.230")));
+        assert!(!a.allows(ip("10.77.7.200")));
     }
 
     #[test]

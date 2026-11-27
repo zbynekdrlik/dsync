@@ -258,6 +258,11 @@ pub struct SyncStatus {
     /// list is the loud, machine-readable "grandmaster name unresolvable" signal.
     #[serde(default)]
     pub gm_allowlist_unresolved: Vec<String>,
+    /// dsync#217: no `gm_allowlist` entry works (every hostname failed to resolve and no
+    /// literal entry is set), so the list fails open and ANY grandmaster is accepted, with a
+    /// loud warning, until an entry resolves. `false` for a working or an empty list.
+    #[serde(default)]
+    pub gm_allowlist_fail_open: bool,
 
     // ========================================================================
     // Fleet date offset (dsync#88) — additive; all default to the "no date
@@ -719,6 +724,7 @@ impl Default for SyncStatus {
             // #113: no resolved / unresolved hostnames by default
             gm_allowlist_resolved: Vec::new(),
             gm_allowlist_unresolved: Vec::new(),
+            gm_allowlist_fail_open: false,
             // #88: no date authority known until the phase lock anchors
             date_authority: String::new(),
             date_offset_ns: None,
