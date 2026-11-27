@@ -166,6 +166,11 @@ to be free. Then gate the tree again:
   helper guarantees the queued restore. Failing here turned every hour red when camera-box took the
   lease mid-run (runs 41372498483, 41384428027), with nothing wrong in dsync.
 - Until the restore runs, a new gate run gets exit 6 ("previous restore still queued").
+- The queued restore is a dsync restart on companion at a time no one picks: whenever the lease
+  next goes free. That can fall inside an evening service. After such a run, tell dstack the
+  restore is queued, and check the listener (`/listen/status`) again once the timer has fired, not
+  only right after the gate (27.11.2026: the gate ended 14:27 CET with a queued restore, and a
+  later Dante question had to start from the run's annotation).
 
 ## Known side effects (camera-box conditions)
 
