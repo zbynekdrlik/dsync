@@ -288,6 +288,80 @@ class GateWorkflowTests(unittest.TestCase):
         restores = [c for c in self.helper_calls if "--restore" in c]
         self.assertEqual(len(restores), 1, restores)
 
+    def _restore_step(self):
+        """The `run: |` body of the "Restore previous dsync" step, dedented."""
+        lines = self.text.splitlines()
+        i = next(n for n, l in enumerate(lines) if l.strip() == "- name: Restore previous dsync")
+        i = next(n for n in range(i, len(lines)) if lines[n].strip() == "run: |")
+        indent = len(lines[i]) - len(lines[i].lstrip()) + 2
+        body = []
+        for l in lines[i + 1:]:
+            if l.strip() and len(l) - len(l.lstrip()) < indent:
+                break
+            body.append(l[indent:])
+        return "\n".join(body) + "\n"
+
+    def _run_restore(self, held_calls, wait_min="45", timer_restores=False):
+        """Run the step against a fake helper that exits 3 `held_calls` times, then 0 (#223)."""
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            pending = os.path.join(d, "pending")
+            helper = os.path.join(d, "helper")
+            with open(helper, "w") as f:
+                f.write(
+                    "#!/bin/bash\n"
+                    'n=$(cat "$CNT" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$CNT"\n'
+                    'if [ "$n" -le "$HELD" ]; then\n'
+                    '  if [ "$TIMER" = 1 ] && [ "$n" -gt 1 ]; then rm -f "$RESTORE_PENDING"; exit 3; fi\n'
+                    '  touch "$RESTORE_PENDING"; exit 3\n'
+                    "fi\n"
+                    'rm -f "$RESTORE_PENDING"; exit 0\n'
+                )
+            bindir = os.path.join(d, "bin")
+            os.mkdir(bindir)
+            with open(os.path.join(bindir, "sudo"), "w") as f:
+                f.write('#!/bin/bash\n[ "$1" = "-n" ] && shift\nexec "$@"\n')
+            with open(os.path.join(bindir, "sleep"), "w") as f:
+                f.write("#!/bin/bash\nexit 0\n")
+            for x in (helper, os.path.join(bindir, "sudo"), os.path.join(bindir, "sleep")):
+                os.chmod(x, 0o755)
+            step = os.path.join(d, "step.sh")
+            with open(step, "w") as f:
+                f.write(self._restore_step())
+            env = dict(os.environ, GATE_INSTALL=helper, CNT=os.path.join(d, "cnt"),
+                       HELD=str(held_calls), TIMER="1" if timer_restores else "0",
+                       RESTORE_PENDING=pending, RESTORE_WAIT_MIN=wait_min,
+                       GITHUB_STEP_SUMMARY=os.path.join(d, "summary"),
+                       PATH=bindir + os.pathsep + os.environ["PATH"])
+            r = subprocess.run(["bash", "-e", step], env=env, capture_output=True, text=True)
+            with open(os.path.join(d, "cnt")) as f:
+                calls = int(f.read())
+            return r.returncode, r.stdout, calls
+
+    def test_a_free_lease_restores_at_once_223(self):
+        rc, out, calls = self._run_restore(0)
+        self.assertEqual((rc, calls), (0, 1), out)
+        self.assertIn("previous dsync restored", out)
+        self.assertNotIn("Restore queued", out)
+
+    def test_a_held_lease_is_retried_until_it_frees_223(self):
+        rc, out, calls = self._run_restore(2)
+        self.assertEqual((rc, calls), (0, 3), out)
+        self.assertEqual(out.count("::warning title=Restore queued::"), 1, out)
+        self.assertIn("(the lease freed)", out)
+
+    def test_the_helper_timer_restoring_first_counts_as_done_223(self):
+        rc, out, calls = self._run_restore(99, timer_restores=True)
+        self.assertEqual((rc, calls), (0, 2), out)
+        self.assertIn("restored by the helper's timer", out)
+
+    def test_a_lease_held_past_the_wait_is_red_223(self):
+        rc, out, calls = self._run_restore(99, wait_min="0")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("::error title=Restore still queued::", out)
+
     def test_never_on_pull_request(self):
         self.assertNotRegex(self.text, r"(?m)^\s*pull_request(_target)?\s*:")
 
