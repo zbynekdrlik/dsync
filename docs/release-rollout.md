@@ -33,6 +33,10 @@ addresses, transports and credentials are not in this repository: they are in
    (the MCP call's process tree ends it; nothing was written on dsg or alex-nb). There, read the
    box's own `C:\ProgramData\dsync\dsync.log` from the restart on: the `[LOCK] === LOCKED ===` /
    `=== UNLOCKED ===` lines and the 30 s `[PHASE-LOCK] e=…` lines are the 10 minutes.
+   Its stamps are UTC (`…Z`), the box clock is CET: window the lines by the UTC restart time
+   (a CET-hour window read the previous build's lines on dsg, 27.11). Grade `e` from ~2 min after
+   the restart; the first windows are the boot pull. Compare a box with its OWN long-run spread on
+   the old build (linux-pp's journal: sd ~12 µs on 1.35.17), never with one earlier point read.
 
 ## Per-release notes for step 4
 
