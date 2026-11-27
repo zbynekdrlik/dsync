@@ -250,47 +250,47 @@ jobs:
           RESTORE_WAIT_MIN: '45'
           RESTORE_PENDING: /var/lib/dsync-gate-restore-pending
         run: |
-          set +e
-          sudo -n "$GATE_INSTALL" --restore
-          rc=$?
-          set -e
-          if [ "$rc" -eq 3 ]; then
-            queued_at=$(TZ=Europe/Bratislava date '+%Y-%m-%d %H:%M:%S %Z')
-            echo "::warning title=Restore queued::dsync-gate-install --restore exit 3 at $queued_at: the rig lease was taken during the gate. This step retries the restore itself for up to $RESTORE_WAIT_MIN min (dsync#223); the gate candidate runs on companion until then."
-            echo "Restore queued at $queued_at (rig lease held); retrying every 30 s for up to $RESTORE_WAIT_MIN min." >> "$GITHUB_STEP_SUMMARY"
-            deadline=$(( $(date +%s) + RESTORE_WAIT_MIN * 60 ))
-            while [ "$(date +%s)" -lt "$deadline" ]; do
-              sleep 30
-              if [ ! -e "$RESTORE_PENDING" ]; then
-                # The helper's own timer got there first: the restore is done.
-                fired_at=$(TZ=Europe/Bratislava date '+%Y-%m-%d %H:%M:%S %Z')
-                echo "previous dsync restored by the helper's timer (seen at $fired_at)"
-                echo "Restore: done by the helper's timer, seen at $fired_at." >> "$GITHUB_STEP_SUMMARY"
-                exit 0
+          # One --restore call site (the workflow test pins exactly one), tried again every 30 s
+          # while the lease is held.
+          deadline=$(( $(date +%s) + RESTORE_WAIT_MIN * 60 ))
+          queued_at=""
+          while :; do
+            set +e
+            sudo -n "$GATE_INSTALL" --restore
+            rc=$?
+            set -e
+            now=$(TZ=Europe/Bratislava date '+%Y-%m-%d %H:%M:%S %Z')
+            if [ "$rc" -eq 0 ]; then
+              if [ -n "$queued_at" ]; then
+                echo "previous dsync restored at $now (the lease freed)"
+                echo "Restore: run by the gate at $now, after the lease freed." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "previous dsync restored"
               fi
-              set +e
-              sudo -n "$GATE_INSTALL" --restore
-              rc=$?
-              set -e
-              if [ "$rc" -eq 0 ]; then
-                fired_at=$(TZ=Europe/Bratislava date '+%Y-%m-%d %H:%M:%S %Z')
-                echo "previous dsync restored at $fired_at (the lease freed)"
-                echo "Restore: run by the gate at $fired_at, after the lease freed." >> "$GITHUB_STEP_SUMMARY"
-                exit 0
-              fi
-              if [ "$rc" -ne 3 ]; then
-                echo "::error title=Restore failed, candidate may still be installed::dsync-gate-install --restore exit $rc"
-                exit 1
-              fi
-            done
-            echo "::error title=Restore still queued::the rig lease stayed held for $RESTORE_WAIT_MIN min after the gate; the helper's queued restore will run when it frees, at a time nobody picked. Tell dstack (dsync#223)."
-            exit 1
-          fi
-          if [ "$rc" -ne 0 ]; then
-            echo "::error title=Restore failed, candidate may still be installed::dsync-gate-install --restore exit $rc"
-            exit 1
-          fi
-          echo "previous dsync restored"
+              exit 0
+            fi
+            if [ "$rc" -ne 3 ]; then
+              echo "::error title=Restore failed, candidate may still be installed::dsync-gate-install --restore exit $rc"
+              exit 1
+            fi
+            if [ -z "$queued_at" ]; then
+              queued_at=$now
+              echo "::warning title=Restore queued::dsync-gate-install --restore exit 3 at $queued_at: the rig lease was taken during the gate. This step retries the restore itself for up to $RESTORE_WAIT_MIN min (dsync#223); the gate candidate runs on companion until then."
+              echo "Restore queued at $queued_at (rig lease held); retrying every 30 s for up to $RESTORE_WAIT_MIN min." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error title=Restore still queued::the rig lease stayed held for $RESTORE_WAIT_MIN min after the gate; the helper's queued restore will run when it frees, at a time nobody picked. Tell dstack (dsync#223)."
+              exit 1
+            fi
+            sleep 30
+            if [ ! -e "$RESTORE_PENDING" ]; then
+              # The helper's own timer got there first: the restore is done.
+              seen_at=$(TZ=Europe/Bratislava date '+%Y-%m-%d %H:%M:%S %Z')
+              echo "previous dsync restored by the helper's timer (seen at $seen_at)"
+              echo "Restore: done by the helper's timer, seen at $seen_at." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
 
   verdict:
     name: Verdict
