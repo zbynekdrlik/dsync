@@ -22,7 +22,14 @@ addresses, transports and credentials are not in this repository: they are in
    NTP master is the node every other node's `ntp_server` points at.
 5. **Final proof:** every node's `/status` returns 200 with `is_locked: true`.
 
-6. **Non-rig boxes (#169, #179): read the rig lease right before EACH box's swap**, not once
+6. **Non-rig boxes: roll only a release whose daemon code changed (dstack, 27.11.2026, #169).**
+   Compare against the box's own version first: `git diff --stat v<box> v<new> -- src crates
+   Cargo.toml Cargo.lock`. A version-only or docs-only release (v1.35.21: only the version
+   strings) gives a box nothing, and every dsync restart costs the box's Dante devices a
+   holdover. It is not rolled; it rides along with the next real change. Each box still needs
+   dstack's OK before its restart, one box at a time.
+
+   **Read the rig lease right before EACH box's swap (#169, #179)**, not once
    per rollout. camera-box can take the lease between two boxes (#179, v1.35.1: free at
    23:35Z, taken at 23:36:44Z, mid-swap). companion's `dsync-gate-install` re-checks the lease
    itself and refuses; the Windows swaps do not, so the check is yours.
@@ -33,6 +40,10 @@ addresses, transports and credentials are not in this repository: they are in
    (the MCP call's process tree ends it; nothing was written on dsg or alex-nb). There, read the
    box's own `C:\ProgramData\dsync\dsync.log` from the restart on: the `[LOCK] === LOCKED ===` /
    `=== UNLOCKED ===` lines and the 30 s `[PHASE-LOCK] e=…` lines are the 10 minutes.
+   Its stamps are UTC (`…Z`), the box clock is CET: window the lines by the UTC restart time
+   (a CET-hour window read the previous build's lines on dsg, 27.11). Grade `e` from ~2 min after
+   the restart; the first windows are the boot pull. Compare a box with its OWN long-run spread on
+   the old build (linux-pp's journal: sd ~12 µs on 1.35.17), never with one earlier point read.
 
 ## Per-release notes for step 4
 

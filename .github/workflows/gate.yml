@@ -239,26 +239,58 @@ jobs:
       # or a cancel. Not after a refusal (exit 3 lease held, exit 6 restore queued): nothing was
       # installed. Under a held lease `--restore` exits 3 but QUEUES the restore: a root timer
       # applies it about a minute after the lease ends (airuleset, 2026-11-02).
+      # dsync#223 (dstack 27.11.2026): that timer restarted dsync on companion at a time nobody
+      # picked or heard of (14:43:45 CET, 16 min after run 45998573749). So this step stays alive
+      # on exit 3, retries the restore itself every 30 s for up to RESTORE_WAIT_MIN, and records
+      # when it ran. A timeout is red; the helper's queued restore stays the backstop.
       - name: Restore previous dsync
         if: always() && steps.install.outputs.attempted == '1' && steps.install.outputs.install_refused != '1'
+        timeout-minutes: 50
+        env:
+          RESTORE_WAIT_MIN: '45'
+          RESTORE_PENDING: /var/lib/dsync-gate-restore-pending
         run: |
-          set +e
-          sudo -n "$GATE_INSTALL" --restore
-          rc=$?
-          set -e
-          if [ "$rc" -eq 3 ]; then
-            # The helper GUARANTEES a queued restore (root timer, about a minute after the lease
-            # ends; a new install meanwhile refuses with exit 6), so the measurement stands and the
-            # Verdict still runs. Failing here made every gate red whenever camera-box took the
-            # lease mid-hour (runs 41372498483, 41384428027), with nothing wrong in dsync.
-            echo "::warning title=Restore queued::dsync-gate-install --restore exit 3: the rig lease was taken during the gate. Restore queued, root timer applies it after the lease ends; no human action needed. Until then the gate candidate is the running daemon on companion."
-            exit 0
-          fi
-          if [ "$rc" -ne 0 ]; then
-            echo "::error title=Restore failed, candidate may still be installed::dsync-gate-install --restore exit $rc"
-            exit 1
-          fi
-          echo "previous dsync restored"
+          # One --restore call site (the workflow test pins exactly one), tried again every 30 s
+          # while the lease is held.
+          deadline=$(( $(date +%s) + RESTORE_WAIT_MIN * 60 ))
+          queued_at=""
+          while :; do
+            set +e
+            sudo -n "$GATE_INSTALL" --restore
+            rc=$?
+            set -e
+            now=$(TZ=Europe/Bratislava date '+%Y-%m-%d %H:%M:%S %Z')
+            if [ "$rc" -eq 0 ]; then
+              if [ -n "$queued_at" ]; then
+                echo "previous dsync restored at $now (the lease freed)"
+                echo "Restore: run by the gate at $now, after the lease freed." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "previous dsync restored"
+              fi
+              exit 0
+            fi
+            if [ "$rc" -ne 3 ]; then
+              echo "::error title=Restore failed, candidate may still be installed::dsync-gate-install --restore exit $rc"
+              exit 1
+            fi
+            if [ -z "$queued_at" ]; then
+              queued_at=$now
+              echo "::warning title=Restore queued::dsync-gate-install --restore exit 3 at $queued_at: the rig lease was taken during the gate. This step retries the restore itself for up to $RESTORE_WAIT_MIN min (dsync#223); the gate candidate runs on companion until then."
+              echo "Restore queued at $queued_at (rig lease held); retrying every 30 s for up to $RESTORE_WAIT_MIN min." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error title=Restore still queued::the rig lease stayed held for $RESTORE_WAIT_MIN min after the gate; the helper's queued restore will run when it frees, at a time nobody picked. Tell dstack (dsync#223)."
+              exit 1
+            fi
+            sleep 30
+            if [ ! -e "$RESTORE_PENDING" ]; then
+              # The helper's own timer got there first: the restore is done.
+              seen_at=$(TZ=Europe/Bratislava date '+%Y-%m-%d %H:%M:%S %Z')
+              echo "previous dsync restored by the helper's timer (seen at $seen_at)"
+              echo "Restore: done by the helper's timer, seen at $seen_at." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
 
   verdict:
     name: Verdict

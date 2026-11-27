@@ -160,11 +160,20 @@ to be free. Then gate the tree again:
 
 **Restore queued (exit 3 on `--restore`).** A production took the lease during the hour.
 
-- The helper queued the restore. A root timer applies it about a minute after the lease ends, so
-  no human action is needed.
-- The step only warns ("restore queued") and the Verdict still runs on the full measurement: the
-  helper guarantees the queued restore. Failing here turned every hour red when camera-box took the
-  lease mid-run (runs 41372498483, 41384428027), with nothing wrong in dsync.
+- The helper queued the restore. Its root timer would apply it about a minute after the lease
+  ends: a dsync restart on companion at a time nobody picked or heard of (27.11.2026: 14:43:45
+  CET, 16 min after run 45998573749).
+- So since dsync#223 (dstack's pick) the step stays alive. Every 30 s it retries `--restore`
+  itself, for up to 45 min, and logs the time the restore ran (in the log and the step summary).
+  If the pending marker (`/var/lib/dsync-gate-restore-pending`) is gone, the helper's timer got
+  there first, and that counts as done.
+- A timeout is red ("restore still queued"). The helper's queued restore stays the backstop.
+  The Verdict waits for this step.
+- The session's part, on every queued restore: tell dstack at once (the holder and
+  `expected_release_at` from `rig-lease.json`, then the actual fire time). Once it has run, check
+  the companion listener (`/listen/status`) again, not only right after the measurement.
+- The rig lease does not cover an SNV service. The guard against a mid-service restart stays the
+  same: push to dev (which starts the gate) only outside event mode.
 - Until the restore runs, a new gate run gets exit 6 ("previous restore still queued").
 
 ## Known side effects (camera-box conditions)
