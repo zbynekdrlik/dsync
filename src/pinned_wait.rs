@@ -150,6 +150,7 @@ impl<N: ClockAlarmNotifier> PinnedWait<'_, N> {
             gm_allowed: false,
             ptp_stale: true,
             allowlist_unresolvable: None,
+            allowlist_dropped: None,
             in_acquisition: false,
             interface_problem,
             config_problem: self.config_problem.clone(),

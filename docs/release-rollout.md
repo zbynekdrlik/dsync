@@ -27,6 +27,13 @@ addresses, transports and credentials are not in this repository: they are in
    23:35Z, taken at 23:36:44Z, mid-swap). companion's `dsync-gate-install` re-checks the lease
    itself and refuses; the Windows swaps do not, so the check is yours.
 
+7. **The 10-minute lock read after a non-rig swap (26.11.2026, #212).** On Linux a `nohup bash -c
+   '… curl /status …; sleep 10' > /tmp/… &` sampler started over MCP survives the call; read its
+   file after 10 min. On Windows a `Start-Process powershell -WindowStyle Hidden` sampler does NOT
+   (the MCP call's process tree ends it; nothing was written on dsg or alex-nb). There, read the
+   box's own `C:\ProgramData\dsync\dsync.log` from the restart on: the `[LOCK] === LOCKED ===` /
+   `=== UNLOCKED ===` lines and the 30 s `[PHASE-LOCK] e=…` lines are the 10 minutes.
+
 ## Per-release notes for step 4
 
 - **From v1.9.0 (issues #88/#117): the fleet's NTP MASTER goes right after the canary**, before

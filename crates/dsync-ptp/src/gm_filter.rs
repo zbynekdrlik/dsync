@@ -23,6 +23,11 @@
 //! Fail-open: an allowlist whose entries ALL fail to parse is treated as
 //! unrestricted (with the bad entries surfaced for a loud startup warning). A
 //! config typo must never take the whole rig's clock offline.
+//!
+//! dsync#217: a HOSTNAME entry that does not resolve counts as invalid too, once a
+//! resolve pass has run and no earlier resolution is kept. pp-cam6 ran on NTP before
+//! a live service because its only entry named a host the site's DNS did not know.
+//! A partly-unresolvable list restricts to the entries that work.
 
 use std::net::Ipv4Addr;
 use std::time::Duration;
@@ -216,6 +221,12 @@ pub struct GmAllowlist {
     unresolved: Vec<String>,
     /// Entries that failed to parse, kept verbatim for a loud startup warning.
     invalid: Vec<String>,
+    /// dsync#217 — every non-blank entry as configured (trimmed), to name the list in a
+    /// log or the clock alarm.
+    entries: Vec<String>,
+    /// dsync#217 — at least one resolve pass has run (before it, a hostname-only list
+    /// restricts: the startup resolves before the receive path opens).
+    resolve_ran: bool,
 }
 
 impl GmAllowlist {
@@ -226,11 +237,13 @@ impl GmAllowlist {
         let mut prefixes = Vec::new();
         let mut hostnames = Vec::new();
         let mut invalid = Vec::new();
+        let mut kept = Vec::new();
         for e in entries {
             let t = e.trim();
             if t.is_empty() {
                 continue;
             }
+            kept.push(t.to_string());
             match Ipv4Prefix::parse(t) {
                 Ok(p) => prefixes.push(p),
                 // dsync#113: a non-IP/CIDR entry with NO slash that is a valid
@@ -247,16 +260,17 @@ impl GmAllowlist {
             resolved: Vec::new(),
             unresolved: Vec::new(),
             invalid,
+            entries: kept,
+            resolve_ran: false,
         }
     }
 
-    /// True when NO restriction is in effect (no parseable prefixes AND no
-    /// hostname entries) — every source is accepted, the historical
-    /// last-writer-wins behavior. dsync#113: a hostname-only allowlist is
-    /// RESTRICTING even before its first resolution (it must never fail open to
-    /// "accept any GM" just because DNS has not answered yet).
+    /// True when NO restriction is in effect: no parseable prefix and no hostname
+    /// entry (the historical last-writer-wins behavior), or the list fails open
+    /// ([`fails_open`](Self::fails_open), dsync#217). A hostname-only allowlist
+    /// restricts before its first resolve pass (dsync#113).
     pub fn is_unrestricted(&self) -> bool {
-        self.prefixes.is_empty() && self.hostnames.is_empty()
+        (self.prefixes.is_empty() && self.hostnames.is_empty()) || self.fails_open()
     }
 
     /// Number of ACTIVE (successfully parsed) prefixes — for a startup log that
@@ -277,6 +291,23 @@ impl GmAllowlist {
             return true;
         }
         self.prefixes.iter().any(|p| p.contains(ip)) || self.resolved.contains(&ip)
+    }
+
+    /// dsync#217 — true when no entry works: no literal prefix, every hostname failed
+    /// on the last resolve pass and no earlier resolution is kept. The list then
+    /// accepts ANY grandmaster (fail-open, like an all-invalid list) until a name
+    /// resolves. False before the first pass and for a list that has a working entry.
+    pub fn fails_open(&self) -> bool {
+        self.resolve_ran
+            && self.prefixes.is_empty()
+            && !self.hostnames.is_empty()
+            && self.resolved.is_empty()
+    }
+
+    /// dsync#217 — every non-blank configured entry, to name the list in a log line or
+    /// the clock alarm.
+    pub fn entries(&self) -> &[String] {
+        &self.entries
     }
 
     /// Entries that failed to parse, so the caller can warn loudly at startup.
@@ -312,6 +343,10 @@ impl GmAllowlist {
     /// resolution is still held (a transient DNS blip), returns `None` — the clock
     /// is not lost, we are still matching via the kept IPs.
     pub fn unresolvable_reason(&self) -> Option<String> {
+        // dsync#217: a list that fails open loses no clock on its account.
+        if self.fails_open() {
+            return None;
+        }
         if self.resolved.is_empty() && !self.unresolved.is_empty() {
             Some(self.unresolved.join(", "))
         } else {
@@ -330,6 +365,7 @@ impl GmAllowlist {
         if self.hostnames.is_empty() {
             return ResolveOutcome::default();
         }
+        self.resolve_ran = true;
         let mut new_set: Vec<Ipv4Addr> = Vec::new();
         let mut unresolved: Vec<String> = Vec::new();
         for h in &self.hostnames {
@@ -880,18 +916,75 @@ mod tests {
         assert!(!a.allows(ip("10.77.7.109")));
     }
 
+    /// dsync#217 (supersedes #113's "restricts for ever"): pp-cam6, 22.11.2026, ran on NTP
+    /// before a live service with `["video-clock.lan"]`, a name PP's DNS does not know; every
+    /// Sync of PP's GM 10.77.7.200 was dropped. A name that does not resolve is an INVALID
+    /// entry after a real pass, and an all-invalid list fails open, as the module promises.
     #[test]
-    fn unresolvable_hostname_restricts_and_is_loud() {
+    fn an_unresolvable_hostname_only_list_fails_open_and_is_loud_217() {
         let mut a = GmAllowlist::parse(&["video-clock.lan".to_string()]);
-        let resolver = FakeResolver::new(&[]); // nothing resolves
-        let outcome = a.resolve(&resolver);
+        let outcome = a.resolve(&FakeResolver::new(&[])); // nothing resolves
         assert_eq!(outcome.unresolved, vec!["video-clock.lan".to_string()]);
         assert!(a.resolved_ips().is_empty());
         assert_eq!(a.unresolved_hostnames(), &["video-clock.lan".to_string()]);
-        // Never silently accept any GM — nothing is allowed…
-        assert!(!a.allows(ip("10.77.9.230")));
-        // …and the loud clock-alarm reason is surfaced.
-        assert_eq!(a.unresolvable_reason().as_deref(), Some("video-clock.lan"));
+        assert!(a.fails_open(), "no entry resolves: the list fails open");
+        assert!(a.is_unrestricted());
+        assert!(
+            a.allows(ip("10.77.7.200")),
+            "PP's grandmaster must be accepted (the incident dropped it)"
+        );
+        // The clock is not lost on its account, so it is no clock-alarm reason.
+        assert!(a.unresolvable_reason().is_none());
+    }
+
+    #[test]
+    fn a_list_fails_open_only_after_a_resolve_pass_217() {
+        let a = GmAllowlist::parse(&["video-clock.lan".to_string()]);
+        assert!(!a.fails_open(), "before any pass the list still restricts");
+        assert!(!a.allows(ip("10.77.7.200")));
+    }
+
+    #[test]
+    fn a_partly_unresolvable_list_restricts_to_what_works_and_names_the_dropped_entry_217() {
+        let mut a =
+            GmAllowlist::parse(&["10.77.9.0/24".to_string(), "video-clock.lan".to_string()]);
+        a.resolve(&FakeResolver::new(&[]));
+        assert!(!a.fails_open(), "a literal prefix still restricts");
+        assert!(a.allows(ip("10.77.9.184")));
+        assert!(!a.allows(ip("10.77.7.200")));
+        assert_eq!(a.unresolved_hostnames(), &["video-clock.lan".to_string()]);
+
+        let mut b = GmAllowlist::parse(&["video-clock.lan".to_string(), "gm2.lan".to_string()]);
+        b.resolve(&FakeResolver::new(&[("gm2.lan", &["10.77.9.230"])]));
+        assert!(
+            !b.fails_open(),
+            "one name resolves: the list restricts to it"
+        );
+        assert!(b.allows(ip("10.77.9.230")));
+        assert!(!b.allows(ip("10.77.7.200")));
+        assert_eq!(b.unresolved_hostnames(), &["video-clock.lan".to_string()]);
+    }
+
+    #[test]
+    fn a_kept_resolution_never_fails_open_217() {
+        let mut a = GmAllowlist::parse(&["video-clock.lan".to_string()]);
+        a.resolve(&FakeResolver::new(&[("video-clock.lan", &["10.77.9.230"])]));
+        a.resolve(&FakeResolver::new(&[])); // a DNS blip
+        assert!(!a.fails_open(), "a DNS blip keeps the old resolution");
+        assert!(a.allows(ip("10.77.9.230")));
+        assert!(!a.allows(ip("10.77.7.200")));
+    }
+
+    #[test]
+    fn a_name_that_resolves_later_restricts_again_217() {
+        let mut a = GmAllowlist::parse(&["video-clock.lan".to_string()]);
+        a.resolve(&FakeResolver::new(&[]));
+        assert!(a.fails_open());
+        let outcome = a.resolve(&FakeResolver::new(&[("video-clock.lan", &["10.77.9.230"])]));
+        assert!(outcome.changed);
+        assert!(!a.fails_open());
+        assert!(a.allows(ip("10.77.9.230")));
+        assert!(!a.allows(ip("10.77.7.200")));
     }
 
     #[test]

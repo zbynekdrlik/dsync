@@ -149,6 +149,7 @@ The stable fields a monitor reads:
 | `interfaces_configured` | list of strings, or `null` | The pinned interfaces (`system.interface` / `--interface`), in order; `null` when not pinned. Since 1.35.16. |
 | `ptp_interface_name` | string, or `null` | The listed interface the PTP receive path joined, as configured; `null` when not pinned or not joined. Since 1.35.16. |
 | `arrival_latency_steps` | integer | Arrival-latency steps since start: the phase error shifted by more than 300 µs and held 3 windows while locked, i.e. the NIC's delivery delay changed (a USB NIC under a changing inbound load). Report-only; the first step per direction is a WARN naming the NIC. Since 1.35.19. |
+| `gm_allowlist_fail_open` | bool | `true` when no `gm_allowlist` entry works (every hostname failed to resolve and no IPv4/CIDR entry is set): the list fails open and ANY grandmaster is accepted, with a WARN each re-resolve, until a name resolves. `gm_allowlist_unresolved` names the dead entries. Since 1.35.20. |
 
 A healthy node: `mode` is `LOCK` or `NANO`, `is_locked` is true, `|ptp_phase_error_us|` is well
 under 50, `last_ptp_rx_age_s` is at most a few seconds and `clock_alarm.active` is false.

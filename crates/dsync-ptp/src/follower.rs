@@ -253,11 +253,21 @@ impl Follower {
         config: &FollowerConfig,
     ) -> Result<Follower> {
         let mut allowlist = GmAllowlist::parse(&config.gm_allowlist);
-        if let Some(reason) = allowlist.unresolvable_reason() {
-            warn!("[FOLLOWER] gm_allowlist: {}", reason);
-        }
         if allowlist.has_hostnames() {
-            allowlist.resolve(&crate::gm_filter::StdResolver);
+            let outcome = allowlist.resolve(&crate::gm_filter::StdResolver);
+            // dsync#217: a list with no working entry fails open; a dead name beside a
+            // working one is ignored. Both are named.
+            if allowlist.fails_open() {
+                warn!(
+                    "[FOLLOWER] gm_allowlist: no entry resolves ({}); accepting ANY grandmaster",
+                    outcome.unresolved.join(", ")
+                );
+            } else if !outcome.unresolved.is_empty() {
+                warn!(
+                    "[FOLLOWER] gm_allowlist: ignoring unresolvable {}",
+                    outcome.unresolved.join(", ")
+                );
+            }
         }
         let mut core = FollowerCore::new(allowlist, mono::mono_now_ns())
             .with_interface_name(interface_spec(config));
