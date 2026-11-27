@@ -702,6 +702,9 @@ where
     /// by a mis-set allowlist" — the near-zero-diagnosability failure mode of a
     /// valid-but-wrong allowlist on the fleet's sole clock authority.
     gm_dropped_since_accepted: u64,
+    /// dsync#217 — the source of the latest dropped packet since the last allowed one,
+    /// named by the clock alarm.
+    last_gm_dropped_ip: Option<std::net::Ipv4Addr>,
     /// Rate-limiter (one loud warning per 30 s) for the dropped-packet warning.
     last_gm_drop_warn: Option<Instant>,
 
@@ -1004,6 +1007,7 @@ where
             clock_alarm_notifier: Box::new(DesktopNotifier),
             clock_alarm_interval_s,
             gm_dropped_since_accepted: 0,
+            last_gm_dropped_ip: None,
             last_gm_drop_warn: None,
             sample_window: Vec::with_capacity(window_size),
             last_phase_offset_ns: 0,
@@ -2020,12 +2024,22 @@ where
                 outcome.old_resolved, outcome.new_resolved
             );
         }
+        // dsync#217: an entry that does not resolve is ignored; a list with no working
+        // entry fails open (accepts any grandmaster) instead of dropping them all.
+        if allowlist.fails_open() {
+            warn!(
+                "gm_allowlist: no entry resolves ({}); accepting ANY grandmaster until one \
+                 does — fix config.gm_allowlist (an IPv4 or CIDR of this site's GM)",
+                outcome.unresolved.join(", ")
+            );
+            return;
+        }
         for name in &outcome.unresolved {
             error!(
-                "gm_allowlist: hostname {:?} is UNRESOLVABLE — keeping the previous resolution \
-                 {:?} (an empty set means NO grandmaster is accepted until DNS recovers; the \
-                 service keeps running on NTP fallback and raises the clock alarm)",
+                "gm_allowlist: hostname {:?} is UNRESOLVABLE — ignoring it; accepted \
+                 grandmaster sources: {} literal prefix(es) + resolved {:?}",
                 name,
+                allowlist.prefix_count(),
                 allowlist.resolved_ips()
             );
         }
@@ -2065,7 +2079,20 @@ where
             ptp_stale,
             // #113: a hostname allowlist with no working resolution is a specific,
             // loud clock-loss reason (None when a resolution is held).
-            allowlist_unresolvable: self.gm_allowlist.unresolvable_reason(),
+            // dsync#217: only while no allowed grandmaster is heard (a dead name beside a
+            // working entry is a warning, not a lost clock).
+            allowlist_unresolvable: if gm_allowed {
+                None
+            } else {
+                self.gm_allowlist.unresolvable_reason()
+            },
+            allowlist_dropped: match (self.gm_dropped_since_accepted, self.last_gm_dropped_ip) {
+                (n, Some(ip)) if n > 0 => Some(format!(
+                    "{ip} dropped by gm_allowlist [{}]",
+                    self.gm_allowlist.entries().join(", ")
+                )),
+                _ => None,
+            },
             // #114 review: suppress the transient not-locked reason during the
             // initial boot acquisition window (never locked yet + within grace).
             in_acquisition: !self.ever_locked && self.started_at.elapsed() < ACQUISITION_GRACE,
@@ -2192,6 +2219,7 @@ where
         if let Some(ip) = source_ip {
             if !self.gm_allowlist.allows(ip) {
                 self.gm_dropped_since_accepted = self.gm_dropped_since_accepted.saturating_add(1);
+                self.last_gm_dropped_ip = Some(ip);
                 // A foreign-source drop while NO allowed grandmaster is being seen
                 // is the signature of BOTH the bug this fixes AND a mis-set
                 // allowlist (a valid-but-wrong subnet drops the LEGITIMATE GM,
@@ -2206,8 +2234,9 @@ where
                     warn!(
                         "gm_allowlist: dropped {} PTP packet(s) from non-allowlisted source(s) \
                          (latest {ip}) since the last allowed grandmaster — if NO allowed GM \
-                         appears, check config.gm_allowlist",
-                        self.gm_dropped_since_accepted
+                         appears, check config.gm_allowlist [{}]",
+                        self.gm_dropped_since_accepted,
+                        self.gm_allowlist.entries().join(", ")
                     );
                     self.last_gm_drop_warn = Some(now);
                 } else {
@@ -2246,6 +2275,7 @@ where
         if crate::ptp::is_time_message(&buf[..size]) {
             self.note_allowed_ptp_packet(Instant::now());
             self.gm_dropped_since_accepted = 0;
+            self.last_gm_dropped_ip = None;
             if source_ip.is_some() {
                 self.current_sync_source_ip = source_ip;
             }
@@ -2916,6 +2946,7 @@ where
             // compare gm_source_ip against the resolved set (and see loud failures).
             status.gm_allowlist_resolved = self.gm_allowlist.resolved_ips().to_vec();
             status.gm_allowlist_unresolved = self.gm_allowlist.unresolved_hostnames().to_vec();
+            status.gm_allowlist_fail_open = self.gm_allowlist.fails_open();
             status.settled = self.clock_settled && !stale;
             status.updated_ts = SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -3649,6 +3680,41 @@ mod tests {
             "the site's grandmaster must be adopted"
         );
         assert_eq!(controller.gm_dropped_since_accepted, 0);
+    }
+
+    /// dsync#217: a dead name beside a working literal entry is a warning, never a lost clock
+    /// while the literal's grandmaster is heard.
+    #[test]
+    fn a_dead_name_beside_a_working_entry_raises_no_alarm_reason_217() {
+        let gm_ip: std::net::Ipv4Addr = "10.77.9.184".parse().unwrap();
+        let sync_pkt = make_sync_pkt([0x00, 0x1d, 0xc1, 0x08, 0x02, 0x14], 0);
+        let t2 = SystemTime::UNIX_EPOCH + Duration::from_nanos(1_000_000_000);
+        let mut mock_net = MockPtpNetwork::new();
+        mock_net
+            .expect_recv_packet()
+            .times(1)
+            .returning(move || Ok(Some((sync_pkt.clone(), SYNC_LEN, t2, Some(gm_ip)))));
+        mock_net.expect_recv_packet().returning(|| Ok(None));
+        let mut config = SystemConfig::default();
+        config.gm_allowlist = vec!["10.77.9.0/24".to_string(), "gm-clock.invalid".to_string()];
+        config.filters.calibration_samples = 0;
+        config.filters.warmup_secs = 0.0;
+        let mut controller = PtpController::new(
+            MockSystemClock::new(),
+            mock_net,
+            MockNtpSource::new(),
+            Arc::new(RwLock::new(SyncStatus::default())),
+            config,
+        );
+        controller.gm_resolver = Box::new(MapResolver(std::collections::HashMap::new()));
+        controller.process_loop_iteration().unwrap();
+        assert_eq!(controller.current_sync_source_ip, Some(gm_ip));
+        assert!(!controller.gm_allowlist.fails_open());
+        let health = controller.sample_clock_health();
+        assert!(
+            health.allowlist_unresolvable.is_none(),
+            "the allowed grandmaster is heard: the dead name is no clock-loss reason"
+        );
     }
 
     /// dsync#217: a restricting list that drops the only grandmaster heard names both in the

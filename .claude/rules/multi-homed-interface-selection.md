@@ -144,6 +144,21 @@ delegates. To verify a receive-path change:
   DEVICE (an over-broad allowlist spanning two subnets) as ambiguous → keeps the default interface
   (never worse than pre-change) + warns to narrow the allowlist. A unique match is the normal case.
 
+## A dead hostname is an invalid entry (#217, v1.35.20)
+
+pp-cam6 (22.11.2026) ran on NTP before a live service: `gm_allowlist: ["video-clock.lan"]`, a name
+PP's DNS does not know, so #113's "a hostname-only list restricts until it resolves" dropped PP's
+only GM. Now `GmAllowlist::fails_open()`: after a real resolve pass, no literal prefix and no
+resolution (none kept) = unrestricted, a WARN each re-resolve, `/status.gm_allowlist_fail_open`.
+- Before the first pass a hostname-only list still restricts; #113's keep-previous holds (a name
+  that resolved once never opens the list on a DNS blip).
+- A dead name beside a working entry is ignored with an ERROR naming it; the clock alarm's
+  "hostname unresolvable" reason fires only while no allowed GM is heard.
+- The stale alarm reason names the drop: `<ip> dropped by gm_allowlist [<entries>]`
+  (`ClockHealth.allowlist_dropped`, from the controller's `last_gm_dropped_ip`).
+- A controller test that must not resolve uses an RFC 6761 `.invalid` name: `PtpController::new`
+  resolves with the REAL resolver before a test can inject `MapResolver`.
+
 ## Backward compatibility (mandatory)
 
 Empty/unrestricted allowlist, `/0`-only, or no interface on a trusted subnet → the pure selector

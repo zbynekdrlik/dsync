@@ -1017,3 +1017,16 @@ canary evidence before continuing.
   USB delay model
 - Why: alex-nb's clock source is the service; the in-process follower there stays not_settled.
 
+## #217 — An unresolvable gm_allowlist name fails open; the alarm names the drop (dstack, PP 22.11)
+
+- Version bump: `aef24ad` (1.35.19 -> 1.35.20)
+- Design comment (Approach 1..3, Architektúra):
+  https://github.com/zbynekdrlik/dsync/issues/217#issuecomment-7218063040
+- RED: `38eee51` — the incident through `process_loop_iteration` (`video-clock.invalid`, PP's GM
+  10.77.7.200 adopted), gm_filter fail-open / partly-unresolvable / kept resolution / resolves
+  later, the alarm naming the dropped source and the list; the two #113 assertions of "a
+  hostname-only list restricts for ever" changed there, with #217 as the reason
+- GREEN: `GmAllowlist::fails_open` (after a real pass, no literal, no kept resolution),
+  `entries()`, `ClockHealth.allowlist_dropped`, `/status.gm_allowlist_fail_open`; the
+  unresolvable alarm reason only while no allowed GM is heard
+- Why: pp-cam6 ran on NTP before a live service; its only entry named a host PP's DNS does not know.

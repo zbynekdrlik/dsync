@@ -51,6 +51,10 @@ pub struct ClockHealth {
     /// `Some(name)` names the first unresolvable hostname; drives the alarm ACTIVE
     /// with a specific reason even before any PTP packet is seen.
     pub allowlist_unresolvable: Option<String>,
+    /// dsync#217: packets from a grandmaster were dropped by a restricting `gm_allowlist`
+    /// since the last allowed one. `Some("<ip> dropped by gm_allowlist [<entries>]")`
+    /// names the source and the list in the stale reason.
+    pub allowlist_dropped: Option<String>,
     /// dsync#114 review: the node is still in its INITIAL acquisition window
     /// (never locked yet, within a grace period from start) AND packets are
     /// arriving. A not-yet-locked clock during normal boot acquisition is NOT a
@@ -98,7 +102,10 @@ impl ClockHealth {
             return None;
         }
         if self.ptp_stale {
-            return Some("no PTP announce from an allowed grandmaster".to_string());
+            return Some(match &self.allowlist_dropped {
+                Some(dropped) => format!("no PTP announce from an allowed grandmaster: {dropped}"),
+                None => "no PTP announce from an allowed grandmaster".to_string(),
+            });
         }
         // Initial acquisition (never locked yet, packets flowing, within the grace
         // window): a not-yet-locked clock is normal boot behaviour, not a loss.
@@ -339,6 +346,7 @@ mod tests {
             gm_allowed: true,
             ptp_stale: false,
             allowlist_unresolvable: None,
+            allowlist_dropped: None,
             in_acquisition: false,
             interface_problem: None,
             config_problem: None,
@@ -352,6 +360,7 @@ mod tests {
             gm_allowed: true,
             ptp_stale: false,
             allowlist_unresolvable: None,
+            allowlist_dropped: None,
             in_acquisition: false,
             interface_problem: None,
             config_problem: None,
@@ -454,6 +463,7 @@ mod tests {
             gm_allowed: false,
             ptp_stale: true,
             allowlist_unresolvable: Some("video-clock.lan".to_string()),
+            allowlist_dropped: None,
             in_acquisition: false,
             interface_problem: None,
             config_problem: None,
@@ -470,6 +480,7 @@ mod tests {
             gm_allowed: false,
             ptp_stale: true,
             allowlist_unresolvable: None,
+            allowlist_dropped: None,
             in_acquisition: false,
             interface_problem: None,
             config_problem: None,
@@ -486,6 +497,7 @@ mod tests {
             gm_allowed: false,
             ptp_stale: false,
             allowlist_unresolvable: None,
+            allowlist_dropped: None,
             in_acquisition: false,
             interface_problem: None,
             config_problem: None,
@@ -508,6 +520,7 @@ mod tests {
             gm_allowed: true,
             ptp_stale: false,
             allowlist_unresolvable: None,
+            allowlist_dropped: None,
             in_acquisition: false,
             interface_problem: None,
             config_problem: None,
@@ -525,6 +538,7 @@ mod tests {
             gm_allowed: false,
             ptp_stale: false,
             allowlist_unresolvable: None,
+            allowlist_dropped: None,
             in_acquisition: true,
             interface_problem: None,
             config_problem: None,
@@ -550,6 +564,7 @@ mod tests {
         // …and an unresolvable hostname at boot.
         let unresolvable_at_boot = ClockHealth {
             allowlist_unresolvable: Some("video-clock.lan".to_string()),
+            allowlist_dropped: None,
             in_acquisition: true,
             ..acquiring.clone()
         };
@@ -576,6 +591,7 @@ mod tests {
         let both = ClockHealth {
             ptp_stale: true,
             allowlist_unresolvable: Some("video-clock.lan".to_string()),
+            allowlist_dropped: None,
             interface_problem: Some("PTP interface enp56s0 is missing".to_string()),
             config_problem: Some("config.json not loaded (x), running defaults".to_string()),
             ..lost_not_locked()
